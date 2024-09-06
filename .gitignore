@@ -4,3 +4,6 @@ test_client
 infinity
 experiments/client
 experiments/server
+.vscode/
+_infinity.*.so
+infinity_server
