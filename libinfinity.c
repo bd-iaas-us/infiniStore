@@ -11,19 +11,10 @@
 #include "utils.h"
 #include <assert.h>
 #include <time.h>
+#include <math.h>
+#include "libinfinity.h"
 
 
-
-// 定义个一个struct， 包括socket
-typedef struct {
-    int sock;
-}connection_t;
-
-
-
-int connect_common() {
-
-}
 
 int init_connection(connection_t *conn)   {
     assert(conn != NULL);
@@ -54,20 +45,20 @@ int init_connection(connection_t *conn)   {
     return 0;
 }
 
-int close_connection(connection_t *conn) {
+void close_connection(connection_t *conn) {
     assert(conn != NULL);
     if (conn->sock > 0) {
         close(conn->sock);
     }
 }
 
-int write_local(connection_t *conn, const void *key_ptr, size_t key_size, void *ptr, size_t size) {
+
+int rw_local(connection_t *conn, char op, const void *key_ptr, size_t key_size, void *ptr, size_t size) {
     assert(conn != NULL);
     assert(ptr != NULL);
     assert(size > 0);
 
     cudaIpcMemHandle_t ipc_handle;
-    int ret;
 
     // send the magic number
     int magic = MAGIC;
@@ -75,8 +66,12 @@ int write_local(connection_t *conn, const void *key_ptr, size_t key_size, void *
     send_exact(conn->sock, &magic, MAGIC_SIZE);
 
     // send the operation
-    char op;
-    op = OP_W;
+
+    if (op != OP_R && op != OP_W) {
+        printf("op is not correct\n");
+        return -1;
+    }
+
     send_exact(conn->sock, &op, OP_SIZE);
 
     // send the size of the key
@@ -99,39 +94,3 @@ int write_local(connection_t *conn, const void *key_ptr, size_t key_size, void *
     }
     return 0;
 } 
-
-int main() {
-
-    int size = 2024 * sizeof(float);
-    void *d_ptr;
-    int ret;
-    // allocate cuda memory
-    CHECK_CUDA(cudaMalloc(&d_ptr, size));
-
-    // set data
-    float* h_data = (float*)malloc(size);
-    for (int i = 0; i < 1024; i++) {
-        h_data[i] = float(i);
-    }
-    CHECK_CUDA(cudaMemcpy(d_ptr, h_data, size, cudaMemcpyHostToDevice));
-    free(h_data);
-
-    connection_t conn;
-    ret = init_connection(&conn);
-    if (ret != 0) {
-        printf("Failed to init connection\n");
-        return -1;
-    }
-    
-    ret = write_local(&conn, "test", 4,  d_ptr, size);
-    if (ret < 0) {
-        printf("Failed to write local\n");
-        CHECK_CUDA(cudaFree(d_ptr));
-        close_connection(&conn);
-        return -1;
-    }
-
-    CHECK_CUDA(cudaFree(d_ptr));
-    printf("Write local success\n");
-    close_connection(&conn);
-}

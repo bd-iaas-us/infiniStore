@@ -1,0 +1,6 @@
+*.o
+*.d
+test_client
+infinity
+experiments/client
+experiments/server

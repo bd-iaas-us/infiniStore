@@ -34,8 +34,11 @@ void print_header(header_t *header) {
     print_ipc_handle(header->ipc_handle);
     printf("payload_size: %d\n", header->payload_size);
 }
+
+//return value of recv_header:
 //if ret is less than 0, it is an system error
 //if ret is greater than 0, it is an application error
+//if ret is 0, it is success
 int recv_header(header_t *header, int socket) {
 
         assert(header != NULL);
@@ -137,6 +140,7 @@ int recv_header(header_t *header, int socket) {
 void do_read(header_t * header, int socket, std::map<std::string, void*> &kv_map) {
     assert(header != NULL);
     //get the key
+    void * d_ptr;
     std::string k(header->key, header->key_size);
     //find the key in the map
     if (kv_map.find(k) == kv_map.end()) {
@@ -157,8 +161,9 @@ void do_read(header_t * header, int socket, std::map<std::string, void*> &kv_map
     cudaStream_t stream;
     CHECK_CUDA(cudaStreamCreate(&stream));
 
-    CHECK_CUDA(cudaMemcpyAsync(d_ptr, h_dst, header->payload_size, cudaMemcpyDeviceToHost, stream));
-
+    //push the host cpu data to local device
+    CHECK_CUDA(cudaMemcpyAsync(d_ptr, h_dst, header->payload_size, cudaMemcpyHostToDevice, stream));
+    print_vector(h_dst);
     CHECK_CUDA(cudaStreamSynchronize(stream));
 
     CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
@@ -188,6 +193,8 @@ void do_write(header_t * header, int socket, std::map<std::string, void*> &kv_ma
     cudaStream_t stream;
     CHECK_CUDA(cudaStreamCreate(&stream));
 
+    //how to deal with memory overflow? 
+    //pull data from local device to CPU host
     CHECK_CUDA(cudaMemcpyAsync(h_dst, d_ptr, header->payload_size, cudaMemcpyDeviceToHost, stream));
 
     CHECK_CUDA(cudaStreamSynchronize(stream));
