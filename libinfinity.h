@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 #include <assert.h>
 #include <time.h>
+#include "protocol.h"
 
 //typedef struct connection connection_t;
 

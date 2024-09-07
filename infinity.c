@@ -97,7 +97,6 @@ int recv_header(header_t *header, int socket) {
             key = NULL;
             return -ret;
         }
-        printf("key: %s\n", key);
 
         cudaIpcMemHandle_t ipc_handle;
         //read ipc handle
@@ -109,10 +108,6 @@ int recv_header(header_t *header, int socket) {
             return -ret;
         }
     
-        printf("IPC handle received\n");
-        print_ipc_handle(ipc_handle);
-
-
         //read payload size
         int payload_size;
         ret = recv_exact(socket, &payload_size, sizeof(size_t));
@@ -163,9 +158,10 @@ void do_read(header_t * header, int socket, std::map<std::string, void*> &kv_map
 
     //push the host cpu data to local device
     CHECK_CUDA(cudaMemcpyAsync(d_ptr, h_dst, header->payload_size, cudaMemcpyHostToDevice, stream));
+    
     print_vector(h_dst);
+    
     CHECK_CUDA(cudaStreamSynchronize(stream));
-
     CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
 
     int return_code = FINISH;
@@ -213,7 +209,23 @@ void do_write(header_t * header, int socket, std::map<std::string, void*> &kv_ma
 }
 
 int main() {
-	cudaSetDevice(0);
+
+    void * d1;
+    void * d2;
+    CHECK_CUDA(cudaMalloc(&d1, 10));
+    CHECK_CUDA(cudaMalloc(&d2, 10));
+    cudaIpcMemHandle_t ipc_handle1;
+    CHECK_CUDA(cudaIpcGetMemHandle(&ipc_handle1, d1));
+    print_ipc_handle(ipc_handle1);
+    cudaFree(d1);
+    cudaIpcMemHandle_t ipc_handle2;
+    CHECK_CUDA(cudaIpcGetMemHandle(&ipc_handle2, d2));
+    print_ipc_handle(ipc_handle2);
+    cudaFree(d);
+
+    return -1;
+
+
     int server_fd, new_socket;
     struct sockaddr_in address;
     int addrlen = sizeof(address);

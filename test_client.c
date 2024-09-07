@@ -33,7 +33,7 @@ int main() {
     // set data
     h_data = (float*)malloc(size);
     for (int i = 0; i < 1024; i++) {
-        h_data[i] = float(i);
+        h_data[i] = float(i) + 100;
     }
     CHECK_CUDA(cudaMemcpy(d_ptr, h_data, size, cudaMemcpyHostToDevice));
 
@@ -50,8 +50,12 @@ int main() {
     }
     
 
+
     //allocate a new cuda memory    
     CHECK_CUDA(cudaMalloc(&d_ptr2, size));
+    printf("out:print address of d_ptr:  %p\n", d_ptr);
+    printf("out:print address of d_ptr2: %p\n", d_ptr2);
+
     ret = rw_local(&conn, OP_R, "test", 4, d_ptr2, size);
     if (ret < 0) {
         goto out;
@@ -77,6 +81,6 @@ out:
     }
     CHECK_CUDA(cudaFree(d_ptr));
     CHECK_CUDA(cudaFree(d_ptr2));
-    printf("read write local success\n");
+    printf("read/write local cpu memory success\n");
     close_connection(&conn);
 }
