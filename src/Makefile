@@ -28,8 +28,8 @@ test_client: test_client.c utils.o libinfinity.o
 $(PYBIND_TARGET): pybind.cc libinfinity.o utils.o
 	${CXX} $(CXXFLAGS) $(INCLUDES) --shared -fPIC $(PYBIND11_INCLUDES) $^\
         -o $(PYBIND_TARGET) $(LDFLAGS) $(LIBS)
-
+	cp $(PYBIND_TARGET) ../infinity/
 
 .PHONY: clean
 clean:
-	rm -f client server infinity
+	rm -f client server infinity_server *.so *.o test_client

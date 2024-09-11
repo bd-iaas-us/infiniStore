@@ -1,4 +1,4 @@
-import _infinity
+from infinity import _infinity
 import torch
 
 class InfinityConnection:

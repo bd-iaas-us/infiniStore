@@ -1,9 +1,10 @@
 *.o
 *.d
 test_client
-infinity
 experiments/client
 experiments/server
 .vscode/
 _infinity.*.so
 infinity_server
+__pycache__
+infinity.egg-info

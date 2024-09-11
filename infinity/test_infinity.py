@@ -1,5 +1,5 @@
 import torch
-import infinity
+from infinity import lib
 import pytest
 
 
@@ -10,7 +10,7 @@ def test_with_statement():
         l.append(i)
     kvcache = torch.tensor(l, device="cuda", dtype=torch.float32)
     #read "example_key" from infinity into the first 50 elements
-    with infinity.InfinityConnection() as conn:
+    with lib.InfinityConnection() as conn:
         conn.write_kvcache(kvcache, "test", 950, 50)
         conn.read_kvcache(kvcache, "test", 0, 50)
     assert torch.equal(kvcache[:50], kvcache[950:1000])
@@ -19,7 +19,7 @@ def test_with_statement():
 #TODO: test more data types
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
 def test_read_write_kvcache(dtype):
-    conn = infinity.InfinityConnection()
+    conn = lib.InfinityConnection()
     conn.connect()
     key = "ABCD"
     # l = []
