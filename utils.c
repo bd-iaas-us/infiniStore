@@ -43,6 +43,18 @@ void print_ipc_handle(cudaIpcMemHandle_t ipc_handle) {
     printf("\n");
 }
 
+void compare_ipc_handle(cudaIpcMemHandle_t ipc_handle1, cudaIpcMemHandle_t ipc_handle2) {
+    for (int i = 0; i < sizeof(cudaIpcMemHandle_t); i++) {
+        unsigned char d1 = ((unsigned char*)&ipc_handle1)[i];
+        unsigned char d2 = ((unsigned char*)&ipc_handle2)[i];
+        if (d1 != d2) {
+            printf("ipc_handle1 is not equal to ipc_handle2\n");
+            return;
+        }
+    }
+
+}
+
 //print the vector, for debug
 void print_vector(void * ptr) {
     printf("vector content:\n");

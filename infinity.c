@@ -25,6 +25,7 @@ typedef struct Header {
     char* key;
     cudaIpcMemHandle_t ipc_handle;
     int payload_size;
+    unsigned long offset;
 } header_t;
 
 void print_header(header_t *header) {
@@ -122,11 +123,21 @@ int recv_header(header_t *header, int socket) {
             return INVALID_REQ;
         }
 
+        unsigned long offset;
+        ret = recv_exact(socket, &offset, sizeof(unsigned long));
+        if (ret) {
+            free(key);
+            key = NULL;
+            return -ret;
+        }
+
         header->op = op;
         header->key_size = key_size;
         header->key = key;
         header->ipc_handle = ipc_handle;
         header->payload_size = payload_size;
+        header->offset = offset;
+
 
         return 0;
 }
@@ -147,7 +158,7 @@ void do_read(header_t * header, int socket, std::map<std::string, void*> &kv_map
     }
 
     //key found
-    void * h_dst = kv_map[k];
+    void * h_src = kv_map[k];
 
     CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, header->ipc_handle, cudaIpcMemLazyEnablePeerAccess));
     //TODO: do we need to synchronize here?
@@ -157,9 +168,11 @@ void do_read(header_t * header, int socket, std::map<std::string, void*> &kv_map
     CHECK_CUDA(cudaStreamCreate(&stream));
 
     //push the host cpu data to local device
-    CHECK_CUDA(cudaMemcpyAsync(d_ptr, h_dst, header->payload_size, cudaMemcpyHostToDevice, stream));
+    CHECK_CUDA(cudaMemcpyAsync(d_ptr + header->offset, h_src, header->payload_size, cudaMemcpyHostToDevice, stream));
+    //CHECK_CUDA(cudaMemcpyAsync(d_ptr+16, h_dst, 10*4, cudaMemcpyHostToDevice, stream));
+
     
-    print_vector(h_dst);
+    print_vector(h_src);
     
     CHECK_CUDA(cudaStreamSynchronize(stream));
     CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
@@ -191,7 +204,7 @@ void do_write(header_t * header, int socket, std::map<std::string, void*> &kv_ma
 
     //how to deal with memory overflow? 
     //pull data from local device to CPU host
-    CHECK_CUDA(cudaMemcpyAsync(h_dst, d_ptr, header->payload_size, cudaMemcpyDeviceToHost, stream));
+    CHECK_CUDA(cudaMemcpyAsync(h_dst, d_ptr + header->offset, header->payload_size, cudaMemcpyDeviceToHost, stream));
 
     CHECK_CUDA(cudaStreamSynchronize(stream));
 
@@ -209,21 +222,25 @@ void do_write(header_t * header, int socket, std::map<std::string, void*> &kv_ma
 }
 
 int main() {
-
+    /*
     void * d1;
     void * d2;
     CHECK_CUDA(cudaMalloc(&d1, 10));
-    CHECK_CUDA(cudaMalloc(&d2, 10));
-    cudaIpcMemHandle_t ipc_handle1;
+    CHECK_CUDA(cudaMalloc(&d2, 100));
+    cudaIpcMemHandle_t ipc_handle1, ipc_handle2;
     CHECK_CUDA(cudaIpcGetMemHandle(&ipc_handle1, d1));
     print_ipc_handle(ipc_handle1);
-    cudaFree(d1);
-    cudaIpcMemHandle_t ipc_handle2;
+
     CHECK_CUDA(cudaIpcGetMemHandle(&ipc_handle2, d2));
     print_ipc_handle(ipc_handle2);
-    cudaFree(d);
-
+    compare_ipc_handle(ipc_handle1, ipc_handle2);
     return -1;
+
+    */
+
+    //compare the ipc handle
+
+
 
 
     int server_fd, new_socket;

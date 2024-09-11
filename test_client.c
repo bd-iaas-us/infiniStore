@@ -44,7 +44,7 @@ int main() {
         goto out;
     }
     
-    ret = rw_local(&conn, OP_W, "test", 4,  d_ptr, size);
+    ret = rw_local(&conn, OP_W, "test", 4,  d_ptr, 0, size);
     if (ret < 0) {
         goto out;
     }
@@ -56,7 +56,7 @@ int main() {
     printf("out:print address of d_ptr:  %p\n", d_ptr);
     printf("out:print address of d_ptr2: %p\n", d_ptr2);
 
-    ret = rw_local(&conn, OP_R, "test", 4, d_ptr2, size);
+    ret = rw_local(&conn, OP_R, "test", 4, d_ptr2, 0, size);
     if (ret < 0) {
         goto out;
         return -1;

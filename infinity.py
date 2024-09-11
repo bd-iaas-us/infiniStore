@@ -1,40 +1,65 @@
 import _infinity
 import torch
-import ctypes
 
+class InfinityConnection:
+    OP_R="R"
+    OP_W="W"
+    def __init__(self):
+        self.conn = _infinity.Connection()
+        self.connected = False
+    
+    def connect(self):
+        ret = _infinity.init_connection(self.conn)
+        if ret < 0:
+            raise Exception("Failed to initialize connection")
+        self.connected = True
 
-conn = _infinity.Connection()
-if _infinity.init_connection(conn) < 0:
-    raise Exception("Failed to initialize connection")
+    def _verify(self, kv_cache : torch.Tensor, key : str, offset : int, size : int):
+        if self.connected is False:
+            raise Exception("Connection is not established")
+        if kv_cache.device.type != "cuda":
+            raise Exception("Tensor must be on CUDA device")
+        if kv_cache.is_contiguous() is False:
+            raise Exception("Tensor must be contiguous")
+        if offset < 0:
+            raise Exception("Offset must be positive")
+        if kv_cache.numel() < offset + size:
+            raise Exception("Offset + size is out of bound")
+    
+    #size is the element size
+    #offset is the offset of the element
+    def write_kvcache(self, kvcache : torch.Tensor, key : str, offset: int, size: int):
+        self._verify(kvcache, key, offset, size)
+        ptr = kvcache.data_ptr()
+        #convert to byte offset, since the function expects byte offset
+        offset = offset * kvcache.element_size()
+        size = size * kvcache.element_size()
+        
+        ret = _infinity.rw_local(self.conn, self.OP_W, key, ptr, offset, size)
+        if ret < 0:
+            raise Exception(f"Failed to write to infinity, ret = {ret}")
+        return
+    
+    def read_kvcache(self, kvcache : torch.Tensor, key : str, offset: int, size: int):
+        self._verify(kvcache, key, offset, size)
+        ptr = kvcache.data_ptr()
+        #convert to byte offset, since the function expects byte offset
+        offset = offset * kvcache.element_size()
+        size = size * kvcache.element_size()
+        ret = _infinity.rw_local(self.conn, self.OP_R, key, ptr, offset, size)
+        if ret < 0:
+            raise Exception(f"Failed to read from infinity, ret = {ret}")
+        return
 
-key = "example_key"
-src_tensor = torch.tensor([1, 2, 3], device="cuda", dtype=torch.float32)
-
-if src_tensor.device.type != "cuda":
-    raise Exception("Tensor must be on CUDA device")
-
-#import pdb; pdb.set_trace()
-assert src_tensor.is_contiguous()
-OP_R="R"
-OP_W="W"
-
-ret = _infinity.rw_local(conn, OP_W, key, src_tensor.data_ptr(), src_tensor.numel() * src_tensor.element_size())
-
-
-_infinity.close_connection(conn)
-print(f"write tensor {src_tensor} to infinity with key {key}, ret = {ret}")
-
-
-
-
-key = "example_key"
-OP_R="R"
-OP_W="W"
-conn = _infinity.Connection()
-
-ret = _infinity.init_connection(conn)
-
-dst_tensor = torch.tensor([0, 0, 0], device="cuda", dtype=torch.float32)
-ret = _infinity.rw_local(conn, OP_R, key, dst_tensor.data_ptr(), dst_tensor.numel() * dst_tensor.element_size())
-print(f"read tensor {dst_tensor} from infinity with key {key} ret = {ret}")
-_infinity.close_connection(conn)
+    def close_connection(self):
+        if self.connected:
+            _infinity.close_connection(self.conn)
+            self.connected = False
+        return
+    
+    def __enter__(self):
+        self.connect()
+        return self
+    
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close_connection()

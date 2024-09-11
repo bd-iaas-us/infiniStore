@@ -15,7 +15,6 @@
 #include "libinfinity.h"
 
 
-
 int init_connection(connection_t *conn)   {
     assert(conn != NULL);
     int sock = 0;
@@ -52,7 +51,7 @@ void close_connection(connection_t *conn) {
 }
 
 
-int rw_local(connection_t *conn, char op, const void *key_ptr, size_t key_size, void *ptr, size_t size) {
+int rw_local(connection_t *conn, char op, const void *key_ptr, size_t key_size, void *ptr, unsigned long offset, size_t size) {
     assert(conn != NULL);
     assert(ptr != NULL);
     assert(size > 0);
@@ -81,8 +80,7 @@ int rw_local(connection_t *conn, char op, const void *key_ptr, size_t key_size, 
     send_exact(conn->sock, key_ptr, key_size);
 
     CHECK_CUDA(cudaIpcGetMemHandle(&ipc_handle, ptr));
-    printf("ptr: %p\n", ptr);
-    print_ipc_handle(ipc_handle);
+    //print_ipc_handle(ipc_handle);
 
     // send the ipc handle
     send_exact(conn->sock, &ipc_handle, sizeof(cudaIpcMemHandle_t));
@@ -90,17 +88,15 @@ int rw_local(connection_t *conn, char op, const void *key_ptr, size_t key_size, 
     // send the size of the data
     send_exact(conn->sock, &size, sizeof(size_t));
 
+
+    //send the offset
+    send_exact(conn->sock, &offset, sizeof(unsigned long));
+
     int return_code;
     recv_exact(conn->sock, &return_code, RETURN_CODE_SIZE);
 
     if (return_code != FINISH) {
         return -1;
     }
-    //display the ptr content
-    void *h_ptr = malloc(size);
-    cudaMemcpy(h_ptr, ptr, size, cudaMemcpyDeviceToHost);
-    printf("%c: \n", op); 
-    print_vector(h_ptr);
-    free(h_ptr);
     return 0;
 } 

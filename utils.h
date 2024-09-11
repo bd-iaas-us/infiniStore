@@ -28,6 +28,6 @@ int send_exact(int socket, const void *buffer, size_t length);
 int recv_exact(int socket, void *buffer, size_t length);
 void print_ipc_handle(cudaIpcMemHandle_t ipc_handle);
 void print_vector(void * ptr);
-
+void compare_ipc_handle(cudaIpcMemHandle_t ipc_handle1, cudaIpcMemHandle_t ipc_handle2);
 
 #endif // UTILS_H
