@@ -1,6 +1,23 @@
-from infinity import _infinity
-import torch
 
+import sys
+import importlib
+# Check if _infinity is already imported
+if '_infinity' not in sys.modules:
+    _infinity = importlib.import_module('infinity._infinity')
+else:
+    _infinity = sys.modules['_infinity']
+import torch
+import os
+
+
+class DisableTorchCaching:
+    def __enter__(self):
+        os.environ['PYTORCH_NO_CUDA_MEMORY_CACHING'] = '1'
+        return self
+    def __exit__(self, exc_type, exc_value, traceback):
+        del os.environ['PYTORCH_NO_CUDA_MEMORY_CACHING']
+        return
+    
 class InfinityConnection:
     OP_R="R"
     OP_W="W"

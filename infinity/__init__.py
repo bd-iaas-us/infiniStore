@@ -1,2 +1,2 @@
-from .lib import InfinityConnection
-__all__ = ["InfinityConnection"]
+from .lib import InfinityConnection, DisableTorchCaching
+__all__ = ["InfinityConnection", "DisableTorchCaching"]
