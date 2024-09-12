@@ -1,6 +1,5 @@
-#import _infinity
 
-from infinity import InfinityConnection, DisableTorchCaching
+from infinity.lib import InfinityConnection, DisableTorchCaching
 import torch
 
 import cupy.cuda.runtime as runtime

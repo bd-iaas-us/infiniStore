@@ -1,11 +1,7 @@
 
-import sys
-import importlib
-# Check if _infinity is already imported
-if '_infinity' not in sys.modules:
-    _infinity = importlib.import_module('infinity._infinity')
-else:
-    _infinity = sys.modules['_infinity']
+
+from infinity import _infinity
+
 import torch
 import os
 
