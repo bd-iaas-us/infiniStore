@@ -4,6 +4,7 @@ from infinity import _infinity
 
 import torch
 import os
+from typing import List, Tuple
 
 
 def register_server(loop):
@@ -55,32 +56,29 @@ class InfinityConnection:
     
     #size is the element size
     #offset is the offset of the element
-    def write_kvcache(self, kvcache : torch.Tensor, key : str, offset: int, size: int):
-        self._verify(kvcache, key, offset, size)
+    def write_kvcache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], block_size: int):
         ptr = kvcache.data_ptr()
-        #convert to byte offset, since the function expects byte offset
-        offset = offset * kvcache.element_size()
-        size = size * kvcache.element_size()
-        
-        ret = _infinity.rw_local(self.conn, self.OP_W, key, ptr, offset, size)
+        element_size = kvcache.element_size()
+        #each offset should multiply by the element size
+        for i in range(len(blocks)):
+            key, offset = blocks[i]
+            blocks[i] = (key, offset * element_size)
+        ret = _infinity.rw_local(self.conn, self.OP_W, block_size * element_size, blocks, ptr)
         if ret < 0:
             raise Exception(f"Failed to write to infinity, ret = {ret}")
         return
     
-    def sync_local(self):
-        ret = _infinity.sync_local(self.conn)
-        if ret < 0:
-            raise Exception(f"Failed to sync, ret = {ret}")
-    
-    def read_kvcache(self, kvcache : torch.Tensor, key : str, offset: int, size: int):
-        self._verify(kvcache, key, offset, size)
+    def read_kvcache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], block_size: int):
+        #TODO: self._verify(kvcache, key, offset, size)
         ptr = kvcache.data_ptr()
-        #convert to byte offset, since the function expects byte offset
-        offset = offset * kvcache.element_size()
-        size = size * kvcache.element_size()
-        ret = _infinity.rw_local(self.conn, self.OP_R, key, ptr, offset, size)
+        element_size = kvcache.element_size()
+        #each offset should multiply by the element size
+        for i in range(len(blocks)):
+            key, offset = blocks[i]
+            blocks[i] = (key, offset * element_size)
+        ret = _infinity.rw_local(self.conn, self.OP_R, block_size * element_size, blocks, ptr)
         if ret < 0:
-            raise Exception(f"Failed to read from infinity, ret = {ret}")
+            raise Exception(f"Failed to read to infinity, ret = {ret}")
         return
 
     def close_connection(self):
@@ -89,6 +87,10 @@ class InfinityConnection:
             self.connected = False
         return
     
+    def sync_local(self):
+        if self.connected:
+            _infinity.sync_local(self.conn)
+
     def __enter__(self):
         self.connect()
         return self

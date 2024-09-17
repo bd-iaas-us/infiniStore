@@ -2,17 +2,13 @@
 #define PROTOCOL_H
 
 
+#include <cuda.h>
+#include <cuda_runtime.h>
+#include <vector>
+#include <string>
+#include <msgpack.hpp>
 
 /*
-Client only send this header to the server
-HEADER FORMAT(little endian):
-
-+-------------------+--------------------------+-------------------+-------------------+
-|  MAGIC (4 bytes)  |  OP (1 byte)             | KEY_SIZE (4 bytes)|  KEY              |  
-+-------------------+--------------------------+-------------------+-------------------+
-|  cuda ipc handler | payload size(8byte)      |  offset(8bytes)   | 
-+-------------------+--------------------------+-------------------+
-
 
 Error code:
 +--------------------+
@@ -42,18 +38,62 @@ Error code:
 
 #define RETURN_CODE_SIZE sizeof(int)
 
-#include <cuda.h>
-#include <cuda_runtime.h>
-
-//pack the header
-typedef struct __attribute__((packed)) Header {
+typedef struct __attribute__((packed)){
     unsigned int magic;
     char op;
-    cudaIpcMemHandle_t ipc_handle; 
-    unsigned long offset;
-    int payload_size;
-    int key_size;
+    unsigned int body_size;
 } header_t;
+
+typedef struct {
+    std::string key;
+    unsigned long offset;
+    MSGPACK_DEFINE(key, offset)
+} block_t;
+
+
+
+//implement pack for ipcHandler
+namespace msgpack {
+MSGPACK_API_VERSION_NAMESPACE(MSGPACK_DEFAULT_API_NS) {
+namespace adaptor {
+
+template <>
+struct pack<cudaIpcMemHandle_t> {
+    template <typename Stream>
+    packer<Stream>& operator()(msgpack::packer<Stream>& o, const cudaIpcMemHandle_t& v) const {
+        o.pack_bin(sizeof(cudaIpcMemHandle_t));
+        o.pack_bin_body(reinterpret_cast<const char*>(&v), sizeof(cudaIpcMemHandle_t));
+        return o;
+    }
+};
+
+template <>
+struct convert<cudaIpcMemHandle_t> {
+    msgpack::object const& operator()(msgpack::object const& o, cudaIpcMemHandle_t& v) const {
+        if (o.type != msgpack::type::BIN || o.via.bin.size != sizeof(cudaIpcMemHandle_t)) {
+            throw msgpack::type_error();
+        }
+        std::memcpy(&v, o.via.bin.ptr, sizeof(cudaIpcMemHandle_t));
+        return o;
+    }
+};
+
+} // namespace adaptor
+} // MSGPACK_API_VERSION_NAMESPACE(MSGPACK_DEFAULT_API_NS)
+} 
+
+typedef struct {
+    cudaIpcMemHandle_t ipc_handle;
+    int block_size;
+    std::vector<block_t> blocks;
+    MSGPACK_DEFINE(ipc_handle, block_size, blocks)
+
+} local_meta_t;
+
+
+// Update function declarations
+bool serialize_local_meta(const local_meta_t& meta, std::string& out);
+bool deserialize_local_meta(const char* data, size_t size, local_meta_t& out);
 
 
 #define FIXED_HEADER_SIZE sizeof(header_t)

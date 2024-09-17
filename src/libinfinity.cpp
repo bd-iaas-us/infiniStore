@@ -13,6 +13,7 @@
 #include <time.h>
 #include <math.h>
 #include "libinfinity.h"
+#include <vector>
 
 
 int init_connection(connection_t *conn)   {
@@ -68,40 +69,53 @@ int sync_local(connection_t *conn) {
     return 0;
 }
 
-int rw_local(connection_t *conn, char op, const void *key_ptr, size_t key_size, void *ptr, unsigned long offset, size_t size) {
+
+int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, int block_size, void *ptr) {
     assert(conn != NULL);
     assert(ptr != NULL);
-    assert(size > 0);
 
     cudaIpcMemHandle_t ipc_handle;
     memset(&ipc_handle, 0, sizeof(cudaIpcMemHandle_t));
-
      
     CHECK_CUDA(cudaIpcGetMemHandle(&ipc_handle, ptr));
-    //print_ipc_handle(ipc_handle);
 
-    header_t header;
-    header = {
+    local_meta_t meta = {
+        .ipc_handle = ipc_handle,
+        .block_size = block_size,
+        .blocks = blocks,
+    };
+
+    std::string serialized_data;
+    if (!serialize_local_meta(meta, serialized_data)) {
+        fprintf(stderr, "Failed to serialize local meta\n");
+        return -1;
+    }
+
+    header_t header = {
         .magic = MAGIC,
         .op = op,
-        .ipc_handle = ipc_handle,
-        .offset = offset,
-        .payload_size = size,
-        .key_size = key_size
+        .body_size = static_cast<unsigned int>(serialized_data.size()),
     };
-    
-    //send header
-    send_exact(conn->sock, &header, FIXED_HEADER_SIZE);
 
-    //send key
-    send_exact(conn->sock, key_ptr, key_size);
+    // Send header
+    if (send_exact(conn->sock, &header, FIXED_HEADER_SIZE) < 0) {
+        fprintf(stderr, "Failed to send header\n");
+        return -1;
+    }
+    // Send body
+    if (send_exact(conn->sock, serialized_data.data(), serialized_data.size()) < 0) {
+        fprintf(stderr, "Failed to send body\n");
+        return -1;
+    }
 
     int return_code;
-    recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL);
+    if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
+        fprintf(stderr, "Failed to receive return code\n");
+        return -1;
+    }
 
-    printf("return code: %d\n", return_code);
     if (return_code != FINISH && return_code != TASK_ACCEPTED) {
         return -1;
     }
     return 0;
-} 
+}

@@ -26,8 +26,10 @@ setup(
     install_requires=[
         'torch',
         'uvloop',
+        'fastapi',
+        'pybind11',
     ],
-    description="A cluster kvcache memory store",
+    description="A kvcache memory pool",
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',
     url="https://github.com/bd-iaas-us/infinity",
