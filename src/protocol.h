@@ -27,13 +27,18 @@ Error code:
 
 #define OP_R 'R'
 #define OP_W 'W'
+#define OP_SYNC 'S'
 #define OP_SIZE 1
 
 //error code: int
 #define INVALID_REQ 400
 #define FINISH 200
+#define TASK_ACCEPTED 202
 #define INTERNAL_ERROR 500
 #define KEY_NOT_FOUND 404
+#define RETRY 408
+#define SYSTEM_ERROR 503
+
 
 #define RETURN_CODE_SIZE sizeof(int)
 

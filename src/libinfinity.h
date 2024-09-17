@@ -16,6 +16,7 @@ typedef struct {
 
 int init_connection(connection_t *conn);
 void close_connection(connection_t *conn);
+//async rw local cpu memory, even rw_local returns, it is not guaranteed that the operation is completed until sync_local is recved.
 int rw_local(connection_t *conn, char op, const void *key_ptr, size_t key_size, void *ptr, unsigned long offset, size_t size);
-
+int sync_local(connection_t *conn);
 #endif // LIBINFINITY_H

@@ -51,6 +51,23 @@ void close_connection(connection_t *conn) {
 }
 
 
+int sync_local(connection_t *conn) {
+    assert(conn != NULL);
+    header_t header;
+    header = {
+        .magic = MAGIC,
+        .op = OP_SYNC,
+    };
+    send_exact(conn->sock, &header, FIXED_HEADER_SIZE);
+
+    int return_code;
+    recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL);
+    if (return_code != FINISH) {
+        return -1;
+    }
+    return 0;
+}
+
 int rw_local(connection_t *conn, char op, const void *key_ptr, size_t key_size, void *ptr, unsigned long offset, size_t size) {
     assert(conn != NULL);
     assert(ptr != NULL);
@@ -82,7 +99,8 @@ int rw_local(connection_t *conn, char op, const void *key_ptr, size_t key_size, 
     int return_code;
     recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL);
 
-    if (return_code != FINISH) {
+    printf("return code: %d\n", return_code);
+    if (return_code != FINISH && return_code != TASK_ACCEPTED) {
         return -1;
     }
     return 0;
