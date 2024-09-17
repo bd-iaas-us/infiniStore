@@ -6,6 +6,20 @@ import torch
 import os
 
 
+def register_server(loop):
+    #client does not need to call this function
+    from uvloop.loop import libuv_get_loop_t_ptr
+    import ctypes
+    from ctypes import pythonapi, c_void_p, py_object
+    PyCapsule_GetPointer = pythonapi.PyCapsule_GetPointer
+    PyCapsule_GetPointer.restype = c_void_p
+    PyCapsule_GetPointer.argtypes = [py_object, ctypes.c_char_p]
+    loop_ptr = PyCapsule_GetPointer(libuv_get_loop_t_ptr(loop), None)
+
+    #from cpython.pycapsule import PyCapsule_GetPointer
+    #<uint64_t>PyCapsule_GetPointer(obj, NULL)
+    return _infinity.register_server(loop_ptr)
+
 class DisableTorchCaching:
     def __enter__(self):
         os.environ['PYTORCH_NO_CUDA_MEMORY_CACHING'] = '1'
