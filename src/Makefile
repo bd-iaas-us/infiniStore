@@ -5,7 +5,7 @@ CUDA_FLAGS = -arch=sm_75
 
 INCLUDES = -I/usr/local/cuda/include
 LDFLAGS = -L/usr/local/cuda/lib64
-LIBS = -lcudart# -lgdrapi
+LIBS = -lcudart -luv
 PYBIND11_INCLUDES = $(shell python3 -m pybind11 --includes)
 PYTHON_EXTENSION_SUFFIX = $(shell python3-config --extension-suffix)
 

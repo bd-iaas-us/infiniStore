@@ -51,6 +51,23 @@ void close_connection(connection_t *conn) {
 }
 
 
+int sync_local(connection_t *conn) {
+    assert(conn != NULL);
+    header_t header;
+    header = {
+        .magic = MAGIC,
+        .op = OP_SYNC,
+    };
+    send_exact(conn->sock, &header, FIXED_HEADER_SIZE);
+
+    int return_code;
+    recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL);
+    if (return_code != FINISH) {
+        return -1;
+    }
+    return 0;
+}
+
 int rw_local(connection_t *conn, char op, const void *key_ptr, size_t key_size, void *ptr, unsigned long offset, size_t size) {
     assert(conn != NULL);
     assert(ptr != NULL);
@@ -59,43 +76,31 @@ int rw_local(connection_t *conn, char op, const void *key_ptr, size_t key_size, 
     cudaIpcMemHandle_t ipc_handle;
     memset(&ipc_handle, 0, sizeof(cudaIpcMemHandle_t));
 
-    // send the magic number
-    int magic = MAGIC;
-    //send(conn->sock, &magic, MAGIC_SIZE, 0);
-    send_exact(conn->sock, &magic, MAGIC_SIZE);
-
-    // send the operation
-
-    if (op != OP_R && op != OP_W) {
-        printf("op is not correct\n");
-        return -1;
-    }
-
-    send_exact(conn->sock, &op, OP_SIZE);
-
-    // send the size of the key
-    send_exact(conn->sock, &key_size, sizeof(int));
-
-    // send the key
-    send_exact(conn->sock, key_ptr, key_size);
-
+     
     CHECK_CUDA(cudaIpcGetMemHandle(&ipc_handle, ptr));
     //print_ipc_handle(ipc_handle);
 
-    // send the ipc handle
-    send_exact(conn->sock, &ipc_handle, sizeof(cudaIpcMemHandle_t));
+    header_t header;
+    header = {
+        .magic = MAGIC,
+        .op = op,
+        .ipc_handle = ipc_handle,
+        .offset = offset,
+        .payload_size = size,
+        .key_size = key_size
+    };
+    
+    //send header
+    send_exact(conn->sock, &header, FIXED_HEADER_SIZE);
 
-    // send the size of the data
-    send_exact(conn->sock, &size, sizeof(size_t));
-
-
-    //send the offset
-    send_exact(conn->sock, &offset, sizeof(unsigned long));
+    //send key
+    send_exact(conn->sock, key_ptr, key_size);
 
     int return_code;
-    recv_exact(conn->sock, &return_code, RETURN_CODE_SIZE);
+    recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL);
 
-    if (return_code != FINISH) {
+    printf("return code: %d\n", return_code);
+    if (return_code != FINISH && return_code != TASK_ACCEPTED) {
         return -1;
     }
     return 0;

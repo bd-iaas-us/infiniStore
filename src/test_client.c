@@ -46,9 +46,16 @@ int main() {
     
     ret = rw_local(&conn, OP_W, "test", 4,  d_ptr, 0, size);
     if (ret < 0) {
+        printf("Failed to write local memory %d\n", ret);
+        goto out;
+    }
+    ret = sync_local(&conn);
+    if (ret < 0) {
+        printf("Failed to sync local memory\n");
         goto out;
     }
     
+
 
 
     //allocate a new cuda memory    
@@ -57,6 +64,11 @@ int main() {
     printf("out:print address of d_ptr2: %p\n", d_ptr2);
 
     ret = rw_local(&conn, OP_R, "test", 4, d_ptr2, 0, size);
+    if (ret < 0) {
+        goto out;
+        return -1;
+    }
+    ret = sync_local(&conn);
     if (ret < 0) {
         goto out;
         return -1;
@@ -79,8 +91,13 @@ out:
         free(h_data);
         h_data = NULL;
     }
-    CHECK_CUDA(cudaFree(d_ptr));
-    CHECK_CUDA(cudaFree(d_ptr2));
+    if (d_ptr != NULL) {
+        CHECK_CUDA(cudaFree(d_ptr));
+    }
+    if (d_ptr2 != NULL) {
+        CHECK_CUDA(cudaFree(d_ptr2));
+    }
+
     printf("read/write local cpu memory success\n");
     close_connection(&conn);
 }
