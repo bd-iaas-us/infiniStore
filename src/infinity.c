@@ -72,6 +72,7 @@ void on_close(uv_handle_t* handle) {
         free(client->handle);
         client->handle = NULL;
     }
+    free(client);
 }
 
 
@@ -218,7 +219,8 @@ int do_sync_stream(client_t *client) {
         client->work_req.data = client;
         client->state = CUDA_SYNC;
         //from google: cudaSyncStream is thread-safe.
-        uv_queue_work(uv_default_loop(), &client->work_req, wait_for_cuda_completion, after_cuda_completion);
+        assert(loop != NULL);
+        uv_queue_work(loop, &client->work_req, wait_for_cuda_completion, after_cuda_completion);
     } else {
         return FINISH;
     }
@@ -263,7 +265,7 @@ void on_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
     if (client->state == CUDA_SYNC) {
         int ret = RETRY;
         uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
-         memcpy(client->send_buffer, &ret, RETURN_CODE_SIZE);
+        memcpy(client->send_buffer, &ret, RETURN_CODE_SIZE);
         write_req->data = client;
         uv_buf_t wbuf = uv_buf_init(client->send_buffer, RETURN_CODE_SIZE);
         uv_write(write_req, stream, &wbuf, 1, on_write);
@@ -376,13 +378,12 @@ void on_new_connection(uv_stream_t* server, int status) {
     }
 }
 
-int main() {
-    loop = uv_default_loop();
-
+int register_server(unsigned int loop_ptr) {
+    loop = (uv_loop_t *)loop_ptr;
+    assert(loop != NULL);
     uv_tcp_init(loop, &server);
-
     struct sockaddr_in addr;
-    uv_ip4_addr("127.0.0.1", PORT, &addr);
+    uv_ip4_addr("0.0.0.0", PORT, &addr);
 
     uv_tcp_bind(&server, (const struct sockaddr*)&addr, 0);
     int r = uv_listen((uv_stream_t*) &server, 128, on_new_connection);
@@ -390,5 +391,6 @@ int main() {
         fprintf(stderr, "Listen error: %s\n", uv_strerror(r));
         return 1;
     }
-    return uv_run(loop, UV_RUN_DEFAULT);
+
+    return 0;
 }

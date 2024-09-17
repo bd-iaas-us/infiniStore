@@ -35,6 +35,7 @@ conn.write_kvcache(src_tensor, key, 0, src_tensor.numel())
 
 print(f"write tensor {src_tensor} to infinity with key {key}")
 
+conn.sync_local()
 
 with DisableTorchCaching():
     dst_tensor = torch.tensor([0, 0, 0], device="cuda", dtype=torch.float32)
@@ -51,6 +52,7 @@ if ipc_handle1 == ipc_handle2:
 
 conn.read_kvcache(dst_tensor, key, 0, dst_tensor.numel())
 print(f"read tensor {dst_tensor} from infinity with key {key})")
+conn.sync_local()
 
 assert torch.equal(src_tensor, dst_tensor)
 conn.close_connection()

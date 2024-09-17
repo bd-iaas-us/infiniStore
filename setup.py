@@ -25,6 +25,7 @@ setup(
     },
     install_requires=[
         'torch',
+        'uvloop',
     ],
     description="A cluster kvcache memory store",
     long_description=open('README.md').read(),
