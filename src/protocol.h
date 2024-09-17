@@ -37,5 +37,19 @@ Error code:
 
 #define RETURN_CODE_SIZE sizeof(int)
 
+#include <cuda.h>
+#include <cuda_runtime.h>
+
+//pack the header
+typedef struct __attribute__((packed)) Header {
+    unsigned int magic;
+    char op;
+    cudaIpcMemHandle_t ipc_handle; 
+    unsigned long offset;
+    int payload_size;
+    int key_size;
+} header_t;
+
+#define FIXED_HEADER_SIZE sizeof(header_t)
 
 #endif
