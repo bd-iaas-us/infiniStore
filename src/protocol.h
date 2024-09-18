@@ -56,8 +56,6 @@ typedef struct __attribute__((packed)) Header {
 } header_t;
 
 
-
-
 #define FIXED_HEADER_SIZE sizeof(header_t)
 
 #endif

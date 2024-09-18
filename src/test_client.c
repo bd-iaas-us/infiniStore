@@ -56,8 +56,6 @@ int main() {
     }
     
 
-
-
     //allocate a new cuda memory    
     CHECK_CUDA(cudaMalloc(&d_ptr2, size));
     printf("out:print address of d_ptr:  %p\n", d_ptr);

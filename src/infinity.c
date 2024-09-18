@@ -72,6 +72,7 @@ void on_close(uv_handle_t* handle) {
         free(client->handle);
         client->handle = NULL;
     }
+    free(client);
 }
 
 

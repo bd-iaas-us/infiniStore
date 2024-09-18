@@ -67,6 +67,11 @@ class InfinityConnection:
             raise Exception(f"Failed to write to infinity, ret = {ret}")
         return
     
+    def sync_local(self):
+        ret = _infinity.sync_local(self.conn)
+        if ret < 0:
+            raise Exception(f"Failed to sync, ret = {ret}")
+    
     def read_kvcache(self, kvcache : torch.Tensor, key : str, offset: int, size: int):
         self._verify(kvcache, key, offset, size)
         ptr = kvcache.data_ptr()
