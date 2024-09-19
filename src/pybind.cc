@@ -18,7 +18,6 @@ PYBIND11_MODULE(_infinity, m) {
     m.def("close_connection", &close_connection, "Close a connection");
     m.def("rw_local", &rw_local_wrapper, "Read/Write cpu memory from GPU device");
     m.def("register_server", &register_server, "register the server");
-
 }
 
 

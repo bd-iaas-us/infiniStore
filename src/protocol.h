@@ -2,17 +2,10 @@
 #define PROTOCOL_H
 
 
+#include <cuda.h>
+#include <cuda_runtime.h>
 
 /*
-Client only send this header to the server
-HEADER FORMAT(little endian):
-
-+-------------------+--------------------------+-------------------+-------------------+
-|  MAGIC (4 bytes)  |  OP (1 byte)             | KEY_SIZE (4 bytes)|  KEY              |  
-+-------------------+--------------------------+-------------------+-------------------+
-|  cuda ipc handler | payload size(8byte)      |  offset(8bytes)   | 
-+-------------------+--------------------------+-------------------+
-
 
 Error code:
 +--------------------+
@@ -42,21 +35,33 @@ Error code:
 
 #define RETURN_CODE_SIZE sizeof(int)
 
-#include <cuda.h>
-#include <cuda_runtime.h>
 
-//pack the header
-typedef struct __attribute__((packed)) Header {
+
+typedef struct __attribute__((packed)){
     unsigned int magic;
     char op;
-    cudaIpcMemHandle_t ipc_handle; 
-    unsigned long offset;
-    int payload_size;
-    int key_size;
+    unsigned int meta_size;
 } header_t;
 
+typedef struct __attribute__((packed)) {
+    unsigned long offset;
+    char * key; //变长字符串
+} block_t;
 
 
+typedef struct __attribute__((packed)){
+    cudaIpcMemHandle_t ipc_handle;
+    int block_size;
+    block_t *blocks;
+} local_meta_t;
+
+typedef struct __attribute__((packed)) {
+    //
+} remote_meta_t;
+
+char *serialize_local_meta(local_meta_t *meta, size_t *out_size);
+local_meta_t *deserialize_local_meta(const char *data, size_t size);
+void free_local_meta(local_meta_t *meta);
 
 #define FIXED_HEADER_SIZE sizeof(header_t)
 

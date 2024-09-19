@@ -22,14 +22,21 @@ libinfinity.o: libinfinity.c protocol.h utils.h libinfinity.h
 infinity_server.o: infinity.c
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -fPIC -c $^ -o $@ $(LDFLAGS) $(LIBS)
 
+protocol.o: protocol.c protocol.h mpack/mpack.c
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -fPIC -c $< -o $@ $(LDFLAGS) $(LIBS)
+
 test_client: test_client.c utils.o libinfinity.o
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) $(LIBS)
 
-$(PYBIND_TARGET): pybind.cc libinfinity.o utils.o infinity_server.o
-	${CXX} $(CXXFLAGS) $(INCLUDES) --shared -fPIC $(PYBIND11_INCLUDES) $^\
+$(PYBIND_TARGET): pybind.cc libinfinity.o utils.o infinity_server.o protocol.o
+	$(CXX) $(CXXFLAGS) $(INCLUDES) --shared -fPIC $(PYBIND11_INCLUDES) $^\
         -o $(PYBIND_TARGET) $(LDFLAGS) $(LIBS)
 	cp $(PYBIND_TARGET) ../infinity/
+	
+test_run: test_protocol.cc mpack/mpack.c protocol.o
+	$(CXX) $(INCLUDES) -I/usr/local/include/gtest -std=c++11 -pthread $^ -o test_run -L/usr/local/lib -lgtest -lgtest_main
 
-.PHONY: clean
+
+.PHONY: clean, test
 clean:
 	rm -f client server infinity_server.o *.so *.o test_client

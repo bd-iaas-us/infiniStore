@@ -9,10 +9,10 @@ import uvicorn
 
 app = FastAPI()
 
-
-@app.get("/")
-async def read_root():
+@app.get("/status")
+async def status():
     return {"Hello": "World"}
+
 
 if __name__ == "__main__":
     loop = uvloop.new_event_loop()
