@@ -38,7 +38,7 @@ void print_header(header_t *header) {
 
 typedef enum {
     READ_HEADER,
-    READ_META,
+    READ_BODY,
     CUDA_SYNC,
 } read_state_t;
 
@@ -47,42 +47,55 @@ typedef struct {
     uv_tcp_t* handle; //uv_stream_t
     read_state_t state; //state of the client, for parsing the request
     size_t bytes_read; //bytes read so far, for parsing the request
-    int payloads_read
+    size_t expected_size; //expected size of the body
     header_t header;
-    payload_t *payloads;
-    
+
+    char * recv_buffer;
+    local_meta_t *local_meta;
+
     char send_buffer[RETURN_CODE_SIZE]; //preallocated buffer for sending return code
 
     cudaStream_t cuda_stream;
     bool cuda_operation_inflight;
     //Use this flag to avoid multiple threads waiting for the same stream
-    bool cuda_sync_inflight; 
-    int return_code;
+    bool cuda_sync_inflight;
+    //send cudaSyncStream to workqueue 
     uv_work_t work_req;
+    //where to save cudaSyncStream's result
+    int return_code;
 } client_t;
 
 void reset_client_read_state(client_t *client) {
     client->state = READ_HEADER;
     client->bytes_read = 0;
-    client->payloads_read = 0;
+    client->expected_size = FIXED_HEADER_SIZE;
     client->cuda_operation_inflight = false;
     client->cuda_sync_inflight = false;
     client->return_code = 0;
-    memset(&client->header, 0, sizeof(header_t));
-    
+    memset(&client->header, 0, sizeof(header_t));    
+    if (client->local_meta) {
+        free_local_meta(client->local_meta);
+        client->local_meta = NULL;
+    }
+    //keep the recv_buffer as it is
 }
 
 void on_close(uv_handle_t* handle) {
     printf("free client...\n");
     client_t *client = (client_t *) handle->data;
-    if(client->key_buffer == NULL) {
-        free(client->key_buffer);
-        client->key_buffer = NULL;
-    }
     if (client->handle) {
         free(client->handle);
         client->handle = NULL;
     }
+    if (client->recv_buffer) {
+        free(client->recv_buffer);
+        client->recv_buffer = NULL;
+    }
+    if (client->local_meta) {
+        free_local_meta(client->local_meta);
+        client->local_meta = NULL;
+    }
+    free(client);
 }
 
 
@@ -115,7 +128,6 @@ void on_write(uv_write_t* req, int status) {
     }
     free(req);
 }
-
 
 
 int do_read_kvcache(client_t *client) {
@@ -236,14 +248,15 @@ int do_sync_stream(client_t *client) {
 int handle_request(client_t *client) {
     int return_code;
 
-    if (client->header.op == OP_W) {
-        return_code = do_write_kvcache(client);
-    } else if (client->header.op == OP_R) {
-        return_code = do_read_kvcache(client);
-    } else if (client->header.op == OP_SYNC) {
-        return do_sync_stream(client);
-    }
+    // if (client->header.op == OP_W) {
+    //     return_code = do_write_kvcache(client);
+    // } else if (client->header.op == OP_R) {
+    //     return_code = do_read_kvcache(client);
+    // } else if (client->header.op == OP_SYNC) {
+    //     return do_sync_stream(client);
+    // }
 
+    return_code = FINISH;
     printf("return code: %d\n", return_code);
     //if application error or success, send the return code
     uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
@@ -257,56 +270,79 @@ int handle_request(client_t *client) {
     return 0;
 }
 
-int parse_header(client_t *client, char *buf, size_t nread) {
-
-    //parse the header
-    //TODO:
-
-}
-
 
 void on_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
     client_t* client = (client_t*)stream->data;
     int ret;
-    //corner case: if there is a cuda operation inflight, we need to send a retry code to the client
-    if (client->state == CUDA_SYNC) {
-        int ret = RETRY;
-        uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
-        memcpy(client->send_buffer, &ret, RETURN_CODE_SIZE);
-        write_req->data = client;
-        uv_buf_t wbuf = uv_buf_init(client->send_buffer, RETURN_CODE_SIZE);
-        uv_write(write_req, stream, &wbuf, 1, on_write);
-
-        reset_client_read_state(client);
-
-        goto clean_up;
-    }
-
     if (nread < 0) {
         if (nread != UV_EOF)
             fprintf(stderr, "Read error %s\n", uv_err_name(nread));
         uv_close((uv_handle_t*)stream, on_close);
         goto clean_up;
     }
+    size_t offset = 0;
+    while (offset < nread) {
+        switch (client->state) {
+            
+            case READ_HEADER: {
+                size_t to_copy = MIN(nread - offset, FIXED_HEADER_SIZE - client->bytes_read);
+                memcpy(((char*)&client->header) + client->bytes_read, buf->base + offset, to_copy);
+                client->bytes_read += to_copy;
+                offset += to_copy;
+                if (client->bytes_read == FIXED_HEADER_SIZE) {
+                    print_header(&client->header);
+                    if (client->header.op == OP_R || client->header.op == OP_W) {
+                        int ret = veryfy_header(&client->header);
+                        if (ret != 0) {
+                            fprintf(stderr, "Invalid header\n");
+                            uv_close((uv_handle_t*)stream, on_close);
+                            goto clean_up;
+                        }
+                        client->expected_bytes = client->header.body_size;
+                        client->bytes_read = 0; // 重置已读取字节数
+                        client->recv_buffer = (char*)realloc(client->recv_buffer, client->expected_bytes);
+                        client->state = READ_BODY;
+                    } else if (client->header.op == OP_SYNC){
+                        handle_request(client);
+                    }
+                }
+                break
+            }
 
+            case READ_BODY: {
+                assert(client->recv_buffer != NULL);
+                size_t to_copy = MIN(nread - offset, client->expected_bytes - client->bytes_read);
 
+                memcpy(client->recv_buffer + client->bytes_read, buf->base + offset, to_copy);
+                client->bytes_read += to_copy;
+                offset += to_copy;
+                if (client->bytes_read == client->expected_bytes) {
+                    client->local_meta = deserialize_local_meta(client->recv_buffer, client->expected_size);
+                    if (client->local_meta == NULL) {
+                        fprintf(stderr, "Failed to deserialize local meta\n");
+                        uv_close((uv_handle_t*)stream, on_close);
+                        goto clean_up;
+                    }
+                    handle_request(client);
+                }
+                break;
+            }
 
-    ret = parse_header(client, buf->base, nread);
-    if (ret != 0) { 
-        fprintf(stderr, "Invalid header\n");
-        uv_close((uv_handle_t*)stream, on_close);
-        goto clean_up;
-    }
-
-    ret = handle_request(client);
-    if (ret < 0 ) {
-        fprintf(stderr, "Write error: %s\n", uv_strerror(ret));
-        uv_close((uv_handle_t*)stream, on_close);
-        goto clean_up;
+            case CUDA_SYNC: {
+                int ret = RETRY;
+                uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
+                memcpy(client->send_buffer, &ret, RETURN_CODE_SIZE);
+                write_req->data = client;
+                uv_buf_t wbuf = uv_buf_init(client->send_buffer, RETURN_CODE_SIZE);
+                uv_write(write_req, stream, &wbuf, 1, on_write);
+                break;
+            }
+        }
     }
 
 clean_up:
     free(buf->base);
+
 }
 
 void on_new_connection(uv_stream_t* server, int status) {

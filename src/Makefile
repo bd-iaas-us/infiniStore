@@ -16,13 +16,13 @@ all: test_client infinity_server.o $(PYBIND_TARGET)
 utils.o : utils.c utils.h
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -fPIC -c $< -o $@ $(LDFLAGS) $(LIBS)
 
-libinfinity.o: libinfinity.c protocol.h utils.h libinfinity.h
+libinfinity.o: libinfinity.cpp protocol.h utils.h libinfinity.h
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -fPIC -c $< -o $@ $(LDFLAGS) $(LIBS)
 
 infinity_server.o: infinity.c
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -fPIC -c $^ -o $@ $(LDFLAGS) $(LIBS)
 
-protocol.o: protocol.c protocol.h mpack/mpack.c
+protocol.o: protocol.cpp protocol.h
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -fPIC -c $< -o $@ $(LDFLAGS) $(LIBS)
 
 test_client: test_client.c utils.o libinfinity.o
@@ -33,7 +33,7 @@ $(PYBIND_TARGET): pybind.cc libinfinity.o utils.o infinity_server.o protocol.o
         -o $(PYBIND_TARGET) $(LDFLAGS) $(LIBS)
 	cp $(PYBIND_TARGET) ../infinity/
 	
-test_run: test_protocol.cc mpack/mpack.c protocol.o
+test_run: test_protocol.cpp protocol.o
 	$(CXX) $(INCLUDES) -I/usr/local/include/gtest -std=c++11 -pthread $^ -o test_run -L/usr/local/lib -lgtest -lgtest_main
 
 

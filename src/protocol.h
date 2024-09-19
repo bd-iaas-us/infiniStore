@@ -4,6 +4,9 @@
 
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <vector>
+#include <string>
+#include <msgpack.hpp>
 
 /*
 
@@ -35,33 +38,28 @@ Error code:
 
 #define RETURN_CODE_SIZE sizeof(int)
 
-
-
 typedef struct __attribute__((packed)){
     unsigned int magic;
     char op;
-    unsigned int meta_size;
+    unsigned int body_size;
 } header_t;
 
-typedef struct __attribute__((packed)) {
+typedef struct {
     unsigned long offset;
-    char * key; //变长字符串
+    std::string key;
+    MSGPACK_DEFINE(offset, key)
 } block_t;
 
-
-typedef struct __attribute__((packed)){
+typedef struct {
     cudaIpcMemHandle_t ipc_handle;
     int block_size;
-    block_t *blocks;
+    std::vector<block_t> blocks;
 } local_meta_t;
 
-typedef struct __attribute__((packed)) {
-    //
-} remote_meta_t;
 
-char *serialize_local_meta(local_meta_t *meta, size_t *out_size);
-local_meta_t *deserialize_local_meta(const char *data, size_t size);
-void free_local_meta(local_meta_t *meta);
+// Update function declarations
+bool serialize_local_meta(const local_meta_t& meta, std::string& out);
+bool deserialize_local_meta(const char* data, size_t size, local_meta_t& out);
 
 #define FIXED_HEADER_SIZE sizeof(header_t)
 
