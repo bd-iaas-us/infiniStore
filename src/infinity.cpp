@@ -15,8 +15,9 @@
 #include "utils.h"
 #include <string>
 #include <map>
-
+#include <iostream>
 #include <uv.h>
+#include <chrono>
 
 
 uv_loop_t *loop;
@@ -40,7 +41,7 @@ typedef enum {
 } read_state_t;
 
 
-typedef struct {
+struct Client {
     uv_tcp_t* handle; //uv_stream_t
     read_state_t state; //state of the client, for parsing the request
     size_t bytes_read; //bytes read so far, for parsing the request
@@ -60,14 +61,32 @@ typedef struct {
     uv_work_t work_req;
     //where to save cudaSyncStream's result
     //int return_code;
-} client_t;
+    Client() = default;
+    Client(const Client&) = delete;
+    ~Client();
+};
+
+Client::~Client() {
+    if (handle) {
+        free(handle);
+        handle = NULL;
+    }
+    if (recv_buffer) {
+        free(recv_buffer);
+        recv_buffer = NULL;
+    }
+    //TODO: destroy cuda stream
+}
+typedef struct Client client_t;
 
 void reset_client_read_state(client_t *client) {
     client->state = READ_HEADER;
     client->bytes_read = 0;
     client->expected_bytes = FIXED_HEADER_SIZE;
+    /*
     client->cuda_operation_inflight = false;
     client->cuda_sync_inflight = false;
+    */
     memset(&client->header, 0, sizeof(header_t));
     
     //keep the recv_buffer as it is
@@ -88,7 +107,6 @@ void on_close(uv_handle_t* handle) {
         free(client->recv_buffer);
         client->recv_buffer = NULL;
     }
-    printf("free client done\n");
     delete client;
 }
 
@@ -115,91 +133,94 @@ void on_write(uv_write_t* req, int status) {
     free(req);
 }
 
-/*
+
 int do_read_kvcache(client_t *client) {
-    header_t *header = &client->header;
-    assert(header != NULL);
-    //get the key
+    const header_t *header = &client->header;
+    const local_meta_t *meta = &client->local_meta;
     void * d_ptr;
-    std::string k(client->key_buffer, header->key_size);
-    //find the key in the map
-    if (kv_map.find(k) == kv_map.end()) {
-        //key not found
-        printf("Key not found, return code: %d\n", client->key_buffer);
-        return KEY_NOT_FOUND;
+
+    assert(header != NULL);
+    //create cuda stream if not exist
+    if (!client->cuda_operation_inflight) {
+        cudaStream_t cuda_stream;
+        CHECK_CUDA(cudaStreamCreate(&cuda_stream));
+        client->cuda_stream = cuda_stream;
     }
 
-    //key found
-    void * h_src = kv_map[k];
+    CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, meta->ipc_handle, cudaIpcMemLazyEnablePeerAccess));
 
-    CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, header->ipc_handle, cudaIpcMemLazyEnablePeerAccess));
 
-    cudaStream_t cuda_stream;
-    CHECK_CUDA(cudaStreamCreate(&cuda_stream));
+    for (auto &block : meta->blocks) {
+        //find the key in the map
+        if (kv_map.find(block.key) == kv_map.end()) {
+            //key not found
+            std::cout << "Key not found: " << block.key << std::endl;
+            CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
+            return KEY_NOT_FOUND;
+        }
+        //key found
+        //std::cout << "Key found: " << block.key << std::endl;
+        void * h_src = kv_map[block.key];
+        //push the host cpu data to local device
+        CHECK_CUDA(cudaMemcpyAsync((char*)d_ptr + block.offset, h_src, meta->block_size, cudaMemcpyHostToDevice, client->cuda_stream));
+        client->cuda_operation_inflight = true;
+    }
+    CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
 
-    //push the host cpu data to local device
-    CHECK_CUDA(cudaMemcpyAsync(d_ptr + header->offset, h_src, header->payload_size, cudaMemcpyHostToDevice, cuda_stream));
-    
-    // print_vector(h_src);
-    
-    // CHECK_CUDA(cudaStreamSynchronize(cuda_stream));
-    // CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
-    client->cuda_operation_inflight = true;
-    client->return_code = FINISH;
-    
+
     return TASK_ACCEPTED;
 }
-*/
 
 
-/*
+
 int do_write_kvcache(client_t *client) {
 
-    header_t *header = &client->header;
-    assert(header != NULL);
+    const local_meta_t * meta =  &client->local_meta;
+    assert(meta != NULL);
     // allocate host memory
     void* d_ptr;
 
-    CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, header->ipc_handle, cudaIpcMemLazyEnablePeerAccess));
+    CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, meta->ipc_handle, cudaIpcMemLazyEnablePeerAccess));
     
     //TODO: do we need to synchronize here?
-    CHECK_CUDA(cudaDeviceSynchronize());
-    void * h_dst = malloc(header->payload_size);
-    if (h_dst == NULL) {
-        perror("Failed to allocat host memroy");
-        CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
-        return SYSTEM_ERROR;
+    //CHECK_CUDA(cudaDeviceSynchronize());
+
+    //create cuda stream if not exist
+    if (!client->cuda_operation_inflight) {
+        cudaStream_t cuda_stream;
+        CHECK_CUDA(cudaStreamCreate(&cuda_stream));
+        client->cuda_stream = cuda_stream;
     }
-    //create cuda stream(async for future)
-    cudaStream_t cuda_stream;
-    CHECK_CUDA(cudaStreamCreate(&cuda_stream));
 
-    //how to deal with memory overflow? 
-    //pull data from local device to CPU host
-    CHECK_CUDA(cudaMemcpyAsync(h_dst, d_ptr + header->offset, header->payload_size, cudaMemcpyDeviceToHost, cuda_stream));
+    //loop through the blocks
+    for (auto &block : meta->blocks) {
+        //pull data from local device to CPU host
+        void * h_dst = malloc(meta->block_size);
+        if (h_dst == NULL) {
+            perror("Failed to allocat host memroy");
+            CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
+            return SYSTEM_ERROR;
+        }
+        //how to deal with memory overflow? 
+        //pull data from local device to CPU host
+        CHECK_CUDA(cudaMemcpyAsync(h_dst, (char*)d_ptr + block.offset, meta->block_size, cudaMemcpyDeviceToHost, client->cuda_stream));
 
 
-    client->cuda_operation_inflight = true;
-    client->return_code = FINISH;
-    client->cuda_stream = cuda_stream;
+        client->cuda_operation_inflight = true;
 
-    //cudaStreamSynchronize(cuda_stream);
-    //print_vector(h_dst);
-    std::string k(client->key_buffer, header->key_size);
-    kv_map[k] = h_dst;
-
+        print_vector((float*)h_dst,10);
+        kv_map[block.key] = h_dst;
+    }
+    CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
     return TASK_ACCEPTED;
 }
-*/
 
 
 //danger zone
 void wait_for_cuda_completion(uv_work_t *req) {
     client_t *client = (client_t *)req->data;
-
     // Wait for the CUDA stream to complete
     CHECK_CUDA(cudaStreamSynchronize(client->cuda_stream));
-
 }
 
 void after_cuda_completion(uv_work_t *req, int status) {
@@ -213,6 +234,8 @@ void after_cuda_completion(uv_work_t *req, int status) {
     uv_buf_t wbuf = uv_buf_init(client->send_buffer, RETURN_CODE_SIZE);
     uv_write(write_req, (uv_stream_t *)client->handle, &wbuf, 1, on_write);
 
+    client->cuda_operation_inflight = false;
+    client->cuda_sync_inflight = false;
     // Reset client state
     reset_client_read_state(client);
 }
@@ -223,31 +246,40 @@ int do_sync_stream(client_t *client) {
     if (client->cuda_operation_inflight) {
         client->work_req.data = client;
         client->state = CUDA_SYNC;
-        //from google: cudaSyncStream is thread-safe.
+        //cudaSyncStream is thread-safe.
         assert(loop != NULL);
+        client->cuda_sync_inflight = true;
         uv_queue_work(loop, &client->work_req, wait_for_cuda_completion, after_cuda_completion);
-    } else {
-        return FINISH;
+        //sync stream will handle return code by itself
+        return 0;
     }
+    return FINISH;
 }
 
 //return value of handle_request:
 //if ret is less than 0, it is an system error, outer code will close the connection
 //if ret is greater than 0, it is an application error or success
 int handle_request(client_t *client) {
-    printf("handle request\n");
-    int return_code;
+    printf("handle request %c\n", client->header.op);
+    auto start = std::chrono::high_resolution_clock::now();
+    int return_code = SYSTEM_ERROR;
 
-    // if (client->header.op == OP_W) {
-    //     return_code = do_write_kvcache(client);
-    // } else if (client->header.op == OP_R) {
-    //     return_code = do_read_kvcache(client);
-    // } else if (client->header.op == OP_SYNC) {
-    //     return do_sync_stream(client);
-    // }
-
-    return_code = FINISH;
+   if (client->header.op == OP_SYNC) {
+        return_code = do_sync_stream(client);
+        //do_sync_stream will handle return code by itself
+        if (return_code == 0) {
+            return 0;
+        }
+    }  else if (client->header.op == OP_W) {
+        return_code = do_write_kvcache(client);
+    } else if (client->header.op == OP_R) {
+        return_code = do_read_kvcache(client);
+    } else {
+        return_code = INVALID_REQ;
+    }
+    
     printf("return code: %d\n", return_code);
+
     //if application error or success, send the return code
     uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
     memcpy(client->send_buffer, &return_code, RETURN_CODE_SIZE);
@@ -257,6 +289,10 @@ int handle_request(client_t *client) {
     //success
     //keep connection alive
     reset_client_read_state(client);
+
+    auto end = std::chrono::high_resolution_clock::now(); // 结束时间
+    std::chrono::duration<double, std::milli> elapsed = end - start; // 计算运行时间
+    std::cout << "handle request runtime: " << elapsed.count() << " ms" << std::endl;
     return 0;
 }
 
@@ -272,6 +308,7 @@ void on_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
         uv_close((uv_handle_t*)stream, on_close);
         goto clean_up;
     }
+
     while (offset < nread) {
         switch (client->state) {
             
@@ -314,7 +351,7 @@ void on_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
                 offset += to_copy;
                 if (client->bytes_read == client->expected_bytes) {
                     printf("body read done, size %d\n", client->expected_bytes);
-                    print_vector(client->recv_buffer);
+                    print_vector(client->recv_buffer, 10);
                     if (!deserialize_local_meta(client->recv_buffer, client->expected_bytes, client->local_meta)){
                         printf("failed to deserialize local meta\n");
                         uv_close((uv_handle_t*)stream, on_close);

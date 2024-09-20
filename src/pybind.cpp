@@ -20,16 +20,6 @@ int rw_local_wrapper(connection_t *conn, char op, int block_size, const std::vec
 }
 
 
-// 定义一个接受 `const std::vector<std::tuple<std::string, unsigned long>> &` 参数的函数
-void process_blocks(char op, int block_size, const std::vector<std::tuple<std::string, unsigned long>> &blocks, unsigned long ptr) {
-    for (const auto& block : blocks) {
-        const std::string& name = std::get<0>(block);
-        unsigned long size = std::get<1>(block);
-        // 打印名称和大小
-        std::cout << "Block name: " << name << ", Size: " << size << std::endl;
-    }
-}
-
 PYBIND11_MODULE(_infinity, m) {
     py::class_<connection_t>(m, "Connection")
         .def(py::init<>())
@@ -38,7 +28,7 @@ PYBIND11_MODULE(_infinity, m) {
     m.def("close_connection", &close_connection, "Close a connection");
     m.def("rw_local", &rw_local_wrapper, "Read/Write cpu memory from GPU device");
     m.def("register_server", &register_server, "register the server");
-    m.def("process_blocks", &process_blocks, "A function that processes blocks");
+    m.def("sync_local", &sync_local, "sync the cuda stream");
 }
 
 

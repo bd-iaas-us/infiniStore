@@ -78,7 +78,6 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, in
     memset(&ipc_handle, 0, sizeof(cudaIpcMemHandle_t));
      
     CHECK_CUDA(cudaIpcGetMemHandle(&ipc_handle, ptr));
-    //print_ipc_handle(ipc_handle);
 
     local_meta_t meta = {
         .ipc_handle = ipc_handle,
@@ -103,8 +102,6 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, in
         fprintf(stderr, "Failed to send header\n");
         return -1;
     }
-
-    print_vector((void*)serialized_data.data());
     // Send body
     if (send_exact(conn->sock, serialized_data.data(), serialized_data.size()) < 0) {
         fprintf(stderr, "Failed to send body\n");
@@ -117,7 +114,6 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, in
         return -1;
     }
 
-    printf("return code: %d\n", return_code);
     if (return_code != FINISH && return_code != TASK_ACCEPTED) {
         return -1;
     }

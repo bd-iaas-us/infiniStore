@@ -10,6 +10,8 @@
 #include <time.h>
 #include <math.h>
 #include "libinfinity.h"
+#include <vector>
+
 
 void compare_floats(const float* h_data, const float* h_data2, size_t size, float epsilon) {
     for (size_t i = 0; i < size; i++) {
@@ -27,6 +29,11 @@ int main() {
     float *h_data;
     float *h_data2;
     int ret;
+    std::vector<block_t> blocks = {{"test", 0}};
+    std::chrono::high_resolution_clock::time_point start;
+    std::chrono::high_resolution_clock::time_point end;
+    std::chrono::duration<double, std::milli> elapsed;
+
     // allocate cuda memory
     CHECK_CUDA(cudaMalloc(&d_ptr, size));
 
@@ -44,11 +51,12 @@ int main() {
         goto out;
     }
     
-    ret = rw_local(&conn, OP_W, "test", 4,  d_ptr, 0, size);
+    ret = rw_local(&conn, OP_W, blocks, size, d_ptr);
     if (ret < 0) {
         printf("Failed to write local memory %d\n", ret);
         goto out;
     }
+
     ret = sync_local(&conn);
     if (ret < 0) {
         printf("Failed to sync local memory\n");
@@ -63,7 +71,8 @@ int main() {
     printf("out:print address of d_ptr:  %p\n", d_ptr);
     printf("out:print address of d_ptr2: %p\n", d_ptr2);
 
-    ret = rw_local(&conn, OP_R, "test", 4, d_ptr2, 0, size);
+    ret = rw_local(&conn, OP_R, blocks, size, d_ptr2);
+    printf("read local memory runtime: %f ms\n", elapsed.count());
     if (ret < 0) {
         goto out;
         return -1;
@@ -85,11 +94,9 @@ int main() {
 out:
     if (h_data2 != NULL) {
         free(h_data2);
-        h_data2 = NULL;
     }
     if (h_data != NULL) {
         free(h_data);
-        h_data = NULL;
     }
     if (d_ptr != NULL) {
         CHECK_CUDA(cudaFree(d_ptr));
@@ -97,7 +104,6 @@ out:
     if (d_ptr2 != NULL) {
         CHECK_CUDA(cudaFree(d_ptr2));
     }
-
     printf("read/write local cpu memory success\n");
     close_connection(&conn);
 }

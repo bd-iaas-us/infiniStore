@@ -1,1 +1,0 @@
-PYTORCH_NO_CUDA_MEMORY_CACHING=1 python bug.py

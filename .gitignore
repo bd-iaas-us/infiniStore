@@ -8,3 +8,4 @@ _infinity.*.so
 infinity_server
 __pycache__
 infinity.egg-info
+test_run

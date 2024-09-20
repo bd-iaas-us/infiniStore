@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #include <errno.h>
 #include <stdio.h>
+#include <iostream>
 
 
 
@@ -55,13 +56,20 @@ void compare_ipc_handle(cudaIpcMemHandle_t ipc_handle1, cudaIpcMemHandle_t ipc_h
 
 }
 
-//print the vector, for debug
-void print_vector(void * ptr) {
-    printf("vector content:\n");
-    float * p = (float *)ptr;
-    for (int i = 0; i < 10; i++) {
-        printf("%f ", p[i]);
+
+template <typename T>
+void print_vector(T* ptr, size_t size) {
+    std::cout << "vector content:\n";
+    for (size_t i = 0; i < size; ++i) {
+        std::cout << ptr[i] << " ";
     }
-    printf("\n");
+    std::cout << std::endl;
 }
+
+template void print_vector<float>(float* ptr, size_t size);
+template void print_vector<double>(double* ptr, size_t size);
+template void print_vector<int>(int* ptr, size_t size);
+template void print_vector<char>(char* ptr, size_t size);
+
+
 
