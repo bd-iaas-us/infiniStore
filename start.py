@@ -17,7 +17,7 @@ async def status():
 if __name__ == "__main__":
     loop = uvloop.new_event_loop()
     asyncio.set_event_loop(loop)
-    infinity.lib.register_server(loop)
+    infinity.register_server(loop)
     config = uvicorn.Config(
     app,
     host="0.0.0.0",
