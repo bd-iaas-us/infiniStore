@@ -19,16 +19,16 @@ utils.o : utils.c utils.h
 libinfinity.o: libinfinity.cpp protocol.h utils.h libinfinity.h
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -fPIC -c $< -o $@ $(LDFLAGS) $(LIBS)
 
-infinity_server.o: infinity.c
+infinity_server.o: infinity.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -fPIC -c $^ -o $@ $(LDFLAGS) $(LIBS)
 
 protocol.o: protocol.cpp protocol.h
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -fPIC -c $< -o $@ $(LDFLAGS) $(LIBS)
 
-test_client: test_client.c utils.o libinfinity.o
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) $(LIBS)
+# test_client: test_client.c utils.o libinfinity.o
+# 	$(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) $(LIBS)
 
-$(PYBIND_TARGET): pybind.cc libinfinity.o utils.o infinity_server.o protocol.o
+$(PYBIND_TARGET): pybind.cpp libinfinity.o utils.o protocol.o infinity_server.o
 	$(CXX) $(CXXFLAGS) $(INCLUDES) --shared -fPIC $(PYBIND11_INCLUDES) $^\
         -o $(PYBIND_TARGET) $(LDFLAGS) $(LIBS)
 	cp $(PYBIND_TARGET) ../infinity/
