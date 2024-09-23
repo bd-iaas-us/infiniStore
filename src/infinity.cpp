@@ -19,6 +19,7 @@
 #include <uv.h>
 #include <chrono>
 #include <sys/param.h>
+#include "log.h"
 
 
 uv_loop_t *loop;
@@ -415,6 +416,8 @@ void on_new_connection(uv_stream_t* server, int status) {
 }
 
 int register_server(unsigned long loop_ptr) {
+
+    INFO("register server...");
     loop = (uv_loop_t *)loop_ptr;
     assert(loop != NULL);
     uv_tcp_init(loop, &server);

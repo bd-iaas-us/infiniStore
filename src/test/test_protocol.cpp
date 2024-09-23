@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "protocol.h"
+#include "../protocol.h"
 #include <cstring>
 
 class SerializationTest : public ::testing::Test {

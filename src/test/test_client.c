@@ -4,12 +4,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include "protocol.h"
-#include "utils.h"
+#include "../protocol.h"
+#include "../utils.h"
 #include <assert.h>
 #include <time.h>
 #include <math.h>
-#include "libinfinity.h"
+#include "../libinfinity.h"
 #include <vector>
 #include <chrono>
 
