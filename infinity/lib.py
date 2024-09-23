@@ -42,41 +42,41 @@ class InfinityConnection:
             raise Exception("Failed to initialize connection")
         self.connected = True
 
-    def _verify(self, kv_cache : torch.Tensor, key : str, offset : int, size : int):
+    def _verify(self, kv_cache : torch.Tensor):
         if self.connected is False:
             raise Exception("Connection is not established")
         if kv_cache.device.type != "cuda":
             raise Exception("Tensor must be on CUDA device")
         if kv_cache.is_contiguous() is False:
             raise Exception("Tensor must be contiguous")
-        if offset < 0:
-            raise Exception("Offset must be positive")
-        if kv_cache.numel() < offset + size:
-            raise Exception("Offset + size is out of bound")
     
     #size is the element size
     #offset is the offset of the element
     def write_kvcache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], block_size: int):
+        self._verify(kvcache)
         ptr = kvcache.data_ptr()
         element_size = kvcache.element_size()
         #each offset should multiply by the element size
         for i in range(len(blocks)):
             key, offset = blocks[i]
             blocks[i] = (key, offset * element_size)
-        ret = _infinity.rw_local(self.conn, self.OP_W, block_size * element_size, blocks, ptr)
+        device_id = kvcache.device.index
+        ret = _infinity.rw_local(self.conn, self.OP_W, block_size * element_size, blocks, ptr, device_id)
         if ret < 0:
             raise Exception(f"Failed to write to infinity, ret = {ret}")
         return
     
     def read_kvcache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], block_size: int):
         #TODO: self._verify(kvcache, key, offset, size)
+        self._verify(kvcache)
         ptr = kvcache.data_ptr()
         element_size = kvcache.element_size()
         #each offset should multiply by the element size
         for i in range(len(blocks)):
             key, offset = blocks[i]
             blocks[i] = (key, offset * element_size)
-        ret = _infinity.rw_local(self.conn, self.OP_R, block_size * element_size, blocks, ptr)
+        device_id = kvcache.device.index
+        ret = _infinity.rw_local(self.conn, self.OP_R, block_size * element_size, blocks, ptr, device_id)
         if ret < 0:
             raise Exception(f"Failed to read to infinity, ret = {ret}")
         return

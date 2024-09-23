@@ -18,6 +18,7 @@
 #include <iostream>
 #include <uv.h>
 #include <chrono>
+#include <sys/param.h>
 
 
 uv_loop_t *loop;
@@ -54,6 +55,7 @@ struct Client {
     char send_buffer[RETURN_CODE_SIZE]; //preallocated buffer for sending return code
 
     cudaStream_t cuda_stream;
+    int device_id;
     bool cuda_operation_inflight;
     //Use this flag to avoid multiple threads waiting for the same stream
     bool cuda_sync_inflight;
@@ -132,6 +134,11 @@ int do_read_kvcache(client_t *client) {
     void * d_ptr;
 
     assert(header != NULL);
+
+    //TODO: check device_id
+    client->device_id = client->local_meta.device_id;
+    cudaSetDevice(client->device_id);
+
     //create cuda stream if not exist
     if (!client->cuda_operation_inflight) {
         cudaStream_t cuda_stream;
@@ -139,6 +146,7 @@ int do_read_kvcache(client_t *client) {
         client->cuda_stream = cuda_stream;
     }
 
+    //TODO: check device_id
     CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, meta->ipc_handle, cudaIpcMemLazyEnablePeerAccess));
 
 
@@ -171,6 +179,9 @@ int do_write_kvcache(client_t *client) {
     assert(meta != NULL);
     // allocate host memory
     void* d_ptr;
+
+    client->device_id = client->local_meta.device_id;
+    cudaSetDevice(client->device_id);
 
     CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, meta->ipc_handle, cudaIpcMemLazyEnablePeerAccess));
     
@@ -212,6 +223,8 @@ int do_write_kvcache(client_t *client) {
 void wait_for_cuda_completion(uv_work_t *req) {
     client_t *client = (client_t *)req->data;
     // Wait for the CUDA stream to complete
+    // Sets device as the current device for the calling host thread
+    cudaSetDevice(client->device_id);
     CHECK_CUDA(cudaStreamSynchronize(client->cuda_stream));
 }
 

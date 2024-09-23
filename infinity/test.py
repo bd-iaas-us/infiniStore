@@ -8,7 +8,7 @@ conn.connect()
 
 src = [i for i in range(1024)]
 with DisableTorchCaching():
-    src_tensor = torch.tensor(src, device="cuda", dtype=torch.float32)
+    src_tensor = torch.tensor(src, device="cuda:0", dtype=torch.float32)
 
 #write 16 elements
 
@@ -20,15 +20,16 @@ conn.sync_local()
 
 
 with DisableTorchCaching():
-    dst_tensor = torch.zeros(1024, device="cuda", dtype=torch.float32)
+    dst_tensor = torch.zeros(1024, device="cuda:1", dtype=torch.float32)
 
 conn.read_kvcache(dst_tensor, [("key1", 0), ("key2", 32)], 16)
 conn.sync_local()
 
 
+#move dst_tensor to the device of src_tensor
 
-assert torch.equal(src_tensor[0:16], dst_tensor[0:16])
-assert torch.equal(src_tensor[32:48], dst_tensor[32:48])
+assert torch.equal(src_tensor[0:16].cpu(), dst_tensor[0:16].cpu())
+assert torch.equal(src_tensor[32:48].cpu(), dst_tensor[32:48].cpu())
 
 
 # big tensor test

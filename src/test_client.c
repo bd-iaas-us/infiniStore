@@ -11,6 +11,8 @@
 #include <math.h>
 #include "libinfinity.h"
 #include <vector>
+#include <chrono>
+
 
 
 void compare_floats(const float* h_data, const float* h_data2, size_t size, float epsilon) {
@@ -34,6 +36,7 @@ int main() {
     std::chrono::high_resolution_clock::time_point end;
     std::chrono::duration<double, std::milli> elapsed;
 
+    cudaSetDevice(0);
     // allocate cuda memory
     CHECK_CUDA(cudaMalloc(&d_ptr, size));
 
@@ -51,7 +54,7 @@ int main() {
         goto out;
     }
     
-    ret = rw_local(&conn, OP_W, blocks, size, d_ptr);
+    ret = rw_local(&conn, OP_W, blocks, size, d_ptr, 0);
     if (ret < 0) {
         printf("Failed to write local memory %d\n", ret);
         goto out;
@@ -69,7 +72,7 @@ int main() {
     printf("out:print address of d_ptr:  %p\n", d_ptr);
     printf("out:print address of d_ptr2: %p\n", d_ptr2);
 
-    ret = rw_local(&conn, OP_R, blocks, size, d_ptr2);
+    ret = rw_local(&conn, OP_R, blocks, size, d_ptr2, 0);
     printf("read local memory runtime: %f ms\n", elapsed.count());
     if (ret < 0) {
         goto out;

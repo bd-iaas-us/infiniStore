@@ -10,13 +10,13 @@ namespace py = pybind11;
 extern int register_server(unsigned int loop_ptr);
 
 int rw_local_wrapper(connection_t *conn, char op, int block_size, const std::vector<std::tuple<std::string, unsigned long>> &blocks, \
-            unsigned long ptr) {
+            unsigned long ptr, int device_id) {
 
     std::vector<block_t> c_blocks;
     for (const auto& block : blocks) {
             c_blocks.push_back(block_t{std::get<0>(block), std::get<1>(block)});
     }
-    return rw_local(conn, op, c_blocks, block_size, (void*)ptr);
+    return rw_local(conn, op, c_blocks, block_size, (void*)ptr, device_id);
 }
 
 

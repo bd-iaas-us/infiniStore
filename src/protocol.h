@@ -85,8 +85,9 @@ struct convert<cudaIpcMemHandle_t> {
 typedef struct {
     cudaIpcMemHandle_t ipc_handle;
     int block_size;
+    int device_id;
     std::vector<block_t> blocks;
-    MSGPACK_DEFINE(ipc_handle, block_size, blocks)
+    MSGPACK_DEFINE(ipc_handle, block_size, device_id, blocks)
 
 } local_meta_t;
 

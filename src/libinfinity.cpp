@@ -70,9 +70,10 @@ int sync_local(connection_t *conn) {
 }
 
 
-int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, int block_size, void *ptr) {
+int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, int block_size, void *ptr, int device_id) {
     assert(conn != NULL);
     assert(ptr != NULL);
+    assert(device_id >= 0);
 
     cudaIpcMemHandle_t ipc_handle;
     memset(&ipc_handle, 0, sizeof(cudaIpcMemHandle_t));
@@ -82,6 +83,7 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, in
     local_meta_t meta = {
         .ipc_handle = ipc_handle,
         .block_size = block_size,
+        .device_id = device_id,
         .blocks = blocks,
     };
 
