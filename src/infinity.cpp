@@ -198,7 +198,9 @@ int do_write_kvcache(client_t *client) {
     //loop through the blocks
     for (auto &block : meta->blocks) {
         //pull data from local device to CPU host
-        void * h_dst = malloc(meta->block_size);
+        void * h_dst;
+        CHECK_CUDA(cudaHostAlloc((void**)&h_dst, meta->block_size, cudaHostAllocPortable));
+
         if (h_dst == NULL) {
             perror("Failed to allocat host memroy");
             CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
@@ -226,6 +228,7 @@ void wait_for_cuda_completion(uv_work_t *req) {
     // Sets device as the current device for the calling host thread
     cudaSetDevice(client->device_id);
     CHECK_CUDA(cudaStreamSynchronize(client->cuda_stream));
+    printf("sync on stream %d done\n", client->cuda_stream);
 }
 
 void after_cuda_completion(uv_work_t *req, int status) {
