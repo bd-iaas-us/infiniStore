@@ -5,13 +5,13 @@ CUDA_FLAGS = -arch=sm_75
 
 INCLUDES = -I/usr/local/cuda/include
 LDFLAGS = -L/usr/local/cuda/lib64
-LIBS = -lcudart -luv
+LIBS = -lcudart -luv -pthread -lfmt
 PYBIND11_INCLUDES = $(shell python3 -m pybind11 --includes)
 PYTHON_EXTENSION_SUFFIX = $(shell python3-config --extension-suffix)
 
 PYBIND_TARGET= _infinity$(PYTHON_EXTENSION_SUFFIX)
 
-all: infinity_server.o $(PYBIND_TARGET)
+all: infinity_server $(PYBIND_TARGET)
 
 utils.o : utils.cpp utils.h
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -fPIC -c $< -o $@ $(LDFLAGS) $(LIBS)
