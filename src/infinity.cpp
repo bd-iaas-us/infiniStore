@@ -27,6 +27,10 @@ uv_tcp_t server;
 
 std::map<std::string, void*> kv_map;
 
+int get_kvmap_len() {
+    return kv_map.size();
+}
+
 void print_header(header_t *header) {
     printf("op: %c\n", header->op);
     if (header->op == OP_SYNC) {

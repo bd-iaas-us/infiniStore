@@ -13,6 +13,9 @@ app = FastAPI()
 async def status():
     return {"Hello": "World"}
 
+@app.get("/kvmapSize")
+async def read_status():
+    return infinity._infinity.get_kvmap_len()
 
 if __name__ == "__main__":
     loop = uvloop.new_event_loop()

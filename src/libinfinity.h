@@ -19,4 +19,5 @@ void close_connection(connection_t *conn);
 //async rw local cpu memory, even rw_local returns, it is not guaranteed that the operation is completed until sync_local is recved.
 int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, int block_size, void *ptr, int device_id);
 int sync_local(connection_t *conn);
+int get_kvmap_len();
 #endif // LIBINFINITY_H
