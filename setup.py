@@ -28,6 +28,7 @@ setup(
         'uvloop',
         'fastapi',
         'pybind11',
+        'uvicorn'
     ],
     description="A kvcache memory pool",
     long_description=open('README.md').read(),

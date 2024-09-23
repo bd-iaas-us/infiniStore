@@ -33,6 +33,9 @@ $(PYBIND_TARGET): pybind.cpp libinfinity.o utils.o protocol.o infinity_server.o
         -o $(PYBIND_TARGET) $(LDFLAGS) $(LIBS)
 	cp $(PYBIND_TARGET) ../infinity/
 	
+#for debug
+infinity_server: infinity.cpp utils.o protocol.o
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) $(LIBS)
 test_run: test_protocol.cpp protocol.o
 	$(CXX) $(INCLUDES) -I/usr/local/include/gtest -std=c++11 -pthread $^ -o test_run -L/usr/local/lib -lgtest -lgtest_main
 
