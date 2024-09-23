@@ -61,7 +61,7 @@ class InfinityConnection:
             key, offset = blocks[i]
             blocks[i] = (key, offset * element_size)
         device_id = kvcache.device.index
-        ret = _infinity.rw_local(self.conn, self.OP_W, block_size * element_size, blocks, ptr, device_id)
+        ret = _infinity.rw_local(self.conn, self.OP_W, blocks, block_size * element_size, ptr, device_id)
         if ret < 0:
             raise Exception(f"Failed to write to infinity, ret = {ret}")
         return
@@ -76,7 +76,7 @@ class InfinityConnection:
             key, offset = blocks[i]
             blocks[i] = (key, offset * element_size)
         device_id = kvcache.device.index
-        ret = _infinity.rw_local(self.conn, self.OP_R, block_size * element_size, blocks, ptr, device_id)
+        ret = _infinity.rw_local(self.conn, self.OP_R, blocks, block_size * element_size, ptr, device_id)
         if ret < 0:
             raise Exception(f"Failed to read to infinity, ret = {ret}")
         return
