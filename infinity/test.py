@@ -20,11 +20,10 @@ conn.sync_local()
 
 
 with DisableTorchCaching():
-    dst_tensor = torch.zeros(1024, device="cuda:1", dtype=torch.float32)
+    dst_tensor = torch.zeros(1024, device="cuda:2", dtype=torch.float32)
 
 conn.read_kvcache(dst_tensor, [("key1", 0), ("key2", 32)], 16)
 conn.sync_local()
-
 
 #move dst_tensor to the device of src_tensor
 
