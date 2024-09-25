@@ -28,5 +28,5 @@ infinity_server: infinity.o utils.o protocol.o ibv_helper.o
 
 .PHONY: clean test
 clean:
-	rm -f infinity_server *.so *.o
+	rm -f infinity_server *.so *.o *.d
 	make -C test clean

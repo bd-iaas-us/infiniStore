@@ -207,8 +207,18 @@ int setup_rdma(connection_t *conn) {
 
     //send data.
     conn->rdma_buffer_size = 1024;
-    conn->rdma_buffer = (char*)malloc(conn->rdma_buffer_size);
-    memcpy(conn->rdma_buffer, "Hello RDMA!", 12);
+    // conn->rdma_buffer = (char*)malloc(conn->rdma_buffer_size);
+    
+    // conn->rdma_buffer = 
+    // memcpy(conn->rdma_buffer, "Hello RDMA!", 12);
+
+    cudaError_t cuda_err = cudaMalloc((void**)&conn->rdma_buffer, conn->rdma_buffer_size);
+    if (cuda_err != cudaSuccess) {
+        printf("Failed to allocate CUDA memory %s\n", cudaGetErrorString(cuda_err));
+        return false;
+    }
+    char * s = "Hello RDMA! from cuda";
+    cudaMemcpy(conn->rdma_buffer, s, strlen(s) + 1 , cudaMemcpyHostToDevice);
     perform_rdma_write(conn);
 
     return 0;
