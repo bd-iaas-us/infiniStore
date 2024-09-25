@@ -14,7 +14,205 @@
 #include <math.h>
 #include "libinfinity.h"
 #include <vector>
+#include "ibv_helper.h"
 
+
+int modify_qp_to_init(struct ibv_qp *qp);
+int modify_qp_to_rts(connection_t *conn);
+int modify_qp_to_rtr(connection_t *conn);
+int exchange_conn_info(connection_t *conn);
+
+int init_rdma_resources(connection_t *conn) {
+    // Get list of RDMA devices
+    struct ibv_device **dev_list;
+    int num_devices;
+
+    dev_list = ibv_get_device_list(&num_devices);
+    if (!dev_list) {
+        perror("Failed to get RDMA devices list");
+        return -1;
+    }
+
+    // Open the first available device
+    conn->ib_ctx = ibv_open_device(dev_list[0]);
+    if (!conn->ib_ctx) {
+        perror("Failed to open RDMA device");
+        return -1;
+    }
+    ibv_free_device_list(dev_list);
+
+    int gidx = ibv_find_sgid_type(conn->ib_ctx, 1, IBV_GID_TYPE_ROCE_V2, AF_INET);
+    if (gidx < 0) {
+        perror("Failed to find GID");
+        return -1;
+    }
+    conn->gidx = gidx;
+
+
+    union ibv_gid gid;
+    //get gid
+    if (ibv_query_gid(conn->ib_ctx, 1, gidx, &gid)) {
+        perror("Failed to get GID");
+        return -1;
+    }
+    
+    // Allocate Protection Domain
+    conn->pd = ibv_alloc_pd(conn->ib_ctx);
+    if (!conn->pd) {
+        perror("Failed to allocate PD");
+        return -1;
+    }
+
+    // Create Completion Queue
+    conn->cq = ibv_create_cq(conn->ib_ctx, 10, NULL, NULL, 0);
+    if (!conn->cq) {
+        perror("Failed to create CQ");
+        return -1;
+    }
+
+    // Create Queue Pair
+    struct ibv_qp_init_attr qp_init_attr = {};
+    qp_init_attr.send_cq = conn->cq;
+    qp_init_attr.recv_cq = conn->cq;
+    qp_init_attr.qp_type = IBV_QPT_RC; // Reliable Connection
+    qp_init_attr.cap.max_send_wr = 10;
+    qp_init_attr.cap.max_recv_wr = 10;
+    qp_init_attr.cap.max_send_sge = 1;
+    qp_init_attr.cap.max_recv_sge = 1;
+
+    conn->qp = ibv_create_qp(conn->pd, &qp_init_attr);
+    if (!conn->qp) {
+        perror("Failed to create QP");
+        return -1;
+    }
+
+    // Modify QP to INIT state
+    if (modify_qp_to_init(conn->qp)) {
+        fprintf(stderr, "Failed to modify QP to INIT\n");
+        return -1;
+    }
+
+    // Get local connection information
+    struct ibv_port_attr port_attr;
+    if (ibv_query_port(conn->ib_ctx, 1, &port_attr)) {
+        perror("Failed to query port");
+        return -1;
+    }
+
+    conn->local_info.qpn = conn->qp->qp_num;
+    conn->local_info.psn = lrand48() & 0xffffff;
+    conn->local_info.gid = gid;
+    printf("gid index: %d\n", gidx);
+    print_rdma_conn_info(&conn->local_info, false);
+    return 0;
+}
+
+
+int modify_qp_to_init(struct ibv_qp *qp) {
+    struct ibv_qp_attr attr = {};
+    attr.qp_state = IBV_QPS_INIT;
+    attr.port_num = 1;
+    attr.pkey_index = 0;
+    attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE;
+
+    int flags = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
+
+    int ret = ibv_modify_qp(qp, &attr, flags);
+    if (ret) {
+        perror("Failed to modify QP to INIT");
+        return ret;
+    }
+    return 0;
+}
+
+
+
+int perform_rdma_write(connection_t *conn) {
+    // Register memory
+    // conn->rdma_buffer = local_buffer;
+    // conn->rdma_buffer_size = size;
+    conn->mr = ibv_reg_mr(conn->pd, conn->rdma_buffer, conn->rdma_buffer_size,
+                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+    if (!conn->mr) {
+        perror("Failed to register MR");
+        return -1;
+    }
+
+    // Prepare RDMA write operation
+    struct ibv_sge sge = {};
+    sge.addr = (uintptr_t)conn->rdma_buffer;
+    sge.length = conn->rdma_buffer_size;
+    sge.lkey = conn->mr->lkey;
+
+    struct ibv_send_wr wr = {};
+    wr.wr_id = (uintptr_t)conn;
+    wr.opcode = IBV_WR_RDMA_WRITE;
+    wr.sg_list = &sge;
+    wr.num_sge = 1;
+    wr.send_flags = IBV_SEND_SIGNALED;
+    wr.wr.rdma.remote_addr = conn->remote_info.remote_addr; // Obtain from server
+    wr.wr.rdma.rkey = conn->remote_info.rkey;        // Obtain from server
+
+    struct ibv_send_wr *bad_wr = NULL;
+    int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
+    if (ret) {
+        perror("Failed to post RDMA write");
+        return -1;
+    }
+
+    // Poll for completion
+    struct ibv_wc wc;
+    int num_comp;
+    do {
+        num_comp = ibv_poll_cq(conn->cq, 1, &wc);
+    } while (num_comp == 0);
+
+    if (num_comp < 0) {
+        perror("Failed to poll CQ");
+        return -1;
+    }
+
+    if (wc.status != IBV_WC_SUCCESS) {
+        fprintf(stderr, "RDMA write failed: %s\n", ibv_wc_status_str(wc.status));
+        return -1;
+    }
+    printf("RDMA write completed successfully\n");
+    // RDMA write successful
+    return 0;
+}
+
+
+int setup_rdma(connection_t *conn) {
+    if(init_rdma_resources(conn) < 0) {
+        fprintf(stderr, "Failed to initialize RDMA resources\n");
+        return -1;
+    }
+
+    // Exchange RDMA connection information with the server
+    if (exchange_conn_info(conn)) {
+        fprintf(stderr, "Failed to exchange connection information\n");
+        return -1;
+    }
+
+    // Modify QP to RTR state
+    if (modify_qp_to_rtr(conn)) {
+        fprintf(stderr, "Failed to modify QP to RTR\n");
+        return -1;
+    }
+
+    if (modify_qp_to_rts(conn)) {
+        fprintf(stderr, "Failed to modify QP to RTS\n");
+        return -1;
+    }
+
+    //send data.
+    conn->rdma_buffer_size = 1024;
+    conn->rdma_buffer = (char*)malloc(conn->rdma_buffer_size);
+    memcpy(conn->rdma_buffer, "Hello RDMA!", 12);
+    perform_rdma_write(conn);
+
+    return 0;
+}
 
 int init_connection(connection_t *conn)   {
     assert(conn != NULL);
@@ -45,11 +243,85 @@ int init_connection(connection_t *conn)   {
     return 0;
 }
 
+
+
+int modify_qp_to_rtr(connection_t *conn) {
+    struct ibv_qp *qp = conn->qp;
+    rdma_conn_info_t *remote_info = &conn->remote_info;
+
+    struct ibv_qp_attr attr = {};
+    attr.qp_state = IBV_QPS_RTR;
+    attr.path_mtu = IBV_MTU_1024;
+    attr.dest_qp_num = remote_info->qpn;
+    attr.rq_psn = remote_info->psn;
+    attr.max_dest_rd_atomic = 1;
+    attr.min_rnr_timer = 12;
+    attr.ah_attr.dlid = 0;
+    attr.ah_attr.sl = 0;
+    attr.ah_attr.src_path_bits = 0;
+    attr.ah_attr.port_num = 1;
+
+    // RoCE v2
+    attr.ah_attr.is_global = 1;
+    attr.ah_attr.grh.dgid = remote_info->gid;
+    attr.ah_attr.grh.sgid_index = conn->gidx; //local gid
+    attr.ah_attr.grh.hop_limit = 1;
+
+
+    int flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU |
+                IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
+                IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
+
+    int ret = ibv_modify_qp(qp, &attr, flags);
+    if (ret) {
+        perror("Failed to modify QP to RTR");
+        return ret;
+    }
+    return 0;
+}
+
+int modify_qp_to_rts(connection_t *conn) {
+    struct ibv_qp *qp = conn->qp;
+    struct ibv_qp_attr attr = {};
+    attr.qp_state = IBV_QPS_RTS;
+    attr.timeout = 14;
+    attr.retry_cnt = 7;
+    attr.rnr_retry = 7;
+    attr.sq_psn = conn->local_info.psn; // Use 0 or match with local PSN
+    attr.max_rd_atomic = 1;
+
+    int flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
+                IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
+
+    int ret = ibv_modify_qp(qp, &attr, flags);
+    if (ret) {
+        perror("Failed to modify QP to RTS");
+        return ret;
+    }
+    return 0;
+}
+
+int exchange_conn_info(connection_t *conn) {
+    header_t header = {
+        .magic = MAGIC,
+        .op = OP_RDMA_EXCHANGE,
+        .body_size = sizeof(rdma_conn_info_t),
+    };
+    send_exact(conn->sock, &header, FIXED_HEADER_SIZE);
+    send_exact(conn->sock, &conn->local_info, sizeof(rdma_conn_info_t));
+
+
+    recv(conn->sock, &conn->remote_info, sizeof(rdma_conn_info_t), MSG_WAITALL);
+    return 0;
+}
+
 void close_connection(connection_t *conn) {
     if (conn->sock > 0) {
         close(conn->sock);
     }
 }
+
+
 
 
 int sync_local(connection_t *conn) {
@@ -70,10 +342,9 @@ int sync_local(connection_t *conn) {
 }
 
 
-int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, int block_size, void *ptr, int device_id) {
+int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, int block_size, void *ptr) {
     assert(conn != NULL);
     assert(ptr != NULL);
-    assert(device_id >= 0);
 
     cudaIpcMemHandle_t ipc_handle;
     memset(&ipc_handle, 0, sizeof(cudaIpcMemHandle_t));
@@ -83,12 +354,11 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, in
     local_meta_t meta = {
         .ipc_handle = ipc_handle,
         .block_size = block_size,
-        .device_id = device_id,
         .blocks = blocks,
     };
 
     std::string serialized_data;
-    if (!serialize_local_meta(meta, serialized_data)) {
+    if (!serialize(meta, serialized_data)) {
         fprintf(stderr, "Failed to serialize local meta\n");
         return -1;
     }

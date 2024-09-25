@@ -7,6 +7,8 @@
 #include <vector>
 #include <string>
 #include <msgpack.hpp>
+#include <infiniband/verbs.h>
+
 
 /*
 
@@ -24,6 +26,7 @@ Error code:
 #define OP_R 'R'
 #define OP_W 'W'
 #define OP_SYNC 'S'
+#define OP_RDMA_EXCHANGE 'E'
 #define OP_SIZE 1
 
 //error code: int
@@ -78,6 +81,7 @@ struct convert<cudaIpcMemHandle_t> {
     }
 };
 
+
 } // namespace adaptor
 } // MSGPACK_API_VERSION_NAMESPACE(MSGPACK_DEFAULT_API_NS)
 } 
@@ -85,17 +89,46 @@ struct convert<cudaIpcMemHandle_t> {
 typedef struct {
     cudaIpcMemHandle_t ipc_handle;
     int block_size;
-    int device_id;
     std::vector<block_t> blocks;
-    MSGPACK_DEFINE(ipc_handle, block_size, device_id, blocks)
+    MSGPACK_DEFINE(ipc_handle, block_size, blocks)
 
 } local_meta_t;
 
 
-// Update function declarations
-bool serialize_local_meta(const local_meta_t& meta, std::string& out);
-bool deserialize_local_meta(const char* data, size_t size, local_meta_t& out);
+typedef struct rdma_conn_info_t {
+    uint32_t qpn;
+    uint32_t psn;
+    union ibv_gid gid;
+    //FIXME: server sends rkey and remote_addr to client
+    uint32_t rkey;
+    uintptr_t remote_addr;
+} rdma_conn_info_t;
 
+
+template <typename T>
+bool serialize(const T& data, std::string& out) {
+    try {
+        msgpack::sbuffer sbuf;
+        msgpack::pack(sbuf, data);
+        out.assign(sbuf.data(), sbuf.size());
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+template <typename T>
+bool deserialize(const char* data, size_t size, T& out) {
+    try {
+        msgpack::object_handle oh = msgpack::unpack(data, size);
+        oh.get().convert(out);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+template bool serialize<local_meta_t>(const local_meta_t& data, std::string& out);
+template bool deserialize<local_meta_t>(const char* data, size_t size, local_meta_t& out);
 
 #define FIXED_HEADER_SIZE sizeof(header_t)
 

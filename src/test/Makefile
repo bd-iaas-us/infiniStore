@@ -6,7 +6,7 @@ CUDA_FLAGS = -arch=sm_75
 
 INCLUDES = -I/usr/local/cuda/include
 LDFLAGS = -L/usr/local/cuda/lib64
-LIBS = -lcudart -luv
+LIBS = -lcudart -luv -libverbs
 
 all: test_run test_client
 protocol.o:
