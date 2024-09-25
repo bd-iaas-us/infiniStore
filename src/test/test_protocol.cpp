@@ -11,17 +11,25 @@ protected:
             {"block1_key", 12345},
             {"block2_key", 67890}
         };
+        ibv_gid gid;
+        gid.global.subnet_prefix = 0x123456789abcdef0;
+        gid.global.interface_id = 0x0fedcba987654321;
+        
+        conn_info.lid = 5678;
+        conn_info.psn = 30;
+        conn_info.gid = gid;
     }
 
     local_meta_t meta;
+    rdma_conn_info_t conn_info;
 };
 
 TEST_F(SerializationTest, SerializeAndDeserialize) {
     std::string serialized_data;
-    ASSERT_TRUE(serialize_local_meta(meta, serialized_data)) << "Failed to serialize";
+    ASSERT_TRUE(serialize(meta, serialized_data)) << "Failed to serialize";
 
     local_meta_t deserialized_meta;
-    ASSERT_TRUE(deserialize_local_meta(serialized_data.data(), serialized_data.size(), deserialized_meta)) << "Failed to deserialize";
+    ASSERT_TRUE(deserialize(serialized_data.data(), serialized_data.size(), deserialized_meta)) << "Failed to deserialize";
 
     EXPECT_EQ(deserialized_meta.block_size, meta.block_size);
     EXPECT_EQ(deserialized_meta.blocks.size(), meta.blocks.size());
@@ -31,13 +39,25 @@ TEST_F(SerializationTest, SerializeAndDeserialize) {
     }
 
     ASSERT_EQ(deserialized_meta.blocks[0].key, "block1_key");
+
+
+    ASSERT_TRUE(serialize(conn_info, serialized_data)) << "Failed to serialize";
+
+    rdma_conn_info_t deserialized_conn_info;
+    ASSERT_TRUE(deserialize(serialized_data.data(), serialized_data.size(), deserialized_conn_info)) << "Failed to deserialize";
+    EXPECT_EQ(deserialized_conn_info.lid, conn_info.lid);
+    EXPECT_EQ(deserialized_conn_info.psn, conn_info.psn);
+    EXPECT_EQ(deserialized_conn_info.gid.global.subnet_prefix, conn_info.gid.global.subnet_prefix);
+    EXPECT_EQ(deserialized_conn_info.gid.global.interface_id, conn_info.gid.global.interface_id);
+
+
 }
 
 TEST_F(SerializationTest, DeserializeInvalidData) {
     std::string invalid_data = "invalid data";
     local_meta_t deserialized_meta;
 
-    EXPECT_FALSE(deserialize_local_meta(invalid_data.data(), invalid_data.size(), deserialized_meta));
+    EXPECT_FALSE(deserialize(invalid_data.data(), invalid_data.size(), deserialized_meta));
 }
 
 int main(int argc, char **argv) {
