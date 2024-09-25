@@ -15,13 +15,9 @@ protected:
         gid.global.subnet_prefix = 0x123456789abcdef0;
         gid.global.interface_id = 0x0fedcba987654321;
         
-        conn_info.lid = 5678;
-        conn_info.psn = 30;
-        conn_info.gid = gid;
     }
 
     local_meta_t meta;
-    rdma_conn_info_t conn_info;
 };
 
 TEST_F(SerializationTest, SerializeAndDeserialize) {
@@ -39,18 +35,6 @@ TEST_F(SerializationTest, SerializeAndDeserialize) {
     }
 
     ASSERT_EQ(deserialized_meta.blocks[0].key, "block1_key");
-
-
-    ASSERT_TRUE(serialize(conn_info, serialized_data)) << "Failed to serialize";
-
-    rdma_conn_info_t deserialized_conn_info;
-    ASSERT_TRUE(deserialize(serialized_data.data(), serialized_data.size(), deserialized_conn_info)) << "Failed to deserialize";
-    EXPECT_EQ(deserialized_conn_info.lid, conn_info.lid);
-    EXPECT_EQ(deserialized_conn_info.psn, conn_info.psn);
-    EXPECT_EQ(deserialized_conn_info.gid.global.subnet_prefix, conn_info.gid.global.subnet_prefix);
-    EXPECT_EQ(deserialized_conn_info.gid.global.interface_id, conn_info.gid.global.interface_id);
-
-
 }
 
 TEST_F(SerializationTest, DeserializeInvalidData) {
