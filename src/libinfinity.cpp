@@ -127,11 +127,9 @@ int modify_qp_to_init(struct ibv_qp *qp) {
 
 
 
-int perform_rdma_write(connection_t *conn) {
-    // Register memory
-    // conn->rdma_buffer = local_buffer;
-    // conn->rdma_buffer_size = size;
-    conn->mr = ibv_reg_mr(conn->pd, conn->rdma_buffer, conn->rdma_buffer_size,
+int perform_rdma_write(connection_t *conn, char * src_buf, size_t src_size,
+                       uintptr_t dst_buf, size_t dst_size, uint32_t rkey) {
+    conn->mr = ibv_reg_mr(conn->pd, src_buf, src_size,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
     if (!conn->mr) {
         perror("Failed to register MR");
@@ -140,8 +138,8 @@ int perform_rdma_write(connection_t *conn) {
 
     // Prepare RDMA write operation
     struct ibv_sge sge = {};
-    sge.addr = (uintptr_t)conn->rdma_buffer;
-    sge.length = conn->rdma_buffer_size;
+    sge.addr = (uintptr_t)src_buf;
+    sge.length = src_size; 
     sge.lkey = conn->mr->lkey;
 
     struct ibv_send_wr wr = {};
@@ -150,8 +148,8 @@ int perform_rdma_write(connection_t *conn) {
     wr.sg_list = &sge;
     wr.num_sge = 1;
     wr.send_flags = IBV_SEND_SIGNALED;
-    wr.wr.rdma.remote_addr = conn->remote_info.remote_addr; // Obtain from server
-    wr.wr.rdma.rkey = conn->remote_info.rkey;        // Obtain from server
+    wr.wr.rdma.remote_addr = dst_buf; // Obtain from server
+    wr.wr.rdma.rkey = rkey;        // Obtain from server
 
     struct ibv_send_wr *bad_wr = NULL;
     int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
@@ -205,22 +203,8 @@ int setup_rdma(connection_t *conn) {
         return -1;
     }
 
-    //send data.
-    conn->rdma_buffer_size = 1024;
-    // conn->rdma_buffer = (char*)malloc(conn->rdma_buffer_size);
-    
-    // conn->rdma_buffer = 
-    // memcpy(conn->rdma_buffer, "Hello RDMA!", 12);
 
-    cudaError_t cuda_err = cudaMalloc((void**)&conn->rdma_buffer, conn->rdma_buffer_size);
-    if (cuda_err != cudaSuccess) {
-        printf("Failed to allocate CUDA memory %s\n", cudaGetErrorString(cuda_err));
-        return false;
-    }
-    char * s = "Hello RDMA! from cuda";
-    cudaMemcpy(conn->rdma_buffer, s, strlen(s) + 1 , cudaMemcpyHostToDevice);
-    perform_rdma_write(conn);
-
+    rw_remote(conn, OP_RDMA_WRITE, {"key1"}, 4096, NULL);
     return 0;
 }
 
@@ -351,6 +335,52 @@ int sync_local(connection_t *conn) {
     return 0;
 }
 
+//FIXME: implement this function
+int rw_remote(connection_t *conn, char op, const std::vector<std::string>keys, int block_size, void * ptr) {
+    assert(conn != NULL);
+
+    remote_meta_request request = {
+        .keys = keys,
+    };
+
+    std::string serialized_data;
+    if (!serialize(request, serialized_data)) {
+        fprintf(stderr, "Failed to serialize remote meta request\n");
+        return -1;
+    }
+
+    header_t header = {
+        .magic = MAGIC,
+        .op = OP_RDMA_WRITE,
+        .body_size = static_cast<unsigned int>(serialized_data.size()),
+    };
+
+    // Send header
+    if (send_exact(conn->sock, &header, FIXED_HEADER_SIZE) < 0) {
+        fprintf(stderr, "Failed to send header\n");
+        return -1;
+    }
+    // Send body
+    if (send_exact(conn->sock, serialized_data.data(), serialized_data.size()) < 0) {
+        fprintf(stderr, "Failed to send body\n");
+        return -1;
+    }
+
+    //recv remote_meta_response
+    remote_meta_response response;
+    std::string response_data;
+    int return_size;
+    recv(conn->sock, &return_size, sizeof(int), MSG_WAITALL);
+    recv(conn->sock, &response, return_size, MSG_WAITALL);
+    deserialize(response_data.data(), return_size, response);
+
+    for (auto &block : response.blocks) {
+        perform_rdma_write(conn, (char *)ptr, block_size, block.remote_addr, block_size, block.rkey);
+    }
+
+
+    return 0;
+}
 
 int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, int block_size, void *ptr) {
     assert(conn != NULL);
