@@ -58,7 +58,7 @@ struct Client {
     remote_meta_request remote_meta_req;
 
     //TODO: remove send_buffer
-    char send_buffer[RETURN_CODE_SIZE]; //preallocated buffer for sending return code
+    char *send_buffer;
 
     cudaStream_t cuda_stream;
     bool cuda_operation_inflight;
@@ -86,7 +86,6 @@ struct Client {
 };
 
 Client::~Client() {
-    printf("rdma buffer %s\n", rdma_buffer);
     if (handle) {
         free(handle);
         handle = NULL;
@@ -251,6 +250,7 @@ void after_cuda_completion(uv_work_t *req, int status) {
     // Send the response to the client
     uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
     int ret = FINISH;
+    client->send_buffer = (char*)realloc(client->send_buffer, RETURN_CODE_SIZE);
     memcpy(client->send_buffer, &ret, RETURN_CODE_SIZE);
     write_req->data = client;
     uv_buf_t wbuf = uv_buf_init(client->send_buffer, RETURN_CODE_SIZE);
@@ -449,8 +449,52 @@ int do_rdma_read(client_t *client) {
 int do_rdma_write(client_t *client) {
     INFO("do rdma write...");
     INFO("keys: {}", client->remote_meta_req.keys[0]);
+    void * h_dst = malloc(client->remote_meta_req.block_size);
+    int ret;
+    if (h_dst == NULL) {
+        perror("Failed to allocate host memory");
+        return SYSTEM_ERROR;
+    }
+    //save to the map
+    kv_map[client->remote_meta_req.keys[0]] = h_dst;
+    //
+
+    client->mr = ibv_reg_mr(client->pd, h_dst, client->remote_meta_req.block_size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+
+    if (!client->mr) {
+        perror("Failed to register MR");
+        return SYSTEM_ERROR;
+    }
+
+    //send the response
+    uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
     
-    return FINISH;
+    
+    remote_meta_response resp;
+    //FIXME: only one h_dst is sent
+    INFO("create buffer rkey: {}, remote_addr: {}", client->mr->rkey, (uintptr_t)h_dst);
+    resp.blocks.push_back({
+        .rkey = client->mr->rkey,
+        .remote_addr = (uintptr_t)h_dst
+    });
+
+    std::string out;
+    if (!serialize(resp, out)) {
+        perror("Failed to serialize response");
+        return SYSTEM_ERROR;
+    }
+    client->send_buffer = (char*) realloc(client->send_buffer, out.size() + RETURN_CODE_SIZE);
+    //FIXME: too many memcpy
+    int size = out.size();
+    memcpy(client->send_buffer, &size, RETURN_CODE_SIZE);
+    memcpy(client->send_buffer + RETURN_CODE_SIZE, out.c_str(), out.size());
+    uv_buf_t wbuf = uv_buf_init(client->send_buffer, out.size() + RETURN_CODE_SIZE);
+    write_req->data = client;
+    uv_write(write_req, (uv_stream_t*)client->handle, &wbuf, 1, on_write);
+
+    INFO("send response: size:{}", size);
+    reset_client_read_state(client);
+    return 0;
 }
 
 //return value of handle_request:
@@ -496,6 +540,7 @@ int handle_request(client_t *client) {
 
     //if application error or success, send the return code
     uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
+    client->send_buffer = (char*)realloc(client->send_buffer, RETURN_CODE_SIZE);
     memcpy(client->send_buffer, &return_code, RETURN_CODE_SIZE);
     write_req->data = client;
     uv_buf_t wbuf = uv_buf_init(client->send_buffer, RETURN_CODE_SIZE);
@@ -599,6 +644,7 @@ void on_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
             case CUDA_SYNC: {
                 int ret = RETRY;
                 uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
+                client->send_buffer = (char*)realloc(client->send_buffer, RETURN_CODE_SIZE);
                 memcpy(client->send_buffer, &ret, RETURN_CODE_SIZE);
                 write_req->data = client;
                 uv_buf_t wbuf = uv_buf_init(client->send_buffer, RETURN_CODE_SIZE);
