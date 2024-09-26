@@ -55,6 +55,7 @@ struct Client {
 
     char * recv_buffer;
     local_meta_t local_meta;
+    remote_meta_request remote_meta_req;
 
     //TODO: remove send_buffer
     char send_buffer[RETURN_CODE_SIZE]; //preallocated buffer for sending return code
@@ -85,6 +86,7 @@ struct Client {
 };
 
 Client::~Client() {
+    printf("rdma buffer %s\n", rdma_buffer);
     if (handle) {
         free(handle);
         handle = NULL;
@@ -120,8 +122,7 @@ void reset_client_read_state(client_t *client) {
 void on_close(uv_handle_t* handle) {
     INFO("free client...");
     client_t *client = (client_t *) handle->data;
-    INFO("rdma buffer size: {}", client->rdma_buffer_size);
-    printf("rdma buffer %s\n", client->rdma_buffer);
+    
     delete client;
 }
 
@@ -360,24 +361,19 @@ int do_rdma_exchange(client_t *client) {
         print_rdma_conn_info(&client->local_info, false);
 
         // Allocate and register memory
-        client->rdma_buffer_size = BUFFER_SIZE; // Adjust the size as needed
-        client->rdma_buffer =(char*) malloc(client->rdma_buffer_size);
-        if (!client->rdma_buffer) {
-            perror("Failed to allocate RDMA buffer");
-            return SYSTEM_ERROR;
-        }
+        // client->rdma_buffer_size = BUFFER_SIZE; // Adjust the size as needed
+        // client->rdma_buffer =(char*) malloc(client->rdma_buffer_size);
+        // if (!client->rdma_buffer) {
+        //     perror("Failed to allocate RDMA buffer");
+        //     return SYSTEM_ERROR;
+        // }
 
-        client->mr = ibv_reg_mr(client->pd, client->rdma_buffer, client->rdma_buffer_size,
-                                IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-        if (!client->mr) {
-            perror("Failed to register MR");
-            return SYSTEM_ERROR;
-        }
-
-        //client will write data to rdma_buffer.
-        client->local_info.rkey = client->mr->rkey;
-        client->local_info.remote_addr = (uintptr_t)client->rdma_buffer;
-
+        // client->mr = ibv_reg_mr(client->pd, client->rdma_buffer, client->rdma_buffer_size,
+        //                         IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+        // if (!client->mr) {
+        //     perror("Failed to register MR");
+        //     return SYSTEM_ERROR;
+        // }
     }
 
     //Send server's RDMA connection info to client
@@ -456,6 +452,19 @@ int do_sync_stream(client_t *client) {
     return FINISH;
 }
 
+
+int do_rdma_read(client_t *client) {
+    INFO("do rdma read...");
+    return FINISH;
+}
+
+int do_rdma_write(client_t *client) {
+    INFO("do rdma write...");
+    INFO("keys: {}", client->remote_meta_req.keys[0]);
+    
+    return FINISH;
+}
+
 //return value of handle_request:
 //if ret is less than 0, it is an system error, outer code will close the connection
 //if ret is greater than 0, it is an application error or success
@@ -463,7 +472,19 @@ int handle_request(client_t *client) {
     auto start = std::chrono::high_resolution_clock::now();
     int return_code = SYSTEM_ERROR;
 
-   if (client->header.op == OP_RDMA_EXCHANGE) {
+   if (client->header.op == OP_RDMA_WRITE) {
+        return_code = do_rdma_write(client);
+        if (return_code == 0) {
+            return 0;
+        }
+   }
+   else if (client->header.op == OP_RDMA_READ) {
+        return_code = do_rdma_read(client);
+        if (return_code == 0) {
+            return 0;
+        }
+   }
+   else if (client->header.op == OP_RDMA_EXCHANGE) {
         return_code = do_rdma_exchange(client);
         if (return_code == 0) {
             return 0;
@@ -523,7 +544,8 @@ void on_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
                 offset += to_copy;
                 if (client->bytes_read == FIXED_HEADER_SIZE) {
                     print_header(&client->header);
-                    if (client->header.op == OP_R || client->header.op == OP_W || client->header.op == OP_RDMA_EXCHANGE) {
+                    if (client->header.op == OP_R || client->header.op == OP_W 
+                    || client->header.op == OP_RDMA_EXCHANGE || client->header.op == OP_RDMA_WRITE || client->header.op == OP_RDMA_READ) {
                         int ret = veryfy_header(&client->header);
                         if (ret != 0) {
                             ERROR("Invalid header");
@@ -571,6 +593,13 @@ void on_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
                             print_rdma_conn_info(&client->remote_info, true);
                             handle_request(client);
                             break;
+                        case OP_RDMA_WRITE:
+                            if (!deserialize(client->recv_buffer, client->expected_bytes, client->remote_meta_req)){
+                                printf("failed to deserialize remote meta\n");
+                                uv_close((uv_handle_t*)stream, on_close);
+                                goto clean_up;
+                            }
+                            handle_request(client);
                         default:
                             break;
                     }

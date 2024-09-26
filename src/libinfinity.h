@@ -25,11 +25,6 @@ typedef struct {
     struct ibv_mr *mr;
     int gidx; //gid index
 
-    //rdma buffer
-    void *rdma_buffer;
-    size_t rdma_buffer_size;
-
-
     rdma_conn_info_t local_info;
     rdma_conn_info_t remote_info;
 
@@ -42,5 +37,6 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, in
 int sync_local(connection_t *conn);
 int get_kvmap_len();
 int setup_rdma(connection_t *conn);
+int rw_remote(connection_t *conn, char op, const std::vector<std::string>keys, int block_size, void * ptr);
 
 #endif // LIBINFINITY_H

@@ -27,6 +27,8 @@ Error code:
 #define OP_W 'W'
 #define OP_SYNC 'S'
 #define OP_RDMA_EXCHANGE 'E'
+#define OP_RDMA_WRITE 'D'
+#define OP_RDMA_READ 'A'
 #define OP_SIZE 1
 
 //error code: int
@@ -95,13 +97,29 @@ typedef struct {
 } local_meta_t;
 
 
-typedef struct rdma_conn_info_t {
+typedef struct {
+    std::vector<std::string> keys;
+    MSGPACK_DEFINE(keys)
+} remote_meta_request; //rdma read/write request
+
+
+typedef struct {
+    uint32_t rkey;
+    uintptr_t remote_addr;
+    MSGPACK_DEFINE(rkey, remote_addr)
+} remote_block_t;
+
+typedef struct {
+  std::vector<remote_block_t> blocks;
+  MSGPACK_DEFINE(blocks)
+} remote_meta_response; //rdma read/write response
+
+
+//only RoCEv2 is supported for now.
+typedef struct __attribute__((packed)) rdma_conn_info_t {
     uint32_t qpn;
     uint32_t psn;
     union ibv_gid gid;
-    //FIXME: server sends rkey and remote_addr to client
-    uint32_t rkey;
-    uintptr_t remote_addr;
 } rdma_conn_info_t;
 
 
@@ -129,6 +147,8 @@ bool deserialize(const char* data, size_t size, T& out) {
 
 template bool serialize<local_meta_t>(const local_meta_t& data, std::string& out);
 template bool deserialize<local_meta_t>(const char* data, size_t size, local_meta_t& out);
+template bool serialize<remote_meta_request>(const remote_meta_request& data, std::string& out);
+template bool deserialize<remote_meta_response>(const char* data, size_t size, remote_meta_response& out);
 
 #define FIXED_HEADER_SIZE sizeof(header_t)
 
