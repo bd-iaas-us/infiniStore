@@ -359,21 +359,6 @@ int do_rdma_exchange(client_t *client) {
 
         INFO("gid index: {}", client->gidx);
         print_rdma_conn_info(&client->local_info, false);
-
-        // Allocate and register memory
-        // client->rdma_buffer_size = BUFFER_SIZE; // Adjust the size as needed
-        // client->rdma_buffer =(char*) malloc(client->rdma_buffer_size);
-        // if (!client->rdma_buffer) {
-        //     perror("Failed to allocate RDMA buffer");
-        //     return SYSTEM_ERROR;
-        // }
-
-        // client->mr = ibv_reg_mr(client->pd, client->rdma_buffer, client->rdma_buffer_size,
-        //                         IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-        // if (!client->mr) {
-        //     perror("Failed to register MR");
-        //     return SYSTEM_ERROR;
-        // }
     }
 
     //Send server's RDMA connection info to client
@@ -432,7 +417,10 @@ int do_rdma_exchange(client_t *client) {
         perror("Failed to modify QP to RTS");
         return SYSTEM_ERROR;
     }
+    INFO("RDMA exchange done");
 
+
+    reset_client_read_state(client);
     return 0;
 }
 
@@ -592,6 +580,7 @@ void on_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
                             memcpy((void*)(&client->remote_info), client->recv_buffer, client->expected_bytes);
                             print_rdma_conn_info(&client->remote_info, true);
                             handle_request(client);
+                            INFO("!!RDMA exchange done!!");
                             break;
                         case OP_RDMA_WRITE:
                             if (!deserialize(client->recv_buffer, client->expected_bytes, client->remote_meta_req)){

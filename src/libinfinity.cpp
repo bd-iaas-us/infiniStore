@@ -203,7 +203,7 @@ int setup_rdma(connection_t *conn) {
         return -1;
     }
 
-
+    printf("start to rdma write\n");
     rw_remote(conn, OP_RDMA_WRITE, {"key1"}, 4096, NULL);
     return 0;
 }
@@ -367,16 +367,16 @@ int rw_remote(connection_t *conn, char op, const std::vector<std::string>keys, i
     }
 
     //recv remote_meta_response
-    remote_meta_response response;
-    std::string response_data;
-    int return_size;
-    recv(conn->sock, &return_size, sizeof(int), MSG_WAITALL);
-    recv(conn->sock, &response, return_size, MSG_WAITALL);
-    deserialize(response_data.data(), return_size, response);
+    // remote_meta_response response;
+    // std::string response_data;
+    // int return_size;
+    // recv(conn->sock, &return_size, sizeof(int), MSG_WAITALL);
+    // recv(conn->sock, &response, return_size, MSG_WAITALL);
+    // deserialize(response_data.data(), return_size, response);
 
-    for (auto &block : response.blocks) {
-        perform_rdma_write(conn, (char *)ptr, block_size, block.remote_addr, block_size, block.rkey);
-    }
+    // for (auto &block : response.blocks) {
+    //     perform_rdma_write(conn, (char *)ptr, block_size, block.remote_addr, block_size, block.rkey);
+    // }
 
 
     return 0;
