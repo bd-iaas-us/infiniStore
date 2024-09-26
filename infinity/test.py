@@ -15,6 +15,10 @@ now = time.time()
 conn.write_kvcache(src_tensor, [("key1", 0), ("key2", size//2)],  size//2)
 print("1st: Submit 2GB task time: ", time.time() - now)
 
+now = time.time()
+conn.sync_local()
+print("cuda stream sync ", time.time() - now)
+
 # uncomment the following to verify reading the same data. with uncommented or cudaIpcCloseMemHandle, the sync_local data may not be accurate
 # now = time.time()
 # with DisableTorchCaching():
@@ -24,9 +28,6 @@ print("1st: Submit 2GB task time: ", time.time() - now)
 # assert torch.equal(src_tensor[0:16].cpu(), dst_tensor[0:16].cpu())
 # assert torch.equal(src_tensor[32:48].cpu(), dst_tensor[32:48].cpu())
 
-now = time.time()
-conn.sync_local()
-print("cuda stream sync ", time.time() - now)
 
 resp = requests.get('http://127.0.0.1:8888/key/write/key1')
 print(resp.text)
