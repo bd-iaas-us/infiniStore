@@ -8,6 +8,7 @@
 #include <time.h>
 #include "protocol.h"
 #include <infiniband/verbs.h>
+#include <string>
 
 //typedef struct connection connection_t;
 
@@ -38,5 +39,6 @@ int sync_local(connection_t *conn);
 int get_kvmap_len();
 int setup_rdma(connection_t *conn);
 int rw_remote(connection_t *conn, char op, const std::vector<std::string>keys, int block_size, void * ptr);
-
+int get_key_write_status(std::string key);
+int get_key_read_status(std::string key);
 #endif // LIBINFINITY_H

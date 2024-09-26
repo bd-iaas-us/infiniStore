@@ -40,7 +40,8 @@ PYBIND11_MODULE(_infinity, m) {
     //server side
     m.def("get_kvmap_len", &get_kvmap_len, "get kv map size");
     m.def("register_server", &register_server, "register the server");
-
+    m.def("get_key_write_status", &get_key_write_status, "get key write status, 2 for not exist, 1 for complete, 0 for in progress");
+    m.def("get_key_read_status", &get_key_read_status, "get key read status, 2 for not exist, 1 for complete, 0 for in progress");
 }
 
 

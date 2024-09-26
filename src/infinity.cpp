@@ -13,7 +13,7 @@
 
 
 #include <string>
-#include <map>
+#include <unordered_map>
 #include <iostream>
 #include <uv.h>
 #include <chrono>
@@ -29,10 +29,28 @@ uv_loop_t *loop;
 uv_tcp_t server;
 #define BUFFER_SIZE (64<<10)
 
-std::map<std::string, void*> kv_map;
+std::unordered_map<std::string, void*> kv_map;
+std::unordered_map<std::string, bool> key_write_mp;
+std::unordered_map<std::string, bool> key_read_mp;
+
+void * h_dst;
 
 int get_kvmap_len() {
     return kv_map.size();
+}
+
+int get_key_write_status(std::string key) {
+    if(key_write_mp.count(key) == 0){
+        return 2;
+    } 
+    return key_write_mp[key];
+}
+
+int get_key_read_status(std::string key) {
+    if(key_read_mp.count(key) == 0){
+        return 2;
+    }     
+    return key_read_mp[key];
 }
 
 void print_header(header_t *header) {
@@ -148,6 +166,18 @@ void on_write(uv_write_t* req, int status) {
     free(req);
 }
 
+void CUDART_CB memCpyAsyncCbWrite(cudaStream_t stream, cudaError_t status, void *data) {
+    std::string &key = *(static_cast<std::string*>(data));
+    std::cout << "inside memCpyAsyncCbWrite: " << key << std::endl;
+    key_write_mp[key] = true;
+}
+
+void CUDART_CB memCpyAsyncCbRead(cudaStream_t stream, cudaError_t status, void *data) {
+    std::string &key = *(static_cast<std::string*>(data));
+    std::cout << "inside memCpyAsyncCbRead: " << key << std::endl;
+    key_read_mp[key] = true;
+}
+
 
 int do_read_kvcache(client_t *client) {
     const header_t *header = &client->header;
@@ -170,7 +200,7 @@ int do_read_kvcache(client_t *client) {
 
     for (auto &block : meta->blocks) {
         //find the key in the map
-        if (kv_map.find(block.key) == kv_map.end()) {
+        if (kv_map.count(block.key) == 0) {
             //key not found
             std::cout << "Key not found: " << block.key << std::endl;
             CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
@@ -180,9 +210,12 @@ int do_read_kvcache(client_t *client) {
         //key found
         //std::cout << "Key found: " << block.key << std::endl;
         void * h_src = kv_map[block.key];
+        key_read_mp[block.key] = false;
         //push the host cpu data to local device
-        CHECK_CUDA(cudaMemcpyAsync((char*)d_ptr + block.offset, h_src, meta->block_size, cudaMemcpyHostToDevice, client->cuda_stream));
+        CHECK_CUDA(cudaMemcpyAsync((char*)d_ptr + block.offset, h_src + block.offset, meta->block_size, cudaMemcpyHostToDevice, client->cuda_stream));
         
+        CHECK_CUDA(cudaStreamAddCallback(client->cuda_stream, memCpyAsyncCbRead, (void*)&block.key, 0));
+         
     
         client->cuda_operation_inflight = true;
     }
@@ -214,8 +247,8 @@ int do_write_kvcache(client_t *client) {
     //loop through the blocks
     for (auto &block : meta->blocks) {
         //pull data from local device to CPU host
-        void * h_dst;
-        CHECK_CUDA(cudaHostAlloc((void**)&h_dst, meta->block_size, cudaHostAllocDefault));
+        // void * h_dst;
+        // CHECK_CUDA(cudaHostAlloc((void**)&h_dst, meta->block_size, cudaHostAllocDefault));
         if (h_dst == NULL) {
             perror("Failed to allocat host memroy");
             CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
@@ -223,14 +256,17 @@ int do_write_kvcache(client_t *client) {
         }
         //how to deal with memory overflow? 
         //pull data from local device to CPU host
-        CHECK_CUDA(cudaMemcpyAsync(h_dst, (char*)d_ptr + block.offset, meta->block_size, cudaMemcpyDeviceToHost, client->cuda_stream));
+        key_write_mp[block.key] = false;
 
+        CHECK_CUDA(cudaMemcpyAsync(h_dst + block.offset, (char*)d_ptr + block.offset, meta->block_size, cudaMemcpyDeviceToHost, client->cuda_stream));
+
+        CHECK_CUDA(cudaStreamAddCallback(client->cuda_stream, memCpyAsyncCbWrite, (void*)&block.key, 0));
         client->cuda_operation_inflight = true;
 
-        print_vector((float*)h_dst,10);
+        // print_vector((float*)h_dst,10);
         kv_map[block.key] = h_dst;
     }
-    CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
+    // CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
     return TASK_ACCEPTED;
 }
 
@@ -690,10 +726,17 @@ int register_server(unsigned long loop_ptr) {
     struct sockaddr_in addr;
     uv_ip4_addr("0.0.0.0", PORT, &addr);
 
+    // int deviceCount;
+    // cuDeviceGetCount(&deviceCount);
+    // printf("cuda device count: %d\n", deviceCount);
+    // assign 4 GB pinned mem
+    CHECK_CUDA(cudaHostAlloc((void**)&h_dst, sizeof(char) * 1024 * 1024 * 1024 * 4, cudaHostAllocPortable));
+
     uv_tcp_bind(&server, (const struct sockaddr*)&addr, 0);
     int r = uv_listen((uv_stream_t*) &server, 128, on_new_connection);
     if (r) {
         fprintf(stderr, "Listen error: %s\n", uv_strerror(r));
+        CHECK_CUDA(cudaFreeHost(h_dst));
         return 1;
     }
 

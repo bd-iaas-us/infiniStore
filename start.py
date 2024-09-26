@@ -5,11 +5,19 @@ import fastapi
 from fastapi import FastAPI, Request
 import uvicorn
 import torch
+from pydantic import BaseModel
 
 
 
 
 app = FastAPI()
+
+class KeyOpStatusRequest(BaseModel):
+    key: str
+
+class KeyOpStatusResponse(BaseModel):
+    status: int
+
 
 @app.get("/status")
 async def status():
@@ -19,7 +27,13 @@ async def status():
 async def read_status():
     return infinity._infinity.get_kvmap_len()
 
+@app.get("/key/write/{key}")
+async def getKeyWriteStatus(key) -> KeyOpStatusResponse:
+    return KeyOpStatusResponse(status = infinity._infinity.get_key_write_status(key))
 
+@app.get("/key/read/{key}")
+async def getKeyReadStatus(key) -> KeyOpStatusResponse:
+    return KeyOpStatusResponse(status = infinity._infinity.get_key_read_status(key))
 
 
 def check_p2p_access():
@@ -44,7 +58,7 @@ if __name__ == "__main__":
     config = uvicorn.Config(
     app,
     host="0.0.0.0",
-    port=8080,
+    port=8888,
     loop="uvloop",
     log_level="warning"  # Disables logging
     )
