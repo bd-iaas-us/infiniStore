@@ -204,7 +204,6 @@ int setup_rdma(connection_t *conn) {
     }
 
     printf("start to rdma write\n");
-    rw_remote(conn, OP_RDMA_WRITE, {"key1"}, 4096, NULL);
     return 0;
 }
 
@@ -365,19 +364,28 @@ int rw_remote(connection_t *conn, char op, const std::vector<std::string>keys, i
         fprintf(stderr, "Failed to send body\n");
         return -1;
     }
+    remote_meta_response response;
+    int return_size;
+    if(recv(conn->sock, &return_size, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
+        perror("Failed to receive return size");
+        return -1;
+    }
+    printf("return size: %d\n", return_size);
+    char response_data[return_size];
+    if(recv(conn->sock, &response_data, return_size, MSG_WAITALL) < 0 ) {
+        perror("Failed to receive response data");
+        return -1;
+    }
 
-    //recv remote_meta_response
-    // remote_meta_response response;
-    // std::string response_data;
-    // int return_size;
-    // recv(conn->sock, &return_size, sizeof(int), MSG_WAITALL);
-    // recv(conn->sock, &response, return_size, MSG_WAITALL);
-    // deserialize(response_data.data(), return_size, response);
+    if(!deserialize(response_data, return_size, response)) {
+        perror("deserialize failed");
+        return -1;
+    }
+    printf("remote meta response: %llu, rkey: %d\n", response.blocks[0].remote_addr, response.blocks[0].rkey);
 
-    // for (auto &block : response.blocks) {
-    //     perform_rdma_write(conn, (char *)ptr, block_size, block.remote_addr, block_size, block.rkey);
-    // }
-
+    for (auto &block : response.blocks) {
+        perform_rdma_write(conn, (char *)ptr, block_size, block.remote_addr, block_size, block.rkey);
+    }
 
     return 0;
 }

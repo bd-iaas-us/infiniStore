@@ -99,7 +99,8 @@ typedef struct {
 
 typedef struct {
     std::vector<std::string> keys;
-    MSGPACK_DEFINE(keys)
+    int block_size;
+    MSGPACK_DEFINE(keys, block_size)
 } remote_meta_request; //rdma read/write request
 
 
@@ -134,6 +135,7 @@ bool serialize(const T& data, std::string& out) {
         return false;
     }
 }
+
 template <typename T>
 bool deserialize(const char* data, size_t size, T& out) {
     try {
