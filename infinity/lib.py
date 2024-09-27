@@ -34,12 +34,12 @@ class InfinityConnection:
     OP_RDMA_EXCHANGE="E"
     OP_RDMA_WRITE="D"
     OP_RDMA_READ="A"
-    def __init__(self):
+    def __init__(self, ):
         self.conn = _infinity.Connection()
         self.connected = False
     
-    def connect(self):
-        ret = _infinity.init_connection(self.conn)
+    def connect(self, ip_addr: str = "127.0.0.1"):
+        ret = _infinity.init_connection(self.conn, ip_addr)
         if ret < 0:
             raise Exception("Failed to initialize connection")
         self.connected = True
@@ -90,10 +90,3 @@ class InfinityConnection:
     def sync_local(self):
         if self.connected:
             _infinity.sync_local(self.conn)
-
-    def __enter__(self):
-        self.connect()
-        return self
-    
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.close_connection()

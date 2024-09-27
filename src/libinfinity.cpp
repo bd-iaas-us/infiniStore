@@ -16,6 +16,29 @@
 #include "ibv_helper.h"
 
 
+
+Connection::~Connection() {
+    printf("destroying connection\n");
+    if (sock) {
+        close(sock);
+    }
+    if (qp) {
+        ibv_destroy_qp(qp);
+    }
+    if (cq) {
+        ibv_destroy_cq(cq);
+    }
+    if (pd) {
+        ibv_dealloc_pd(pd);
+    }
+    if (ib_ctx) {
+        ibv_close_device(ib_ctx);
+    }
+    for (auto it = local_mr.begin(); it != local_mr.end(); it++) {
+        ibv_dereg_mr(it->second);
+    }
+}
+
 int modify_qp_to_init(struct ibv_qp *qp);
 int modify_qp_to_rts(connection_t *conn);
 int modify_qp_to_rtr(connection_t *conn);
@@ -129,19 +152,26 @@ int modify_qp_to_init(struct ibv_qp *qp) {
 int perform_rdma_read(connection_t *conn, uintptr_t src_buf, size_t src_size,
                       char * dst_buf, size_t dst_size, uint32_t rkey) {
 
-    //FIXME
-    conn->mr = ibv_reg_mr(conn->pd, dst_buf, dst_size,
-                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-    if (!conn->mr) {
-        perror("Failed to register MR");
-        return -1;
+
+    struct ibv_mr *mr = NULL;
+    if (conn->local_mr.find((uintptr_t)dst_buf) == conn->local_mr.end()) {
+        struct ibv_mr *mr = ibv_reg_mr(conn->pd, dst_buf, dst_size,
+                                       IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+        if (!mr) {
+            perror("Failed to register MR");
+            return -1;
+        }
+        conn->local_mr[(uintptr_t)dst_buf] = mr;
     }
+    
+    mr = conn->local_mr[(uintptr_t)dst_buf];
+    
 
     // Prepare RDMA read operation
     struct ibv_sge sge = {};
     sge.addr = (uintptr_t)dst_buf;
     sge.length = dst_size;
-    sge.lkey = conn->mr->lkey;
+    sge.lkey = mr->lkey;
 
     struct ibv_send_wr wr = {};
     wr.wr_id = (uintptr_t)conn;
@@ -182,18 +212,29 @@ int perform_rdma_read(connection_t *conn, uintptr_t src_buf, size_t src_size,
 
 int perform_rdma_write(connection_t *conn, char * src_buf, size_t src_size,
                        uintptr_t dst_buf, size_t dst_size, uint32_t rkey) {
-    conn->mr = ibv_reg_mr(conn->pd, src_buf, src_size,
-                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-    if (!conn->mr) {
-        perror("Failed to register MR");
-        return -1;
+    printf("performing rdma write\n");
+    struct ibv_mr *mr = NULL;
+    //if src_buf is not is conn->remote_mr, create a new mr
+    if (conn->local_mr.find((uintptr_t)src_buf) == conn->local_mr.end()) {
+        struct ibv_mr *mr = ibv_reg_mr(conn->pd, src_buf, src_size,
+                                       IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+        if (!mr) {
+            perror("Failed to register MR");
+            return -1;
+        }
+        conn->local_mr[(uintptr_t)src_buf] = mr;
     }
+
+    mr = conn->local_mr[(uintptr_t)src_buf];
+    
+
+    assert(mr != NULL);
 
     // Prepare RDMA write operation
     struct ibv_sge sge = {};
     sge.addr = (uintptr_t)src_buf;
     sge.length = src_size; 
-    sge.lkey = conn->mr->lkey;
+    sge.lkey = mr->lkey;
 
     struct ibv_send_wr wr = {};
     wr.wr_id = (uintptr_t)conn;
@@ -256,11 +297,10 @@ int setup_rdma(connection_t *conn) {
         return -1;
     }
 
-    printf("start to rdma write\n");
     return 0;
 }
 
-int init_connection(connection_t *conn)   {
+int init_connection(connection_t *conn, std::string ip_addr)   {
     assert(conn != NULL);
     int sock = 0;
 
@@ -275,7 +315,7 @@ int init_connection(connection_t *conn)   {
     serv_addr.sin_port = htons(PORT);
 
     // always connect to localhost
-    if(inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
+    if(inet_pton(AF_INET, ip_addr.data(), &serv_addr.sin_addr) <= 0) {
         printf("\nInvalid address/ Address not supported \n");
         return -1;
     }
@@ -361,12 +401,6 @@ int exchange_conn_info(connection_t *conn) {
     return 0;
 }
 
-void close_connection(connection_t *conn) {
-    if (conn->sock > 0) {
-        close(conn->sock);
-    }
-}
-
 
 
 
@@ -390,7 +424,6 @@ int sync_local(connection_t *conn) {
 //FIXME: implement this function
 //should be
 //rw_remote(connection_t *conn, char op, const std::vector<std::string>keys, std::vector<int> offsets, int block_size, void * ptr)
-//这样ptr只需要注册一次
 int rw_remote(connection_t *conn, char op, const std::vector<std::string>keys, int block_size, void * ptr) {
     assert(conn != NULL);
     assert(op == OP_RDMA_READ || op == OP_RDMA_WRITE);

@@ -19,7 +19,7 @@ int rw_local_wrapper(connection_t *conn, char op, const std::vector<std::tuple<s
     return rw_local(conn, op, c_blocks, block_size, (void*)ptr);
 }
 
-int rw_remote_wrapper(connection_t *conn, char op, const std::vector<std::string> &keys, int block_size, unsigned long ptr) {
+int rw_remote_wrapper(connection_t *conn, char op, const std::vector<std::string> &keys, int block_size, uintptr_t ptr) {
     return rw_remote(conn, op, keys, block_size, (void*)ptr);
 }
 
@@ -27,10 +27,9 @@ int rw_remote_wrapper(connection_t *conn, char op, const std::vector<std::string
 PYBIND11_MODULE(_infinity, m) {
     //client side
     py::class_<connection_t>(m, "Connection")
-        .def(py::init<>())
-        .def_readwrite("sock", &connection_t::sock);
+        .def(py::init<>());
+        //.def_readwrite("sock", &connection_t::sock);
     m.def("init_connection", &init_connection, "Initialize a connection");
-    m.def("close_connection", &close_connection, "Close a connection");
     m.def("rw_local", &rw_local_wrapper, "Read/Write cpu memory from GPU device");
     m.def("rw_remote", &rw_remote_wrapper, "Read/Write remote memory");
     m.def("sync_local", &sync_local, "sync the cuda stream");

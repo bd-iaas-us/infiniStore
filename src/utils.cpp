@@ -64,7 +64,7 @@ void print_ipc_handle(cudaIpcMemHandle_t ipc_handle) {
     for (int i = 0; i < sizeof(cudaIpcMemHandle_t); i++) {
         oss << std::hex << std::setw(2) << std::setfill('0') << (int)((unsigned char*)&ipc_handle)[i] << " ";
     }
-    INFO("ipc_handle content: {}", oss.str().c_str());
+    DEBUG("ipc_handle content: {}", oss.str().c_str());
 }
 
 void compare_ipc_handle(cudaIpcMemHandle_t ipc_handle1, cudaIpcMemHandle_t ipc_handle2) {

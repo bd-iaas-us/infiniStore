@@ -2,7 +2,7 @@ from infinity import _infinity
 import torch
 
 conn = _infinity.Connection()
-_infinity.init_connection(conn)
+_infinity.init_connection(conn, "127.0.0.1")
 _infinity.setup_rdma(conn)
 
 

@@ -683,7 +683,6 @@ void on_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
                             memcpy((void*)(&client->remote_info), client->recv_buffer, client->expected_bytes);
                             print_rdma_conn_info(&client->remote_info, true);
                             handle_request(client);
-                            INFO("!!RDMA exchange done!!");
                             break;
                         case OP_RDMA_WRITE:
                         case OP_RDMA_READ:
