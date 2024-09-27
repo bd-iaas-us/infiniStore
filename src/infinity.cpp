@@ -14,6 +14,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <thread>
 #include <iostream>
 #include <uv.h>
 #include <chrono>
@@ -178,6 +179,11 @@ void CUDART_CB memCpyAsyncCbRead(cudaStream_t stream, cudaError_t status, void *
     key_read_mp[key] = true;
 }
 
+int handle_cudamemhandleclose(void *d_ptr) {
+    std::cout << "handle_cudamemhandleclose, d_ptr: " << d_ptr << std::endl;
+    CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
+    return 0;
+}
 
 int do_read_kvcache(client_t *client) {
     const header_t *header = &client->header;
@@ -219,7 +225,8 @@ int do_read_kvcache(client_t *client) {
     
         client->cuda_operation_inflight = true;
     }
-    CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
+    std::thread closeMemHandle(handle_cudamemhandleclose, d_ptr);
+    closeMemHandle.detach();
 
     return TASK_ACCEPTED;
 }
@@ -229,11 +236,10 @@ int do_read_kvcache(client_t *client) {
 int do_write_kvcache(client_t *client) {
     const local_meta_t * meta =  &client->local_meta;
     assert(meta != NULL);
-    // allocate host memory
-    void* d_ptr;
 
+    void* d_ptr;
     CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, meta->ipc_handle, cudaIpcMemLazyEnablePeerAccess));
-    
+
     //TODO: do we need to synchronize here?
     //CHECK_CUDA(cudaDeviceSynchronize());
 
@@ -266,7 +272,10 @@ int do_write_kvcache(client_t *client) {
         // print_vector((float*)h_dst,10);
         kv_map[block.key] = h_dst;
     }
-    // CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
+
+    std::thread closeMemHandle(handle_cudamemhandleclose, d_ptr);
+    closeMemHandle.detach();
+
     return TASK_ACCEPTED;
 }
 
