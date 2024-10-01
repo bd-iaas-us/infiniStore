@@ -32,6 +32,7 @@ class DisableTorchCaching:
 class InfinityConnection:
     OP_R="R"
     OP_W="W"
+    OP_G="G"
     def __init__(self):
         self.conn = _infinity.Connection()
         self.connected = False
@@ -88,6 +89,10 @@ class InfinityConnection:
     def sync_local(self):
         if self.connected:
             _infinity.sync_local(self.conn)
+
+    def get_stat(self):
+        if self.connected:
+            return _infinity.get_stat(self.conn)
 
     def __enter__(self):
         self.connect()

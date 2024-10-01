@@ -99,6 +99,10 @@ struct Client {
     char * rdma_buffer;
     size_t rdma_buffer_size;
 
+    int write_cnt;
+    int read_cnt;
+    std::unordered_map<cudaStream_t, std::pair<void*, int>> stream_mp; // <d_ptr, status>. 0 for read, 1 for write, +4 for complete
+
     Client() = default;
     Client(const Client&) = delete;
     ~Client();
@@ -119,6 +123,11 @@ Client::~Client() {
     }
 }
 typedef struct Client client_t;
+
+typedef struct {
+    client_t *client;
+    cudaStream_t stream;
+} wqueue_data_t;
 
 void reset_client_read_state(client_t *client) {
     client->state = READ_HEADER;
@@ -185,6 +194,28 @@ int handle_cudamemhandleclose(void *d_ptr) {
     return 0;
 }
 
+void wait_for_ipc_close_completion(uv_work_t* req) {
+    wqueue_data_t *wqueue_data = (wqueue_data_t *)req->data;
+    CHECK_CUDA(cudaStreamSynchronize((wqueue_data->stream)));
+    CHECK_CUDA(cudaIpcCloseMemHandle(wqueue_data->client->stream_mp[wqueue_data->stream].first));
+    INFO("wait_for_ipc_close_completion done");
+}
+
+void after_ipc_close_completion(uv_work_t* req, int status) {
+    wqueue_data_t *wqueue_data = (wqueue_data_t *)req->data;
+    int mode = wqueue_data->client->stream_mp[wqueue_data->stream].second;
+    if (mode == 0) {
+        wqueue_data->client->read_cnt++;
+    } else if (mode == 1) {
+        wqueue_data->client->write_cnt++;
+    }
+    
+    wqueue_data->client->stream_mp[wqueue_data->stream].second |= 4;
+    cudaStreamDestroy(wqueue_data->stream);
+    // delete wqueue_data;
+    INFO("after_ipc_close_completion done");
+}
+
 int do_read_kvcache(client_t *client) {
     const header_t *header = &client->header;
     const local_meta_t *meta = &client->local_meta;
@@ -192,17 +223,20 @@ int do_read_kvcache(client_t *client) {
 
     assert(header != NULL);
 
-    //create cuda stream if not exist
-    if (!client->cuda_operation_inflight) {
-        cudaStream_t cuda_stream;
-        CHECK_CUDA(cudaStreamCreate(&cuda_stream));
-        client->cuda_stream = cuda_stream;
-    }
+    // //create cuda stream if not exist
+    // if (!client->cuda_operation_inflight) {
+    //     cudaStream_t cuda_stream;
+    //     CHECK_CUDA(cudaStreamCreate(&cuda_stream));
+    //     client->cuda_stream = cuda_stream;
+    // }
+    cudaStream_t cuda_stream;
+    CHECK_CUDA(cudaStreamCreate(&cuda_stream));    
 
     //TODO: check device_id
 
 
     CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, meta->ipc_handle, cudaIpcMemLazyEnablePeerAccess));
+    client->stream_mp[cuda_stream] = std::make_pair(d_ptr, 0);
 
     for (auto &block : meta->blocks) {
         //find the key in the map
@@ -218,15 +252,15 @@ int do_read_kvcache(client_t *client) {
         void * h_src = kv_map[block.key];
         key_read_mp[block.key] = false;
         //push the host cpu data to local device
-        CHECK_CUDA(cudaMemcpyAsync((char*)d_ptr + block.offset, h_src + block.offset, meta->block_size, cudaMemcpyHostToDevice, client->cuda_stream));
-        
-        CHECK_CUDA(cudaStreamAddCallback(client->cuda_stream, memCpyAsyncCbRead, (void*)&block.key, 0));
-         
+        CHECK_CUDA(cudaMemcpyAsync((char*)d_ptr + block.offset, h_src + block.offset, meta->block_size, cudaMemcpyHostToDevice, cuda_stream));
     
-        client->cuda_operation_inflight = true;
+        // client->cuda_operation_inflight = true;
     }
-    std::thread closeMemHandle(handle_cudamemhandleclose, d_ptr);
-    closeMemHandle.detach();
+    wqueue_data_t *wqueue_data = new wqueue_data_t();
+    wqueue_data->client = client;
+    wqueue_data->stream = cuda_stream;
+    client->work_req.data = (void *)wqueue_data;
+    uv_queue_work(loop, &client->work_req, wait_for_ipc_close_completion, after_ipc_close_completion);
 
     return TASK_ACCEPTED;
 }
@@ -243,12 +277,16 @@ int do_write_kvcache(client_t *client) {
     //TODO: do we need to synchronize here?
     //CHECK_CUDA(cudaDeviceSynchronize());
 
-    //create cuda stream if not exist
-    if (!client->cuda_operation_inflight) {
-        cudaStream_t cuda_stream;
-        CHECK_CUDA(cudaStreamCreate(&cuda_stream));
-        client->cuda_stream = cuda_stream;
-    }
+    // //create cuda stream if not exist
+    // if (!client->cuda_operation_inflight) {
+    //     cudaStream_t cuda_stream;
+    //     CHECK_CUDA(cudaStreamCreate(&cuda_stream));
+    //     client->cuda_stream = cuda_stream;
+    // }
+    cudaStream_t cuda_stream;
+    CHECK_CUDA(cudaStreamCreate(&cuda_stream));    
+    client->stream_mp[cuda_stream] = std::make_pair(d_ptr, 1);
+
 
     //loop through the blocks
     for (auto &block : meta->blocks) {
@@ -264,17 +302,19 @@ int do_write_kvcache(client_t *client) {
         //pull data from local device to CPU host
         key_write_mp[block.key] = false;
 
-        CHECK_CUDA(cudaMemcpyAsync(h_dst + block.offset, (char*)d_ptr + block.offset, meta->block_size, cudaMemcpyDeviceToHost, client->cuda_stream));
+        CHECK_CUDA(cudaMemcpyAsync(h_dst + block.offset, (char*)d_ptr + block.offset, meta->block_size, cudaMemcpyDeviceToHost, cuda_stream));
 
-        CHECK_CUDA(cudaStreamAddCallback(client->cuda_stream, memCpyAsyncCbWrite, (void*)&block.key, 0));
-        client->cuda_operation_inflight = true;
+        // client->cuda_operation_inflight = true;
 
         // print_vector((float*)h_dst,10);
         kv_map[block.key] = h_dst;
     }
 
-    std::thread closeMemHandle(handle_cudamemhandleclose, d_ptr);
-    closeMemHandle.detach();
+    wqueue_data_t *wqueue_data = new wqueue_data_t();
+    wqueue_data->client = client;
+    wqueue_data->stream = cuda_stream;
+    client->work_req.data = (void *)wqueue_data;
+    uv_queue_work(loop, &client->work_req, wait_for_ipc_close_completion, after_ipc_close_completion);
 
     return TASK_ACCEPTED;
 }
@@ -486,6 +526,26 @@ int do_sync_stream(client_t *client) {
 }
 
 
+int do_get_stat(client_t *client) {
+    assert(client != NULL);
+    reset_client_read_state(client);
+    stat_t stat = {
+        .read_cnt = client->read_cnt,
+        .write_cnt = client->write_cnt,
+    };
+    // Send the stat to the client
+    uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
+    client->send_buffer = (char*)realloc(client->send_buffer, RETURN_STAT_SIZE);
+    memcpy(client->send_buffer, &stat, RETURN_STAT_SIZE);
+    write_req->data = client;
+    uv_buf_t wbuf = uv_buf_init(client->send_buffer, RETURN_STAT_SIZE);
+    uv_write(write_req, (uv_stream_t *)client->handle, &wbuf, 1, on_write);  
+
+    INFO("do_get_stat done");  
+    return 0;
+}
+
+
 int do_rdma_read(client_t *client) {
     INFO("do rdma read...");
     return FINISH;
@@ -577,7 +637,13 @@ int handle_request(client_t *client) {
         return_code = do_write_kvcache(client);
     } else if (client->header.op == OP_R) {
         return_code = do_read_kvcache(client);
-    } else {
+    } else if (client->header.op == OP_G) {
+        return_code = do_get_stat(client);
+        //do_get_stat will handle return code by itself
+        if (return_code == 0) {
+            return 0;
+        }        
+    } else {        
         return_code = INVALID_REQ;
     }
     
@@ -636,7 +702,7 @@ void on_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
                         client->bytes_read = 0;
                         client->recv_buffer = (char*)realloc(client->recv_buffer, client->expected_bytes);
                         client->state = READ_BODY;
-                    } else if (client->header.op == OP_SYNC){
+                    } else if (client->header.op == OP_SYNC || client->header.op == OP_G){
                         handle_request(client);
                     }
                 }

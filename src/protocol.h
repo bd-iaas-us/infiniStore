@@ -25,6 +25,7 @@ Error code:
 
 #define OP_R 'R'
 #define OP_W 'W'
+#define OP_G 'G'
 #define OP_SYNC 'S'
 #define OP_RDMA_EXCHANGE 'E'
 #define OP_RDMA_WRITE 'D'
@@ -55,7 +56,13 @@ typedef struct {
     MSGPACK_DEFINE(key, offset)
 } block_t;
 
+typedef struct {
+    int read_cnt;
+    int write_cnt;
+    MSGPACK_DEFINE(read_cnt, write_cnt)
+} stat_t;
 
+#define RETURN_STAT_SIZE sizeof(stat_t)
 
 //implement pack for ipcHandler
 namespace msgpack {

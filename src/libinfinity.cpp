@@ -314,7 +314,26 @@ void close_connection(connection_t *conn) {
     }
 }
 
+stat_t get_stat(connection_t *conn) {
+    assert(conn != NULL);
+    stat_t stat = {
+        .read_cnt = -1,
+        .write_cnt = -1,
+    };
 
+    header_t header = {
+        .magic = MAGIC,
+        .op = OP_G,
+    };
+    // Send header
+    if (send_exact(conn->sock, &header, FIXED_HEADER_SIZE) < 0) {
+        fprintf(stderr, "Failed to send header\n");
+        return stat;
+    }
+
+    recv_exact(conn->sock, &stat, RETURN_STAT_SIZE);
+    return stat;
+}
 
 
 int sync_local(connection_t *conn) {
