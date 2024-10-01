@@ -8,7 +8,10 @@
 #include <sstream>
 #include "log.h"
 #include <iomanip>
-
+#include <execinfo.h>
+#include <signal.h>
+#include <unistd.h>
+#include <stdlib.h>
 
 
 
@@ -78,6 +81,20 @@ void compare_ipc_handle(cudaIpcMemHandle_t ipc_handle1, cudaIpcMemHandle_t ipc_h
     }
 
 }
+
+
+void signal_handler(int signum) {
+    void *array[10];
+    size_t size;
+
+    size = backtrace(array, 10);
+
+    fprintf(stderr, "Error: signal %d:\n", signum);
+    backtrace_symbols_fd(array, size, STDERR_FILENO);
+
+    exit(1);
+}
+
 
 
 template <typename T>

@@ -31,7 +31,7 @@ int recv_exact(int socket, void *buffer, size_t length);
 void print_ipc_handle(cudaIpcMemHandle_t ipc_handle);
 void compare_ipc_handle(cudaIpcMemHandle_t ipc_handle1, cudaIpcMemHandle_t ipc_handle2);
 void print_rdma_conn_info(rdma_conn_info_t *info, bool is_remote);
-
+void signal_handler(int signum);
 
 
 template <typename T>

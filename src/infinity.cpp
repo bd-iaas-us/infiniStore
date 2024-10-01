@@ -759,7 +759,6 @@ void on_new_connection(uv_stream_t* server, int status) {
 
 int register_server(unsigned long loop_ptr) {
 
-    INFO("register server...");
     loop = (uv_loop_t *)loop_ptr;
     assert(loop != NULL);
     uv_tcp_init(loop, &server);
@@ -773,11 +772,9 @@ int register_server(unsigned long loop_ptr) {
         return 1;
     }
 
-    return 0;
-}
+    signal(SIGSEGV, signal_handler);
 
-int main(int argc, char **argv) {
-    uv_loop_t *loop = uv_default_loop();
-    register_server((unsigned long)loop);
-    return uv_run(loop, UV_RUN_DEFAULT);
+    INFO("register server done");
+
+    return 0;
 }
