@@ -27,15 +27,6 @@ async def status():
 async def read_status():
     return infinity._infinity.get_kvmap_len()
 
-@app.get("/key/write/{key}")
-async def getKeyWriteStatus(key) -> KeyOpStatusResponse:
-    return KeyOpStatusResponse(status = infinity._infinity.get_key_write_status(key))
-
-@app.get("/key/read/{key}")
-async def getKeyReadStatus(key) -> KeyOpStatusResponse:
-    return KeyOpStatusResponse(status = infinity._infinity.get_key_read_status(key))
-
-
 def check_p2p_access():
     num_devices = torch.cuda.device_count()
     for i in range(num_devices):
