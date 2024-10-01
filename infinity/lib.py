@@ -31,32 +31,37 @@ class InfinityConnection:
     OP_R="R"
     OP_W="W"
     OP_SYNC="S"
-    OP_RDMA_EXCHANGE="E"
     OP_RDMA_WRITE="D"
     OP_RDMA_READ="A"
+
     def __init__(self, ):
         self.conn = _infinity.Connection()
-        self.connected = False
+        self.local_connected = False
+        self.rdma_connected = False
     
-    def connect(self, ip_addr: str = "127.0.0.1"):
+    def connect(self, ip_addr : str):
+        if self.local_connected:
+            raise Exception("Already connected to local instance")
+        if self.rdma_connected:
+            raise Exception("Already connected to remote instance")
         ret = _infinity.init_connection(self.conn, ip_addr)
         if ret < 0:
-            raise Exception("Failed to initialize connection")
-        if ret < _infinity.setup_rdma(self.conn):
-            raise Exception("Failed to setup RDMA")
+            raise Exception("Failed to initialize remote connection")
+        ret = _infinity.setup_rdma(self.conn)
+        if ret < 0:
+            raise Exception("Failed to setup RDMA connection")
+        self.rdma_connected = True
+        
+    def local_connect(self):
+        if self.rdma_connected:
+            raise Exception("Already connected to rdma instance")     
+        if self.local_connected:
+            raise Exception("Already connected to local instance")
+        ret = _infinity.init_connection(self.conn, "127.0.0.1")
+        if ret < 0:
+            raise Exception("Failed to initialize local connection")
+        self.local_connected = True
 
-        self.connected = True
-
-    def _verify(self, kv_cache : torch.Tensor):
-        if self.connected is False:
-            raise Exception("Connection is not established")
-        if kv_cache.device.type != "cuda":
-            raise Exception("Tensor must be on CUDA device")
-        if kv_cache.is_contiguous() is False:
-            raise Exception("Tensor must be contiguous")
-    
-    #size is the element size
-    #offset is the offset of the element
     def write_kvcache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], block_size: int):
         self._verify(kvcache)
         ptr = kvcache.data_ptr()
@@ -65,13 +70,16 @@ class InfinityConnection:
         for i in range(len(blocks)):
             key, offset = blocks[i]
             blocks[i] = (key, offset * element_size)
-        ret = _infinity.rw_local(self.conn, self.OP_W, blocks, block_size * element_size, ptr)
-        if ret < 0:
-            raise Exception(f"Failed to write to infinity, ret = {ret}")
-        return
-    
+        if self.local_connected:
+            ret = _infinity.rw_local(self.conn, self.OP_W, blocks, block_size * element_size, ptr)
+            if ret < 0:
+                raise Exception(f"Failed to write to infinity, ret = {ret}")
+        elif self.rdma_connected:
+            ret = _infinity.rw_rdma(self.conn, self.OP_RDMA_WRITE, blocks, block_size * element_size, ptr)
+        else:
+            raise Exception("Not connected to any instance")
+
     def read_kvcache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], block_size: int):
-        #TODO: self._verify(kvcache, key, offset, size)
         self._verify(kvcache)
         ptr = kvcache.data_ptr()
         element_size = kvcache.element_size()
@@ -79,47 +87,29 @@ class InfinityConnection:
         for i in range(len(blocks)):
             key, offset = blocks[i]
             blocks[i] = (key, offset * element_size)
-        ret = _infinity.rw_local(self.conn, self.OP_R, blocks, block_size * element_size, ptr)
-        if ret < 0:
-            raise Exception(f"Failed to read to infinity, ret = {ret}")
-        return
+        
+        if self.local_connected:
+            ret = _infinity.rw_local(self.conn, self.OP_R, blocks, block_size * element_size, ptr)
+            if ret < 0:
+                raise Exception(f"Failed to read to infinity, ret = {ret}")
+        elif self.rdma_connected:
+            ret = _infinity.rw_rdma(self.conn, self.OP_RDMA_READ, blocks, block_size * element_size, ptr)
+        else:
+            raise Exception("Not connected to any instance")
     
-    def remote_write_kvcache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], block_size: int):
-        self._verify(kvcache)
-        ptr = kvcache.data_ptr()
-        element_size = kvcache.element_size()
-        #each offset should multiply by the element size
-        for i in range(len(blocks)):
-            key, offset = blocks[i]
-            blocks[i] = (key, offset * element_size)
-        ret = _infinity.rw_remote(self.conn, self.OP_RDMA_WRITE, blocks, block_size * element_size, ptr)
-        if ret < 0:
-            raise Exception(f"Failed to write to infinity, ret = {ret}")
-        return
-
-    def remote_read_kvcache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], block_size: int):
-        self._verify(kvcache)
-        ptr = kvcache.data_ptr()
-        element_size = kvcache.element_size()
-        #each offset should multiply by the element size
-        for i in range(len(blocks)):
-            key, offset = blocks[i]
-            blocks[i] = (key, offset * element_size)
-        ret = _infinity.rw_remote(self.conn, self.OP_RDMA_READ, blocks, block_size * element_size, ptr)
-        if ret < 0:
-            raise Exception(f"Failed to read to infinity, ret = {ret}")
-        return
-
-    def close_connection(self):
-        if self.connected:
-            _infinity.close_connection(self.conn)
-            self.connected = False
-        return
-    
-    def sync_local(self):
-        if self.connected:
+    def sync(self):
+        if self.local_connected:
             _infinity.sync_local(self.conn)
-    def sync_remote(self):
-        if self.connected:
-            _infinity.sync_remote(self.conn)
+        elif self.rdma_connected:
+            _infinity.sync_rdma(self.conn)
+        else:
+            raise Exception("Not connected to any instance")
         return
+
+
+    def _verify(self, kv_cache : torch.Tensor):
+        if kv_cache.device.type != "cuda":
+            raise Exception("Tensor must be on CUDA device")
+        if kv_cache.is_contiguous() is False:
+            raise Exception("Tensor must be contiguous")
+

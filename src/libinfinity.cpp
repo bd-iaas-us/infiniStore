@@ -203,7 +203,7 @@ int perform_rdma_read(connection_t *conn, uintptr_t src_buf, size_t src_size,
 }
 
 
-int sync_remote(connection_t *conn) {
+int sync_rdma(connection_t *conn) {
     //TODO: implement this function
     struct ibv_wc wc[10];
     int total_completions = conn->rdma_write_count + conn->rdma_read_count;
@@ -228,7 +228,6 @@ int sync_remote(connection_t *conn) {
         }
     }
 
-    // 重置计数器
     conn->rdma_write_count = 0;
     conn->rdma_read_count = 0;
 
@@ -430,7 +429,7 @@ int sync_local(connection_t *conn) {
     return 0;
 }
 
-int rw_remote(connection_t *conn, char op, const std::vector<block_t>& blocks, int block_size, void * ptr) {
+int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int block_size, void * ptr) {
     assert(conn != NULL);
     assert(op == OP_RDMA_READ || op == OP_RDMA_WRITE);
     assert(ptr != NULL);

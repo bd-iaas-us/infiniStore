@@ -48,9 +48,9 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, in
 int sync_local(connection_t *conn);
 int get_kvmap_len();
 int setup_rdma(connection_t *conn);
-int rw_remote(connection_t *conn, char op, const std::vector<block_t>& blocks, int block_size, void * ptr);
+int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int block_size, void * ptr);
 
-int sync_remote(connection_t *conn);
+int sync_rdma(connection_t *conn);
 
 
 #endif // LIBINFINITY_H
