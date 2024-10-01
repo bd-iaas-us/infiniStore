@@ -112,7 +112,8 @@ typedef struct {
 
 typedef struct {
   std::vector<remote_block_t> blocks;
-  MSGPACK_DEFINE(blocks)
+  int error_code;
+  MSGPACK_DEFINE(blocks, error_code)
 } remote_meta_response; //rdma read/write response
 
 

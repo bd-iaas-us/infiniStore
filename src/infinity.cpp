@@ -80,7 +80,7 @@ struct Client {
     struct ibv_pd *pd;
     struct ibv_cq *cq;
     struct ibv_qp *qp;
-
+    bool rdma_connected = false;
     int gidx; //gid index
 
 
@@ -429,6 +429,7 @@ int do_rdma_exchange(client_t *client) {
         return SYSTEM_ERROR;
     }
     INFO("RDMA exchange done");
+    client->rdma_connected = true;
 
 
     reset_client_read_state(client);
@@ -452,28 +453,41 @@ int do_sync_stream(client_t *client) {
 }
 
 
+//TODO: refactor this function to use RDMA_WRITE_IMM.
 int do_rdma_read(client_t *client) {
-    INFO("do rdma readkeys: {}", client->remote_meta_req.keys[0]);
-    //search the key in the map
-    if (kv_map.find(client->remote_meta_req.keys[0]) == kv_map.end()) {
-        //key not found
-        return KEY_NOT_FOUND;
-    }
-    PTR ptr = kv_map[client->remote_meta_req.keys[0]];
-    if (ptr.mr == NULL) {
-        //create mr if not exist
-        ptr.mr = ibv_reg_mr(client->pd, ptr.ptr, ptr.size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+    INFO("do rdma read keys: {}", client->remote_meta_req.keys.size());
+
+    int error_code = TASK_ACCEPTED;
+    remote_meta_response resp;
+    uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
+    std::string out;
+
+
+    for (const auto& key : client->remote_meta_req.keys) {
+        if (kv_map.find(key) == kv_map.end()) {
+            //key not found
+            error_code = KEY_NOT_FOUND;
+            goto RETURN;
+        }
+        PTR ptr = kv_map[key];
+        if (ptr.mr == NULL) {
+            ptr.mr = ibv_reg_mr(client->pd, ptr.ptr, ptr.size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+            if (ptr.mr == NULL) {
+                perror("Failed to register memory region");
+                error_code = SYSTEM_ERROR;
+                goto RETURN;
+            }
+        }
+        resp.blocks.push_back({
+            .rkey = ptr.mr->rkey,
+            .remote_addr = (uintptr_t)ptr.ptr
+        });
     }
 
     //send the response
-    uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
-    remote_meta_response resp;
-    resp.blocks.push_back({
-        .rkey = ptr.mr->rkey,
-        .remote_addr = (uintptr_t)ptr.ptr
-    });
 
-    std::string out;
+RETURN:
+    resp.error_code = error_code;
     if (!serialize(resp, out)) {
         perror("Failed to serialize response");
         return SYSTEM_ERROR;
@@ -493,49 +507,53 @@ int do_rdma_read(client_t *client) {
 }
 
 int do_rdma_write(client_t *client) {
-    INFO("do rdma write keys: {}", client->remote_meta_req.keys[0]);
+    INFO("do rdma write keys: {}, remote_block_size: {}", client->remote_meta_req.keys.size(), client->remote_meta_req.block_size);
 
-    void * h_dst = malloc(client->remote_meta_req.block_size);
-    int ret;
-    if (h_dst == NULL) {
-        perror("Failed to allocate host memory");
-        return SYSTEM_ERROR;
-    }
-    //save to the map
-    kv_map[client->remote_meta_req.keys[0]] = {
-        .ptr = h_dst,
-        .size = client->remote_meta_req.block_size
-    };
-    
-    //
-
-    struct ibv_mr* mr = ibv_reg_mr(client->pd, h_dst, client->remote_meta_req.block_size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
-
-    if (!mr) {
-        perror("Failed to register MR");
-        return SYSTEM_ERROR;
-    }
-    //save to the map
-    //FIXME: only one key is sent
-    kv_map[client->remote_meta_req.keys[0]] = {
-        .ptr = h_dst,
-        .size = client->remote_meta_req.block_size,
-        .mr = mr
-    };
-
-    //send the response
-    uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
-    
-    
     remote_meta_response resp;
-    //FIXME: only one h_dst is sent
-    INFO("create buffer rkey: {}, remote_addr: {}", mr->rkey, (uintptr_t)h_dst);
-    resp.blocks.push_back({
-        .rkey = mr->rkey,
-        .remote_addr = (uintptr_t)h_dst
-    });
-
+    uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
     std::string out;
+    int error_code = TASK_ACCEPTED;
+
+    for (std::string &key : client->remote_meta_req.keys) {
+        void * h_dst = malloc(client->remote_meta_req.block_size);
+        //FIXME: only one h_dst is sent
+        if (h_dst == NULL) {
+            error_code = SYSTEM_ERROR;
+            goto RETURN;
+        }
+        //save to the map
+        INFO("HERE??");
+        kv_map[key] = {
+            .ptr = h_dst,
+            .size = client->remote_meta_req.block_size
+        };
+        INFO("before");
+        struct ibv_mr* mr = ibv_reg_mr(client->pd, h_dst, client->remote_meta_req.block_size, 
+                IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+        INFO("after");
+        if (!mr) {
+            perror("Failed to register MR");
+            error_code = SYSTEM_ERROR;
+            goto RETURN;
+        }
+        //save to the map
+        //FIXME: only one key is sent
+        kv_map[key] = {
+            .ptr = h_dst,
+            .size = client->remote_meta_req.block_size,
+            .mr = mr
+        };
+        INFO("create buffer rkey: {}, remote_addr: {}, size : {}", mr->rkey, (uintptr_t)h_dst, client->remote_meta_req.block_size);
+        resp.blocks.push_back({
+            .rkey = mr->rkey,
+            .remote_addr = (uintptr_t)h_dst
+        });
+    }
+        
+
+RETURN:
+    resp.error_code = error_code;
+    INFO("response error code {}", error_code);
     if (!serialize(resp, out)) {
         perror("Failed to serialize response");
         return SYSTEM_ERROR;

@@ -42,6 +42,9 @@ class InfinityConnection:
         ret = _infinity.init_connection(self.conn, ip_addr)
         if ret < 0:
             raise Exception("Failed to initialize connection")
+        if ret < _infinity.setup_rdma(self.conn):
+            raise Exception("Failed to setup RDMA")
+
         self.connected = True
 
     def _verify(self, kv_cache : torch.Tensor):
@@ -80,6 +83,32 @@ class InfinityConnection:
         if ret < 0:
             raise Exception(f"Failed to read to infinity, ret = {ret}")
         return
+    
+    def remote_write_kvcache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], block_size: int):
+        self._verify(kvcache)
+        ptr = kvcache.data_ptr()
+        element_size = kvcache.element_size()
+        #each offset should multiply by the element size
+        for i in range(len(blocks)):
+            key, offset = blocks[i]
+            blocks[i] = (key, offset * element_size)
+        ret = _infinity.rw_remote(self.conn, self.OP_RDMA_WRITE, blocks, block_size * element_size, ptr)
+        if ret < 0:
+            raise Exception(f"Failed to write to infinity, ret = {ret}")
+        return
+
+    def remote_read_kvcache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], block_size: int):
+        self._verify(kvcache)
+        ptr = kvcache.data_ptr()
+        element_size = kvcache.element_size()
+        #each offset should multiply by the element size
+        for i in range(len(blocks)):
+            key, offset = blocks[i]
+            blocks[i] = (key, offset * element_size)
+        ret = _infinity.rw_remote(self.conn, self.OP_RDMA_READ, blocks, block_size * element_size, ptr)
+        if ret < 0:
+            raise Exception(f"Failed to read to infinity, ret = {ret}")
+        return
 
     def close_connection(self):
         if self.connected:
@@ -90,3 +119,7 @@ class InfinityConnection:
     def sync_local(self):
         if self.connected:
             _infinity.sync_local(self.conn)
+    def sync_remote(self):
+        if self.connected:
+            _infinity.sync_remote(self.conn)
+        return

@@ -48,7 +48,7 @@ int main() {
     CHECK_CUDA(cudaMemcpy(d_ptr, h_data, size, cudaMemcpyHostToDevice));
 
     connection_t conn;
-    ret = init_connection(&conn);
+    ret = init_connection(&conn, "127.0.0.1");
     if (ret != 0) {
         printf("Failed to init connection\n");
         goto out;
@@ -106,5 +106,4 @@ out:
         CHECK_CUDA(cudaFree(d_ptr2));
     }
     printf("read/write local cpu memory success\n");
-    close_connection(&conn);
 }
