@@ -90,6 +90,7 @@ struct Client {
 };
 
 Client::~Client() {
+    DEBUG("free client resources");
     if (handle) {
         free(handle);
         handle = NULL;
@@ -102,6 +103,28 @@ Client::~Client() {
         cudaStreamDestroy(cuda_stream);
         INFO("destroy cuda stream");
     }
+    if (qp) {
+        struct ibv_qp_attr attr;
+        memset(&attr, 0, sizeof(attr));
+        attr.qp_state = IBV_QPS_ERR;
+        if (ibv_modify_qp(qp, &attr, IBV_QP_STATE)) {
+            ERROR("Failed to modify QP to ERR state");
+        }
+    }
+    if (qp) {
+        ibv_destroy_qp(qp);
+        qp = NULL;
+    }
+    if (pd) {
+        ibv_dealloc_pd(pd);
+        pd = NULL;
+    }
+
+    if (ib_ctx) {
+        ibv_close_device(ib_ctx);
+        ib_ctx = NULL;
+    }
+
 }
 typedef struct Client client_t;
 
@@ -123,7 +146,6 @@ void reset_client_read_state(client_t *client) {
 }
 
 void on_close(uv_handle_t* handle) {
-    INFO("free client...");
     client_t *client = (client_t *) handle->data;
     
     delete client;

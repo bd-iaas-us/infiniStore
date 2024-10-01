@@ -24,7 +24,12 @@ Connection::~Connection() {
     }
     //print ptr
     if (qp) {
-        printf("??");
+        struct ibv_qp_attr attr;
+        memset(&attr, 0, sizeof(attr));
+        attr.qp_state = IBV_QPS_ERR;
+        ibv_modify_qp(qp, &attr, IBV_QP_STATE);
+    }
+    if (qp) {
         ibv_destroy_qp(qp);
     }
     if (cq) {
