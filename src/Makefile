@@ -12,7 +12,7 @@ PYBIND_TARGET= _infinity$(PYTHON_EXTENSION_SUFFIX)
 SOURCES := $(wildcard *.cpp)
 OBJECTS = $(SOURCES:.cpp=.o)
 
-all:$(PYBIND_TARGET)
+all:$(PYBIND_TARGET) mempool.o
 
 -include $(OBJECTS:.o=.d)
 %.o: %.cpp
