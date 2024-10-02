@@ -62,38 +62,37 @@ class InfinityConnection:
             raise Exception("Failed to initialize local connection")
         self.local_connected = True
 
-    def write_kvcache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], block_size: int):
+    def write_kvcache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], page_size: int):
         self._verify(kvcache)
         ptr = kvcache.data_ptr()
         element_size = kvcache.element_size()
         #each offset should multiply by the element size
-        for i in range(len(blocks)):
-            key, offset = blocks[i]
-            blocks[i] = (key, offset * element_size)
+        blocks_in_bytes = [(key, offset * element_size) for key, offset in blocks]
         if self.local_connected:
-            ret = _infinity.rw_local(self.conn, self.OP_W, blocks, block_size * element_size, ptr)
+            ret = _infinity.rw_local(self.conn, self.OP_W, blocks_in_bytes, page_size * element_size, ptr)
             if ret < 0:
                 raise Exception(f"Failed to write to infinity, ret = {ret}")
         elif self.rdma_connected:
-            ret = _infinity.rw_rdma(self.conn, self.OP_RDMA_WRITE, blocks, block_size * element_size, ptr)
+            ret = _infinity.rw_rdma(self.conn, self.OP_RDMA_WRITE, blocks_in_bytes, page_size * element_size, ptr)
+            if ret < 0:
+                raise Exception(f"Failed to write to infinity, ret = {ret}")
         else:
             raise Exception("Not connected to any instance")
 
-    def read_kvcache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], block_size: int):
+    def read_kvcache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], page_size: int):
         self._verify(kvcache)
         ptr = kvcache.data_ptr()
         element_size = kvcache.element_size()
         #each offset should multiply by the element size
-        for i in range(len(blocks)):
-            key, offset = blocks[i]
-            blocks[i] = (key, offset * element_size)
-        
+        blocks_in_bytes = [(key, offset * element_size) for key, offset in blocks]
         if self.local_connected:
-            ret = _infinity.rw_local(self.conn, self.OP_R, blocks, block_size * element_size, ptr)
+            ret = _infinity.rw_local(self.conn, self.OP_R, blocks_in_bytes, page_size * element_size, ptr)
             if ret < 0:
                 raise Exception(f"Failed to read to infinity, ret = {ret}")
         elif self.rdma_connected:
-            ret = _infinity.rw_rdma(self.conn, self.OP_RDMA_READ, blocks, block_size * element_size, ptr)
+            ret = _infinity.rw_rdma(self.conn, self.OP_RDMA_READ, blocks_in_bytes, page_size * element_size, ptr)
+            if ret < 0:
+                raise Exception(f"Failed to read to infinity, ret = {ret}")
         else:
             raise Exception("Not connected to any instance")
     
