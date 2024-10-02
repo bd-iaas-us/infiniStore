@@ -35,6 +35,11 @@ struct PTR {
 
 std::unordered_map<std::string, PTR> kv_map;
 
+
+//global ibv context
+struct ibv_context *ib_ctx;
+struct ibv_pd *pd;
+
 int get_kvmap_len() {
     return kv_map.size();
 }
@@ -68,8 +73,6 @@ struct Client {
     rdma_conn_info_t remote_info;
     rdma_conn_info_t local_info;
 
-    struct ibv_context *ib_ctx;
-    struct ibv_pd *pd;
     struct ibv_cq *cq;
     struct ibv_qp *qp;
     bool rdma_connected = false;
@@ -106,16 +109,6 @@ Client::~Client() {
         ibv_destroy_qp(qp);
         qp = NULL;
     }
-    if (pd) {
-        ibv_dealloc_pd(pd);
-        pd = NULL;
-    }
-
-    if (ib_ctx) {
-        ibv_close_device(ib_ctx);
-        ib_ctx = NULL;
-    }
-
 }
 typedef struct Client client_t;
 
@@ -251,37 +244,36 @@ int do_write_kvcache(client_t *client) {
     return TASK_ACCEPTED;
 }
 
+int init_rdma_context() {
+    struct ibv_device** dev_list;
+    int num_devices;
+    dev_list = ibv_get_device_list(&num_devices);
+    if (!dev_list) {
+        perror("Failed to get RDMA devices list");
+        return -1;
+    }
+
+    ib_ctx = ibv_open_device(dev_list[0]);
+    if (!ib_ctx) {
+        perror("Failed to open device");
+        return -1;
+    }
+
+    pd = ibv_alloc_pd(ib_ctx);
+    if (!pd) {
+        perror("Failed to allocate PD");
+        return -1;
+    }
+    return 0;
+}
+
 int do_rdma_exchange(client_t *client) {
     INFO("do rdma exchange...");
 
     int ret;
     // RDMA setup if not already done
-    if (!client->ib_ctx) {
-        // Initialize RDMA resources
-        struct ibv_device** dev_list;
-        int num_devices;
-
-        dev_list = ibv_get_device_list(&num_devices);
-        if (!dev_list) {
-            perror("Failed to get RDMA devices list");
-            return SYSTEM_ERROR;
-        }
-
-        client->ib_ctx = ibv_open_device(dev_list[0]);
-        if (!client->ib_ctx) {
-            perror("Failed to open RDMA device");
-            ibv_free_device_list(dev_list);
-            return SYSTEM_ERROR;
-        }
-        ibv_free_device_list(dev_list);
-
-        client->pd = ibv_alloc_pd(client->ib_ctx);
-        if (!client->pd) {
-            perror("Failed to allocate PD");
-            return SYSTEM_ERROR;
-        }
-
-        client->cq = ibv_create_cq(client->ib_ctx, 1025, NULL, NULL, 0);
+    if (!client->qp) {
+        client->cq = ibv_create_cq(ib_ctx, 1025, NULL, NULL, 0);
         if (!client->cq) {
             perror("Failed to create CQ");
             return SYSTEM_ERROR;
@@ -297,7 +289,7 @@ int do_rdma_exchange(client_t *client) {
         qp_init_attr.cap.max_send_sge = 1;
         qp_init_attr.cap.max_recv_sge = 1;
 
-        client->qp = ibv_create_qp(client->pd, &qp_init_attr);
+        client->qp = ibv_create_qp(pd, &qp_init_attr);
         if (!client->qp) {
             perror("Failed to create QP");
             return SYSTEM_ERROR;
@@ -319,12 +311,12 @@ int do_rdma_exchange(client_t *client) {
 
         // Get local connection information
         struct ibv_port_attr port_attr;
-        if (ibv_query_port(client->ib_ctx, 1, &port_attr)) {
+        if (ibv_query_port(ib_ctx, 1, &port_attr)) {
             perror("Failed to query port");
             return SYSTEM_ERROR;
         }
 
-        int gidx = ibv_find_sgid_type(client->ib_ctx, 1, IBV_GID_TYPE_ROCE_V2, AF_INET);
+        int gidx = ibv_find_sgid_type(ib_ctx, 1, IBV_GID_TYPE_ROCE_V2, AF_INET);
         if (gidx < 0) {
             perror("Failed to find GID");
             return -1;
@@ -334,7 +326,7 @@ int do_rdma_exchange(client_t *client) {
 
         union ibv_gid gid;
         //get gid
-        if (ibv_query_gid(client->ib_ctx, 1, gidx, &gid)) {
+        if (ibv_query_gid(ib_ctx, 1, gidx, &gid)) {
             perror("Failed to get GID");
             return -1;
         }
@@ -448,7 +440,7 @@ int do_rdma_read(client_t *client) {
         }
         PTR ptr = kv_map[key];
         if (ptr.mr == NULL) {
-            ptr.mr = ibv_reg_mr(client->pd, ptr.ptr, ptr.size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+            ptr.mr = ibv_reg_mr(pd, ptr.ptr, ptr.size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
             if (ptr.mr == NULL) {
                 perror("Failed to register memory region");
                 error_code = SYSTEM_ERROR;
@@ -503,7 +495,7 @@ int do_rdma_write(client_t *client) {
             .ptr = h_dst,
             .size = client->remote_meta_req.block_size
         };
-        struct ibv_mr* mr = ibv_reg_mr(client->pd, h_dst, client->remote_meta_req.block_size, 
+        struct ibv_mr* mr = ibv_reg_mr(pd, h_dst, client->remote_meta_req.block_size, 
                 IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
         if (!mr) {
             perror("Failed to register MR");
@@ -716,6 +708,8 @@ void on_new_connection(uv_stream_t* server, int status) {
 
 int register_server(unsigned long loop_ptr) {
 
+    signal(SIGSEGV, signal_handler);
+
     loop = (uv_loop_t *)loop_ptr;
     assert(loop != NULL);
     uv_tcp_init(loop, &server);
@@ -726,10 +720,12 @@ int register_server(unsigned long loop_ptr) {
     int r = uv_listen((uv_stream_t*) &server, 128, on_new_connection);
     if (r) {
         fprintf(stderr, "Listen error: %s\n", uv_strerror(r));
-        return 1;
+        return -1;
     }
 
-    signal(SIGSEGV, signal_handler);
+    if (init_rdma_context() < 0) {
+        return -1;
+    }
 
     INFO("register server done");
 
