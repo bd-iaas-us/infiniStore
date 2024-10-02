@@ -377,17 +377,7 @@ void do_send(client_t *client, void* buf, size_t size) {
 }
 
 int do_sync_stream(client_t *client) {
-    // // Send the response to the client
-    // uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
-    // int ret = client->remain;
-    // client->send_buffer = (char*)realloc(client->send_buffer, RETURN_CODE_SIZE);
-    // memcpy(client->send_buffer, &ret, RETURN_CODE_SIZE);
-    // write_req->data = client;
-    // uv_buf_t wbuf = uv_buf_init(client->send_buffer, RETURN_CODE_SIZE);
-    // uv_write(write_req, (uv_stream_t *)client->handle, &wbuf, 1, on_write);
-
     do_send(client, &client->remain, RETURN_CODE_SIZE);
-
     // Reset client state
     reset_client_read_state(client);
     return 0;
@@ -489,15 +479,6 @@ int handle_request(client_t *client) {
     }
     
     INFO("return code: {}", return_code);
-
-    // //if application error or success, send the return code
-    // uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
-    // client->send_buffer = (char*)realloc(client->send_buffer, RETURN_CODE_SIZE);
-    // memcpy(client->send_buffer, &return_code, RETURN_CODE_SIZE);
-    // write_req->data = client;
-    // uv_buf_t wbuf = uv_buf_init(client->send_buffer, RETURN_CODE_SIZE);
-    // uv_write(write_req, (uv_stream_t *)client->handle, &wbuf, 1, on_write);
-
     do_send(client, &return_code, RETURN_CODE_SIZE);
 
     //success
