@@ -99,7 +99,7 @@ class InfinityConnection:
     def sync(self):
         ret = 0
         if self.local_connected:
-            ret = _infinity.sync_local(self.conn)
+            return _infinity.sync_local(self.conn)
         elif self.rdma_connected:
             ret = _infinity.sync_rdma(self.conn)
         else:

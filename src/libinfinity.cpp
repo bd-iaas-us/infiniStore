@@ -422,12 +422,9 @@ int sync_local(connection_t *conn) {
     };
     send_exact(conn->sock, &header, FIXED_HEADER_SIZE);
 
-    int return_code;
+    int return_code = -1;
     recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL);
-    if (return_code != FINISH) {
-        return -1;
-    }
-    return 0;
+    return return_code;
 }
 
 int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int block_size, void * ptr) {
