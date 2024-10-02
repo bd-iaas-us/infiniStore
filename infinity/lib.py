@@ -97,12 +97,16 @@ class InfinityConnection:
             raise Exception("Not connected to any instance")
     
     def sync(self):
+        ret = 0
         if self.local_connected:
             return _infinity.sync_local(self.conn)
         elif self.rdma_connected:
-            _infinity.sync_rdma(self.conn)
+            ret = _infinity.sync_rdma(self.conn)
         else:
             raise Exception("Not connected to any instance")
+        
+        if ret < 0:
+            raise Exception(f"Failed to sync to infinity, ret = {ret}")
         return
 
 

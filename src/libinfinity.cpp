@@ -93,7 +93,7 @@ int init_rdma_resources(connection_t *conn) {
     }
 
     // Create Completion Queue
-    conn->cq = ibv_create_cq(conn->ib_ctx, 10, NULL, NULL, 0);
+    conn->cq = ibv_create_cq(conn->ib_ctx, 1025, NULL, NULL, 0);
     if (!conn->cq) {
         perror("Failed to create CQ");
         return -1;
@@ -104,8 +104,8 @@ int init_rdma_resources(connection_t *conn) {
     qp_init_attr.send_cq = conn->cq;
     qp_init_attr.recv_cq = conn->cq;
     qp_init_attr.qp_type = IBV_QPT_RC; // Reliable Connection
-    qp_init_attr.cap.max_send_wr = 10;
-    qp_init_attr.cap.max_recv_wr = 10;
+    qp_init_attr.cap.max_send_wr = 1024;
+    qp_init_attr.cap.max_recv_wr = 1024;
     qp_init_attr.cap.max_send_sge = 1;
     qp_init_attr.cap.max_recv_sge = 1;
 
@@ -205,13 +205,13 @@ int perform_rdma_read(connection_t *conn, uintptr_t src_buf, size_t src_size,
 
 int sync_rdma(connection_t *conn) {
     //TODO: implement this function
-    struct ibv_wc wc[10];
+    struct ibv_wc wc[32];
     int total_completions = conn->rdma_write_count + conn->rdma_read_count;
     int num_completions = 0;
 
     printf("Waiting for %d completions\n", total_completions);
     while (num_completions < total_completions) {
-        int waiting_completions = MIN(10, total_completions - num_completions);
+        int waiting_completions = MIN(32, total_completions - num_completions);
         int ne = ibv_poll_cq(conn->cq, waiting_completions, wc);
         if (ne < 0) {
             fprintf(stderr, "Failed to poll CQ\n");
@@ -237,7 +237,8 @@ int sync_rdma(connection_t *conn) {
 
 int perform_rdma_write(connection_t *conn, char * src_buf, size_t src_size,
                        uintptr_t dst_buf, size_t dst_size, uint32_t rkey) {
-    printf("performing rdma write\n");
+    //printf("performing rdma write on %02x\n", src_buf);
+
     struct ibv_mr *mr = NULL;
     //if src_buf is not is conn->remote_mr, create a new mr
     if (conn->local_mr.find((uintptr_t)src_buf) == conn->local_mr.end()) {
@@ -273,7 +274,7 @@ int perform_rdma_write(connection_t *conn, char * src_buf, size_t src_size,
     struct ibv_send_wr *bad_wr = NULL;
     int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
     if (ret) {
-        perror("Failed to post RDMA write");
+        fprintf(stderr, "Failed to post RDMA write: %s\n", strerror(ret));
         return -1;
     }
 
@@ -493,12 +494,17 @@ int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int
 
     for (int i = 0; i < response.blocks.size(); i++) {
         printf("remote response: addr: %llu, rkey: %d\n", response.blocks[i].remote_addr, response.blocks[i].rkey);
+        int ret;
         if (op == OP_RDMA_WRITE) {
-            perform_rdma_write(conn, (char *)ptr + blocks[i].offset, block_size, response.blocks[i].remote_addr, block_size, response.blocks[i].rkey);
+            ret = perform_rdma_write(conn, (char *)ptr + blocks[i].offset, block_size, response.blocks[i].remote_addr, block_size, response.blocks[i].rkey);
         } else if (op == OP_RDMA_READ) {
-            perform_rdma_read(conn, response.blocks[i].remote_addr, block_size, (char *)ptr + blocks[i].offset, block_size, response.blocks[i].rkey);
+            ret = perform_rdma_read(conn, response.blocks[i].remote_addr, block_size, (char *)ptr + blocks[i].offset, block_size, response.blocks[i].rkey);
         } else {
             fprintf(stderr, "Invalid operation\n");
+            return -1;
+        }
+        if (ret < 0) {
+            fprintf(stderr, "Failed to perform RDMA operation\n");
             return -1;
         }
     }

@@ -281,7 +281,7 @@ int do_rdma_exchange(client_t *client) {
             return SYSTEM_ERROR;
         }
 
-        client->cq = ibv_create_cq(client->ib_ctx, 10, NULL, NULL, 0);
+        client->cq = ibv_create_cq(client->ib_ctx, 1025, NULL, NULL, 0);
         if (!client->cq) {
             perror("Failed to create CQ");
             return SYSTEM_ERROR;
@@ -292,8 +292,8 @@ int do_rdma_exchange(client_t *client) {
         qp_init_attr.send_cq = client->cq;
         qp_init_attr.recv_cq = client->cq;
         qp_init_attr.qp_type = IBV_QPT_RC; // Reliable Connection
-        qp_init_attr.cap.max_send_wr = 10;
-        qp_init_attr.cap.max_recv_wr = 10;
+        qp_init_attr.cap.max_send_wr = 1024;
+        qp_init_attr.cap.max_recv_wr = 1024;
         qp_init_attr.cap.max_send_sge = 1;
         qp_init_attr.cap.max_recv_sge = 1;
 
@@ -302,7 +302,6 @@ int do_rdma_exchange(client_t *client) {
             perror("Failed to create QP");
             return SYSTEM_ERROR;
         }
-
         // Modify QP to INIT state
         struct ibv_qp_attr attr = {};
         attr.qp_state = IBV_QPS_INIT;
