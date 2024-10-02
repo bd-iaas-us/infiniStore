@@ -174,6 +174,7 @@ void after_ipc_close_completion(uv_work_t* req, int status) {
     wqueue_data_t *wqueue_data = (wqueue_data_t *)req->data;
     wqueue_data->client->remain--;
     INFO("after_ipc_close_completion done");
+    delete wqueue_data;
 }
 
 int do_read_kvcache(client_t *client) {
