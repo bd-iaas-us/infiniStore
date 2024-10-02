@@ -348,7 +348,6 @@ int do_rdma_exchange(client_t *client) {
             perror("Failed to create QP");
             return SYSTEM_ERROR;
         }
-
         // Modify QP to INIT state
         struct ibv_qp_attr attr = {};
         attr.qp_state = IBV_QPS_INIT;
