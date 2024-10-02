@@ -5,19 +5,8 @@ import fastapi
 from fastapi import FastAPI, Request
 import uvicorn
 import torch
-from pydantic import BaseModel
-
-
-
 
 app = FastAPI()
-
-class KeyOpStatusRequest(BaseModel):
-    key: str
-
-class KeyOpStatusResponse(BaseModel):
-    status: int
-
 
 @app.get("/status")
 async def status():
