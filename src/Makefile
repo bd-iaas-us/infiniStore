@@ -12,13 +12,13 @@ PYBIND_TARGET= _infinity$(PYTHON_EXTENSION_SUFFIX)
 SOURCES := $(wildcard *.cpp)
 OBJECTS = $(SOURCES:.cpp=.o)
 
-all:$(PYBIND_TARGET) mempool.o
+all:$(PYBIND_TARGET)
 
 -include $(OBJECTS:.o=.d)
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -fPIC -c $< -o $@
 
-$(PYBIND_TARGET): pybind.cpp libinfinity.o utils.o protocol.o infinity.o log.o ibv_helper.o
+$(PYBIND_TARGET): pybind.cpp libinfinity.o utils.o protocol.o infinity.o log.o ibv_helper.o mempool.o
 	$(CXX) $(CXXFLAGS) $(INCLUDES) --shared -fPIC $(PYBIND11_INCLUDES) $^ \
 	-o $(PYBIND_TARGET) $(LDFLAGS) $(LIBS)
 	cp $(PYBIND_TARGET) ../infinity/

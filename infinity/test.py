@@ -16,9 +16,10 @@ def run(conn):
     with DisableTorchCaching():
         dst_tensor = torch.zeros(4096, device="cuda:2", dtype=torch.float32)
 
-
+    now=time.time()
     conn.read_cache(dst_tensor, [("key1", 0), ("key2", 1024)], 1024)
     conn.sync()
+    print(f"read elapse time is {time.time() - now}")
 
 
     assert torch.equal(src_tensor[0:1024].cpu(), dst_tensor[0:1024].cpu())

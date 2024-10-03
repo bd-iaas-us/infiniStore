@@ -21,23 +21,25 @@
 #include "ibv_helper.h"
 #include "protocol.h"
 #include "utils.h"
+#include "mempool.h"
 
-uv_loop_t *loop;
-uv_tcp_t server;
+
 #define BUFFER_SIZE (64<<10)
 
 
 struct PTR {
     void *ptr;
     size_t size;
-    struct ibv_mr *mr;
+    int pool_idx;
 };
 
 std::unordered_map<std::string, PTR> kv_map;
-
+uv_loop_t *loop;
+uv_tcp_t server;
 //global ibv context
 struct ibv_context *ib_ctx;
 struct ibv_pd *pd;
+MM *mm;
 
 int get_kvmap_len() {
     return kv_map.size();
@@ -163,6 +165,7 @@ void wait_for_ipc_close_completion(uv_work_t* req) {
 }
 
 void after_ipc_close_completion(uv_work_t* req, int status) {
+    ERROR("after_ipc_close_comp");
     wqueue_data_t *wqueue_data = (wqueue_data_t *)req->data;
     wqueue_data->client->remain--;
     INFO("after_ipc_close_completion done");
@@ -213,15 +216,13 @@ int do_write_cache(client_t *client) {
     void* d_ptr;
     CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, meta->ipc_handle, cudaIpcMemLazyEnablePeerAccess));
     
-    //TODO: do we need to synchronize here?
-    //CHECK_CUDA(cudaDeviceSynchronize());
-
-        for (auto &block : meta->blocks) {
+    for (auto &block : meta->blocks) {
         //pull data from local device to CPU host
         void * h_dst;
-        CHECK_CUDA(cudaHostAlloc((void**)&h_dst, meta->block_size, cudaHostAllocDefault));
+        int pool_idx;
+        h_dst = mm->allocate(meta->block_size, &pool_idx);
         if (h_dst == NULL) {
-            perror("Failed to allocat host memroy");
+            ERROR("Failed to allocat host memroy");
             CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
             return SYSTEM_ERROR;
         }
@@ -231,7 +232,7 @@ int do_write_cache(client_t *client) {
         kv_map[block.key] = {
             .ptr = h_dst,
             .size = meta->block_size,
-            .mr = NULL,
+            .pool_idx = pool_idx
         };
     }
     client->remain++;
@@ -248,19 +249,19 @@ int init_rdma_context() {
     int num_devices;
     dev_list = ibv_get_device_list(&num_devices);
     if (!dev_list) {
-        perror("Failed to get RDMA devices list");
+        ERROR("Failed to get RDMA devices list");
         return -1;
     }
 
     ib_ctx = ibv_open_device(dev_list[0]);
     if (!ib_ctx) {
-        perror("Failed to open device");
+        ERROR("Failed to open device");
         return -1;
     }
 
     pd = ibv_alloc_pd(ib_ctx);
     if (!pd) {
-        perror("Failed to allocate PD");
+        ERROR("Failed to allocate PD");
         return -1;
     }
     return 0;
@@ -274,7 +275,7 @@ int do_rdma_exchange(client_t *client) {
     if (!client->qp) {
         client->cq = ibv_create_cq(ib_ctx, 1025, NULL, NULL, 0);
         if (!client->cq) {
-            perror("Failed to create CQ");
+            ERROR("Failed to create CQ");
             return SYSTEM_ERROR;
         }
 
@@ -290,7 +291,7 @@ int do_rdma_exchange(client_t *client) {
 
         client->qp = ibv_create_qp(pd, &qp_init_attr);
         if (!client->qp) {
-            perror("Failed to create QP");
+            ERROR("Failed to create QP");
             return SYSTEM_ERROR;
         }
         // Modify QP to INIT state
@@ -304,20 +305,20 @@ int do_rdma_exchange(client_t *client) {
 
         ret = ibv_modify_qp(client->qp, &attr, flags);
         if (ret) {
-            perror("Failed to modify QP to INIT");
+            ERROR("Failed to modify QP to INIT");
             return SYSTEM_ERROR;
         }
 
         // Get local connection information
         struct ibv_port_attr port_attr;
         if (ibv_query_port(ib_ctx, 1, &port_attr)) {
-            perror("Failed to query port");
+            ERROR("Failed to query port");
             return SYSTEM_ERROR;
         }
 
         int gidx = ibv_find_sgid_type(ib_ctx, 1, IBV_GID_TYPE_ROCE_V2, AF_INET);
         if (gidx < 0) {
-            perror("Failed to find GID");
+            ERROR("Failed to find GID");
             return -1;
         }
 
@@ -326,7 +327,7 @@ int do_rdma_exchange(client_t *client) {
         union ibv_gid gid;
         //get gid
         if (ibv_query_gid(ib_ctx, 1, gidx, &gid)) {
-            perror("Failed to get GID");
+            ERROR("Failed to get GID");
             return -1;
         }
 
@@ -372,7 +373,7 @@ int do_rdma_exchange(client_t *client) {
 
     ret = ibv_modify_qp(client->qp, &attr, flags);
     if (ret) {
-        perror("Failed to modify QP to RTR");
+        ERROR("Failed to modify QP to RTR");
         return SYSTEM_ERROR;
     }
 
@@ -391,7 +392,7 @@ int do_rdma_exchange(client_t *client) {
 
     ret = ibv_modify_qp(client->qp, &attr, flags);
     if (ret) {
-        perror("Failed to modify QP to RTS");
+        ERROR("Failed to modify QP to RTS");
         return SYSTEM_ERROR;
     }
     INFO("RDMA exchange done");
@@ -424,6 +425,7 @@ int do_sync_stream(client_t *client) {
 //TODO: refactor this function to use RDMA_WRITE_IMM.
 int do_rdma_read(client_t *client) {
     INFO("do rdma read keys: {}", client->remote_meta_req.keys.size());
+    auto start = std::chrono::high_resolution_clock::now();
 
     int error_code = TASK_ACCEPTED;
     remote_meta_response resp;
@@ -438,16 +440,9 @@ int do_rdma_read(client_t *client) {
             goto RETURN;
         }
         PTR ptr = kv_map[key];
-        if (ptr.mr == NULL) {
-            ptr.mr = ibv_reg_mr(pd, ptr.ptr, ptr.size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
-            if (ptr.mr == NULL) {
-                perror("Failed to register memory region");
-                error_code = SYSTEM_ERROR;
-                goto RETURN;
-            }
-        }
+
         resp.blocks.push_back({
-            .rkey = ptr.mr->rkey,
+            .rkey = mm->get_rkey(ptr.pool_idx),
             .remote_addr = (uintptr_t)ptr.ptr
         });
     }
@@ -457,7 +452,7 @@ int do_rdma_read(client_t *client) {
 RETURN:
     resp.error_code = error_code;
     if (!serialize(resp, out)) {
-        perror("Failed to serialize response");
+        ERROR("Failed to serialize response");
         return SYSTEM_ERROR;
     }
     client->send_buffer = (char*) realloc(client->send_buffer, out.size() + RETURN_CODE_SIZE);
@@ -471,19 +466,22 @@ RETURN:
 
     INFO("send response: size:{}", size);
     reset_client_read_state(client);
+    INFO("do rdma read runtime: {} ms", std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - start).count());
     return 0;
 }
 
 int do_rdma_write(client_t *client) {
     INFO("do rdma write keys: {}, remote_block_size: {}", client->remote_meta_req.keys.size(), client->remote_meta_req.block_size);
-
     remote_meta_response resp;
     uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
     std::string out;
     int error_code = TASK_ACCEPTED;
 
     for (std::string &key : client->remote_meta_req.keys) {
-        void * h_dst = malloc(client->remote_meta_req.block_size);
+        
+        void * h_dst;
+        int pool_idx;
+        h_dst = mm->allocate(client->remote_meta_req.block_size, &pool_idx);
         //FIXME: only one h_dst is sent
         if (h_dst == NULL) {
             error_code = SYSTEM_ERROR;
@@ -492,25 +490,13 @@ int do_rdma_write(client_t *client) {
         //save to the map
         kv_map[key] = {
             .ptr = h_dst,
-            .size = client->remote_meta_req.block_size
-        };
-        struct ibv_mr* mr = ibv_reg_mr(pd, h_dst, client->remote_meta_req.block_size, 
-                IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
-        if (!mr) {
-            perror("Failed to register MR");
-            error_code = SYSTEM_ERROR;
-            goto RETURN;
-        }
-        //save to the map
-        //FIXME: only one key is sent
-        kv_map[key] = {
-            .ptr = h_dst,
             .size = client->remote_meta_req.block_size,
-            .mr = mr
+            .pool_idx = pool_idx
         };
-        INFO("create buffer rkey: {}, remote_addr: {}, size : {}", mr->rkey, (uintptr_t)h_dst, client->remote_meta_req.block_size);
+        INFO("rkey: {}, local_addr: {}, size : {}", mm->get_rkey(pool_idx), (uintptr_t)h_dst, client->remote_meta_req.block_size);
+        
         resp.blocks.push_back({
-            .rkey = mr->rkey,
+            .rkey = mm->get_rkey(pool_idx),
             .remote_addr = (uintptr_t)h_dst
         });
     }
@@ -520,7 +506,7 @@ RETURN:
     resp.error_code = error_code;
     INFO("response error code {}", error_code);
     if (!serialize(resp, out)) {
-        perror("Failed to serialize response");
+        ERROR("Failed to serialize response");
         return SYSTEM_ERROR;
     }
     client->send_buffer = (char*) realloc(client->send_buffer, out.size() + RETURN_CODE_SIZE);
@@ -533,7 +519,7 @@ RETURN:
     write_req->data = client;
     uv_write(write_req, (uv_stream_t*)client->handle, &wbuf, 1, on_write);
 
-    INFO("send response: size:{}", size);
+    DEBUG("send response: size:{}", size);
     reset_client_read_state(client);
     return 0;
 }
@@ -643,7 +629,6 @@ void on_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
                 offset += to_copy;
                 if (client->bytes_read == client->expected_bytes) {
                     DEBUG("body read done, size {}", client->expected_bytes);
-                    print_vector(client->recv_buffer, 10);
                     switch (client->header.op) {
                         case OP_R:
                         case OP_W:
@@ -705,7 +690,7 @@ void on_new_connection(uv_stream_t* server, int status) {
     }
 }
 
-int register_server(unsigned long loop_ptr) {
+int register_server(unsigned long loop_ptr, size_t prealloc_size) {
 
     signal(SIGSEGV, signal_handler);
 
@@ -725,6 +710,7 @@ int register_server(unsigned long loop_ptr) {
     if (init_rdma_context() < 0) {
         return -1;
     }
+    mm = new MM(prealloc_size, 32<<10, pd);
 
     INFO("register server done");
 

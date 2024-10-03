@@ -161,7 +161,6 @@ int modify_qp_to_init(struct ibv_qp *qp) {
 int perform_rdma_read(connection_t *conn, uintptr_t src_buf, size_t src_size,
                       char * dst_buf, size_t dst_size, uint32_t rkey) {
 
-
     struct ibv_mr *mr = NULL;
     if (conn->local_mr.find((uintptr_t)dst_buf) == conn->local_mr.end()) {
         struct ibv_mr *mr = ibv_reg_mr(conn->pd, dst_buf, dst_size,
@@ -231,7 +230,6 @@ int sync_rdma(connection_t *conn) {
 
     conn->rdma_write_count = 0;
     conn->rdma_read_count = 0;
-
     return 0;
 }
 

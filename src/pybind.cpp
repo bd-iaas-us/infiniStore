@@ -7,7 +7,7 @@
 #include <iostream>
 
 namespace py = pybind11;
-extern int register_server(unsigned long loop_ptr);
+extern int register_server(unsigned long loop_ptr, size_t prealloc_size);
 
 int rw_local_wrapper(connection_t *conn, char op, const std::vector<std::tuple<std::string, unsigned long>> &blocks, \
             int block_size, uintptr_t ptr) {

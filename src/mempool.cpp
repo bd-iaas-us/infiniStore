@@ -5,6 +5,9 @@
 #include <cstring>
 #include "utils.h"
 #include "log.h"
+#include <sys/mman.h>
+#include <assert.h>
+
 
 MemoryPool::MemoryPool(size_t pool_size, size_t block_size, struct ibv_pd* pd)
     : pool_(nullptr), pool_size_(pool_size), block_size_(block_size), pd_(pd), mr_(nullptr) {
@@ -13,9 +16,10 @@ MemoryPool::MemoryPool(size_t pool_size, size_t block_size, struct ibv_pd* pd)
     total_blocks_ = pool_size_ / block_size_;
     assert(pool_size % block_size == 0);
 
-
-    // 分配页锁定内存
+    INFO("Memory pool size: {} bytes, block size: {} bytes, total blocks: {}, it may take a while", pool_size_, block_size_, total_blocks_);
     CHECK_CUDA(cudaMallocHost(&pool_, pool_size_));
+    INFO("Memory pool allocated at {}", pool_);
+
 
 
     // 注册内存区域
@@ -37,8 +41,11 @@ MemoryPool::~MemoryPool() {
 }
 
 void* MemoryPool::allocate(size_t size) {
-    assert(size % block_size_ == 0);
+
     size_t required_blocks = size / block_size_;
+    if (size % block_size_ != 0) {
+        required_blocks += 1; // round up
+    }
 
     if (required_blocks > total_blocks_) {
         return nullptr;
@@ -87,8 +94,10 @@ void* MemoryPool::allocate(size_t size) {
 
 void MemoryPool::deallocate(void* ptr, size_t size) {
     
-    assert(size % block_size_ == 0);
     size_t blocks_to_free = size / block_size_;
+    if (size % block_size_ != 0) {
+        blocks_to_free += 1; // round up
+    }
 
     uintptr_t offset = static_cast<char*>(ptr) - static_cast<char*>(pool_);
     if (offset % block_size_ != 0) {
@@ -117,3 +126,19 @@ void MemoryPool::deallocate(void* ptr, size_t size) {
         }
     }
 }
+
+void * MM::allocate(size_t size, int *pool_idx) {
+    //first fit. TODO: binaray search
+    for (int i = 0; i < mempools_.size(); ++i) {
+        void* ptr = mempools_[i]->allocate(size);
+        if (ptr) {
+            *pool_idx = i;
+            return ptr;
+        }
+    }
+    return nullptr;
+}
+void MM::deallocate(void* ptr, size_t size, int pool_idx) {
+    mempools_[pool_idx]->deallocate(ptr, size);
+}
+

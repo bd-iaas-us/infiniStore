@@ -6,7 +6,7 @@ from typing import List, Tuple
 import subprocess
 
 
-def register_server(loop):
+def register_server(loop, prealloc_size):
     """
     Registers a server with the given event loop.
 
@@ -27,7 +27,7 @@ def register_server(loop):
 
     #from cpython.pycapsule import PyCapsule_GetPointer
     #<uint64_t>PyCapsule_GetPointer(obj, NULL)
-    return _infinity.register_server(loop_ptr)
+    return _infinity.register_server(loop_ptr, prealloc_size)
 
 
 def _kernel_modules():
