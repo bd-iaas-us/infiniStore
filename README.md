@@ -12,7 +12,7 @@ apt install libuv1-dev
 apt install libgtest-dev
 apt install libmsgpack-dev
 apt install libspdlog-dev libfmt-dev
-apt install ibverbs-utils
+apt install ibverbs-utils libibverbs-dev
 pip install -e .
 ```
 ## run

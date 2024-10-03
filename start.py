@@ -37,6 +37,7 @@ def check_p2p_access():
 if __name__ == "__main__":
 
     check_p2p_access()
+    infinity.check_infinity_supported()
 
     loop = uvloop.new_event_loop()
     asyncio.set_event_loop(loop)
