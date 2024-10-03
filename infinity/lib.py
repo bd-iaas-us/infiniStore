@@ -62,7 +62,7 @@ class InfinityConnection:
             raise Exception("Failed to initialize local connection")
         self.local_connected = True
 
-    def write_kvcache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], page_size: int):
+    def write_cache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], page_size: int):
         self._verify(kvcache)
         ptr = kvcache.data_ptr()
         element_size = kvcache.element_size()
@@ -79,7 +79,7 @@ class InfinityConnection:
         else:
             raise Exception("Not connected to any instance")
 
-    def read_kvcache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], page_size: int):
+    def read_cache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], page_size: int):
         self._verify(kvcache)
         ptr = kvcache.data_ptr()
         element_size = kvcache.element_size()
