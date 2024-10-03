@@ -11,10 +11,6 @@ import torch
 
 app = FastAPI()
 
-@app.get("/status")
-async def status():
-    return {"Hello": "World"}
-
 @app.get("/kvmapSize")
 async def read_status():
     return infinity._infinity.get_kvmap_len()

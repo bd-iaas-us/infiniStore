@@ -159,21 +159,9 @@ int modify_qp_to_init(struct ibv_qp *qp) {
 
 
 int perform_rdma_read(connection_t *conn, uintptr_t src_buf, size_t src_size,
-                      char * dst_buf, size_t dst_size, uint32_t rkey) {
-
-    struct ibv_mr *mr = NULL;
-    if (conn->local_mr.find((uintptr_t)dst_buf) == conn->local_mr.end()) {
-        struct ibv_mr *mr = ibv_reg_mr(conn->pd, dst_buf, dst_size,
-                                       IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-        if (!mr) {
-            ERROR("Failed to register MR");
-            return -1;
-        }
-        conn->local_mr[(uintptr_t)dst_buf] = mr;
-    }
+                      char * dst_buf, size_t dst_size, uint32_t rkey, struct ibv_mr *mr) {
     
-    mr = conn->local_mr[(uintptr_t)dst_buf];
-    
+    assert(mr != NULL);
 
     // Prepare RDMA read operation
     struct ibv_sge sge = {};
@@ -235,21 +223,7 @@ int sync_rdma(connection_t *conn) {
 
 
 int perform_rdma_write(connection_t *conn, char * src_buf, size_t src_size,
-                       uintptr_t dst_buf, size_t dst_size, uint32_t rkey) {
-    struct ibv_mr *mr = NULL;
-    //if src_buf is not is conn->remote_mr, create a new mr
-    if (conn->local_mr.find((uintptr_t)src_buf) == conn->local_mr.end()) {
-        struct ibv_mr *mr = ibv_reg_mr(conn->pd, src_buf, src_size,
-                                       IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-        if (!mr) {
-            ERROR("Failed to register MR");
-            return -1;
-        }
-        conn->local_mr[(uintptr_t)src_buf] = mr;
-    }
-
-    mr = conn->local_mr[(uintptr_t)src_buf];
-    
+                       uintptr_t dst_buf, size_t dst_size, uint32_t rkey, struct ibv_mr *mr) {
 
     assert(mr != NULL);
 
@@ -489,13 +463,25 @@ int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int
         return -1;
     }
 
+    struct ibv_mr *mr = NULL;
+    if (conn->local_mr.find((uintptr_t)ptr) == conn->local_mr.end()) {
+        struct ibv_mr *mr = ibv_reg_mr(conn->pd, ptr, block_size * blocks.size(),
+                                       IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+        if (!mr) {
+            ERROR("Failed to register MR");
+            return -1;
+        }
+        conn->local_mr[(uintptr_t)ptr] = mr;
+    }
+    mr = conn->local_mr[(uintptr_t)ptr];
+
     for (int i = 0; i < response.blocks.size(); i++) {
         DEBUG("remote response: addr: {}, rkey: {}", response.blocks[i].remote_addr, response.blocks[i].rkey);
         int ret;
         if (op == OP_RDMA_WRITE) {
-            ret = perform_rdma_write(conn, (char *)ptr + blocks[i].offset, block_size, response.blocks[i].remote_addr, block_size, response.blocks[i].rkey);
+            ret = perform_rdma_write(conn, (char *)ptr + blocks[i].offset, block_size, response.blocks[i].remote_addr, block_size, response.blocks[i].rkey, mr);
         } else if (op == OP_RDMA_READ) {
-            ret = perform_rdma_read(conn, response.blocks[i].remote_addr, block_size, (char *)ptr + blocks[i].offset, block_size, response.blocks[i].rkey);
+            ret = perform_rdma_read(conn, response.blocks[i].remote_addr, block_size, (char *)ptr + blocks[i].offset, block_size, response.blocks[i].rkey, mr);
         } else {
             ERROR("Invalid operation");
             return -1;
