@@ -18,7 +18,7 @@ Error code:
 +--------------------+
 
 */
-#define PORT 12345
+#define PORT 22345
 
 #define MAGIC 0xdeadbeef
 #define MAGIC_SIZE 4

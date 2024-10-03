@@ -53,12 +53,10 @@ void print_rdma_conn_info(rdma_conn_info_t *info, bool is_remote) {
             gid_str += ":";
         }
     }
-
-    //INFO("rdma_conn_info: psn: {}, qpn: {}, gid: {}", info->psn, info->qpn, gid_str);
     if (is_remote) {
-        INFO("remote rdma_conn_info: psn: {}, qpn: {}, gid: {}", info->psn, info->qpn, gid_str);
+        DEBUG("remote rdma_conn_info: psn: {}, qpn: {}, gid: {}", info->psn, info->qpn, gid_str);
     } else {
-        INFO("local rdma_conn_info: psn: {}, qpn: {}, gid: {}", info->psn, info->qpn, gid_str);
+        DEBUG("local rdma_conn_info: psn: {}, qpn: {}, gid: {}", info->psn, info->qpn, gid_str);
     }
 }
 

@@ -14,11 +14,12 @@
 #include "libinfinity.h"
 #include <vector>
 #include "ibv_helper.h"
+#include "log.h"
 
 
 
 Connection::~Connection() {
-    printf("destroying connection\n");
+    DEBUG("destroying connection");
     if (sock) {
         close(sock);
     }
@@ -58,21 +59,21 @@ int init_rdma_resources(connection_t *conn) {
 
     dev_list = ibv_get_device_list(&num_devices);
     if (!dev_list) {
-        perror("Failed to get RDMA devices list");
+        ERROR("Failed to get RDMA devices list");
         return -1;
     }
 
     // Open the first available device
     conn->ib_ctx = ibv_open_device(dev_list[0]);
     if (!conn->ib_ctx) {
-        perror("Failed to open RDMA device");
+        ERROR("Failed to open RDMA device");
         return -1;
     }
     ibv_free_device_list(dev_list);
 
     int gidx = ibv_find_sgid_type(conn->ib_ctx, 1, IBV_GID_TYPE_ROCE_V2, AF_INET);
     if (gidx < 0) {
-        perror("Failed to find GID");
+        ERROR("Failed to find GID");
         return -1;
     }
     conn->gidx = gidx;
@@ -81,21 +82,21 @@ int init_rdma_resources(connection_t *conn) {
     union ibv_gid gid;
     //get gid
     if (ibv_query_gid(conn->ib_ctx, 1, gidx, &gid)) {
-        perror("Failed to get GID");
+        ERROR("Failed to get GID");
         return -1;
     }
     
     // Allocate Protection Domain
     conn->pd = ibv_alloc_pd(conn->ib_ctx);
     if (!conn->pd) {
-        perror("Failed to allocate PD");
+        ERROR("Failed to allocate PD");
         return -1;
     }
 
     // Create Completion Queue
     conn->cq = ibv_create_cq(conn->ib_ctx, 1025, NULL, NULL, 0);
     if (!conn->cq) {
-        perror("Failed to create CQ");
+        ERROR("Failed to create CQ");
         return -1;
     }
 
@@ -111,28 +112,29 @@ int init_rdma_resources(connection_t *conn) {
 
     conn->qp = ibv_create_qp(conn->pd, &qp_init_attr);
     if (!conn->qp) {
-        perror("Failed to create QP");
+        ERROR("Failed to create QP");
         return -1;
     }
 
     // Modify QP to INIT state
     if (modify_qp_to_init(conn->qp)) {
-        fprintf(stderr, "Failed to modify QP to INIT\n");
+        ERROR("Failed to modify QP to INIT");
         return -1;
     }
 
     // Get local connection information
     struct ibv_port_attr port_attr;
     if (ibv_query_port(conn->ib_ctx, 1, &port_attr)) {
-        perror("Failed to query port");
+        ERROR("Failed to query port");
         return -1;
     }
 
     conn->local_info.qpn = conn->qp->qp_num;
     conn->local_info.psn = lrand48() & 0xffffff;
     conn->local_info.gid = gid;
-    printf("gid index: %d\n", gidx);
+    DEBUG("gid index: %d", gidx);
     print_rdma_conn_info(&conn->local_info, false);
+    print_rdma_conn_info(&conn->remote_info, true);
     return 0;
 }
 
@@ -148,7 +150,7 @@ int modify_qp_to_init(struct ibv_qp *qp) {
 
     int ret = ibv_modify_qp(qp, &attr, flags);
     if (ret) {
-        perror("Failed to modify QP to INIT");
+        ERROR("Failed to modify QP to INIT");
         return ret;
     }
     return 0;
@@ -165,7 +167,7 @@ int perform_rdma_read(connection_t *conn, uintptr_t src_buf, size_t src_size,
         struct ibv_mr *mr = ibv_reg_mr(conn->pd, dst_buf, dst_size,
                                        IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
         if (!mr) {
-            perror("Failed to register MR");
+            ERROR("Failed to register MR");
             return -1;
         }
         conn->local_mr[(uintptr_t)dst_buf] = mr;
@@ -192,12 +194,12 @@ int perform_rdma_read(connection_t *conn, uintptr_t src_buf, size_t src_size,
     struct ibv_send_wr *bad_wr = NULL;
     int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
     if (ret) {
-        perror("Failed to post RDMA read");
+        ERROR("Failed to post RDMA read");
         return -1;
     }
 
     conn->rdma_write_count++;
-    printf("RDMA read completed successfully\n");
+    DEBUG("RDMA read completed successfully");
     // RDMA read successful
     return 0;
 }
@@ -209,19 +211,18 @@ int sync_rdma(connection_t *conn) {
     int total_completions = conn->rdma_write_count + conn->rdma_read_count;
     int num_completions = 0;
 
-    printf("Waiting for %d completions\n", total_completions);
+    DEBUG("Waiting for %d completions", total_completions);
     while (num_completions < total_completions) {
         int waiting_completions = MIN(32, total_completions - num_completions);
         int ne = ibv_poll_cq(conn->cq, waiting_completions, wc);
         if (ne < 0) {
-            fprintf(stderr, "Failed to poll CQ\n");
+            ERROR("Failed to poll CQ");
             return -1;
         }
 
         for (int i = 0; i < ne; i++) {
             if (wc[i].status != IBV_WC_SUCCESS) {
-                fprintf(stderr, "Completion with error at %s:\n", __func__);
-                fprintf(stderr, "Failed status %s: wr_id %d\n", ibv_wc_status_str(wc[i].status), (int)wc[i].wr_id);
+                ERROR("Failed status {}: wr_id {}\n", ibv_wc_status_str(wc[i].status), (int)wc[i].wr_id);
                 return -1;
             }
             num_completions++;
@@ -237,15 +238,13 @@ int sync_rdma(connection_t *conn) {
 
 int perform_rdma_write(connection_t *conn, char * src_buf, size_t src_size,
                        uintptr_t dst_buf, size_t dst_size, uint32_t rkey) {
-    //printf("performing rdma write on %02x\n", src_buf);
-
     struct ibv_mr *mr = NULL;
     //if src_buf is not is conn->remote_mr, create a new mr
     if (conn->local_mr.find((uintptr_t)src_buf) == conn->local_mr.end()) {
         struct ibv_mr *mr = ibv_reg_mr(conn->pd, src_buf, src_size,
                                        IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
         if (!mr) {
-            perror("Failed to register MR");
+            ERROR("Failed to register MR");
             return -1;
         }
         conn->local_mr[(uintptr_t)src_buf] = mr;
@@ -274,7 +273,7 @@ int perform_rdma_write(connection_t *conn, char * src_buf, size_t src_size,
     struct ibv_send_wr *bad_wr = NULL;
     int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
     if (ret) {
-        fprintf(stderr, "Failed to post RDMA write: %s\n", strerror(ret));
+        ERROR("Failed to post RDMA write :{}" , strerror(ret));
         return -1;
     }
 
@@ -285,24 +284,24 @@ int perform_rdma_write(connection_t *conn, char * src_buf, size_t src_size,
 
 int setup_rdma(connection_t *conn) {
     if(init_rdma_resources(conn) < 0) {
-        fprintf(stderr, "Failed to initialize RDMA resources\n");
+        ERROR("Failed to initialize RDMA resources");
         return -1;
     }
 
     // Exchange RDMA connection information with the server
     if (exchange_conn_info(conn)) {
-        fprintf(stderr, "Failed to exchange connection information\n");
+        ERROR("Failed to exchange connection information");
         return -1;
     }
 
     // Modify QP to RTR state
     if (modify_qp_to_rtr(conn)) {
-        fprintf(stderr, "Failed to modify QP to RTR\n");
+        ERROR("Failed to modify QP to RTR");
         return -1;
     }
 
     if (modify_qp_to_rts(conn)) {
-        fprintf(stderr, "Failed to modify QP to RTS\n");
+        ERROR("Failed to modify QP to RTS");
         return -1;
     }
 
@@ -316,7 +315,7 @@ int init_connection(connection_t *conn, std::string ip_addr)   {
     struct sockaddr_in serv_addr;
     // create socket
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        printf("\n Socket creation error \n");
+        ERROR("Failed to create socket");
         return -1;
     }
 
@@ -325,12 +324,12 @@ int init_connection(connection_t *conn, std::string ip_addr)   {
 
     // always connect to localhost
     if(inet_pton(AF_INET, ip_addr.data(), &serv_addr.sin_addr) <= 0) {
-        printf("\nInvalid address/ Address not supported \n");
+        ERROR("Invalid address/ Address not supported");
         return -1;
     }
 
     if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        printf("\nConnection Failed \n");
+        ERROR("Failed to connect to server");
         return -1;
     }
 
@@ -369,7 +368,7 @@ int modify_qp_to_rtr(connection_t *conn) {
 
     int ret = ibv_modify_qp(qp, &attr, flags);
     if (ret) {
-        perror("Failed to modify QP to RTR");
+        ERROR("Failed to modify QP to RTR");
         return ret;
     }
     return 0;
@@ -390,7 +389,7 @@ int modify_qp_to_rts(connection_t *conn) {
 
     int ret = ibv_modify_qp(qp, &attr, flags);
     if (ret) {
-        perror("Failed to modify QP to RTS");
+        ERROR("Failed to modify QP to RTS");
         return ret;
     }
     return 0;
@@ -444,7 +443,7 @@ int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int
 
     std::string serialized_data;
     if (!serialize(request, serialized_data)) {
-        fprintf(stderr, "Failed to serialize remote meta request\n");
+        ERROR("Failed to serialize remote meta request");
         return -1;
     }
 
@@ -456,55 +455,55 @@ int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int
 
     // Send header
     if (send_exact(conn->sock, &header, FIXED_HEADER_SIZE) < 0) {
-        fprintf(stderr, "Failed to send header\n");
+        ERROR("Failed to send header");
         return -1;
     }
     // Send body
     if (send_exact(conn->sock, serialized_data.data(), serialized_data.size()) < 0) {
-        fprintf(stderr, "Failed to send body\n");
+        ERROR("Failed to send body");
         return -1;
     }
     remote_meta_response response;
     int return_size;
     if(recv(conn->sock, &return_size, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
-        perror("Failed to receive return size");
+        ERROR("Failed to receive return size");
         return -1;
     }
     char response_data[return_size];
     if(recv(conn->sock, &response_data, return_size, MSG_WAITALL) < 0 ) {
-        perror("Failed to receive response data");
+        ERROR("Failed to receive response data");
         return -1;
     }
 
     if(!deserialize(response_data, return_size, response)) {
-        perror("deserialize failed");
+        ERROR("deserialize failed");
         return -1;
     }
 
     if (response.error_code != TASK_ACCEPTED) {
-        fprintf(stderr, "Remote operation failed %d\n", response.error_code);
+        ERROR("Remote operation failed {}", response.error_code);
         return -1;
     }
 
 
     if (response.blocks.size() != blocks.size()) {
-        fprintf(stderr, "Invalid response\n");
+        ERROR("Invalid response");
         return -1;
     }
 
     for (int i = 0; i < response.blocks.size(); i++) {
-        printf("remote response: addr: %llu, rkey: %d\n", response.blocks[i].remote_addr, response.blocks[i].rkey);
+        DEBUG("remote response: addr: {}, rkey: {}", response.blocks[i].remote_addr, response.blocks[i].rkey);
         int ret;
         if (op == OP_RDMA_WRITE) {
             ret = perform_rdma_write(conn, (char *)ptr + blocks[i].offset, block_size, response.blocks[i].remote_addr, block_size, response.blocks[i].rkey);
         } else if (op == OP_RDMA_READ) {
             ret = perform_rdma_read(conn, response.blocks[i].remote_addr, block_size, (char *)ptr + blocks[i].offset, block_size, response.blocks[i].rkey);
         } else {
-            fprintf(stderr, "Invalid operation\n");
+            ERROR("Invalid operation");
             return -1;
         }
         if (ret < 0) {
-            fprintf(stderr, "Failed to perform RDMA operation\n");
+            ERROR("Failed to perform RDMA operation");
             return -1;
         }
     }
@@ -529,7 +528,7 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, in
 
     std::string serialized_data;
     if (!serialize(meta, serialized_data)) {
-        fprintf(stderr, "Failed to serialize local meta\n");
+        ERROR("Failed to serialize local meta");
         return -1;
     }
 
@@ -541,18 +540,18 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, in
 
     // Send header
     if (send_exact(conn->sock, &header, FIXED_HEADER_SIZE) < 0) {
-        fprintf(stderr, "Failed to send header\n");
+        ERROR("Failed to send header");
         return -1;
     }
     // Send body
     if (send_exact(conn->sock, serialized_data.data(), serialized_data.size()) < 0) {
-        fprintf(stderr, "Failed to send body\n");
+        ERROR("Failed to send body");
         return -1;
     }
 
     int return_code;
     if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
-        fprintf(stderr, "Failed to receive return code\n");
+        ERROR("Failed to receive return code");
         return -1;
     }
 

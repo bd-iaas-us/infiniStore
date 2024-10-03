@@ -35,7 +35,6 @@ struct PTR {
 
 std::unordered_map<std::string, PTR> kv_map;
 
-
 //global ibv context
 struct ibv_context *ib_ctx;
 struct ibv_pd *pd;
@@ -170,7 +169,7 @@ void after_ipc_close_completion(uv_work_t* req, int status) {
     delete wqueue_data;
 }
 
-int do_read_kvcache(client_t *client) {
+int do_read_cache(client_t *client) {
     const header_t *header = &client->header;
     const local_meta_t *meta = &client->local_meta;
     void * d_ptr;
@@ -207,7 +206,7 @@ int do_read_kvcache(client_t *client) {
     return TASK_ACCEPTED;
 }
 
-int do_write_kvcache(client_t *client) {
+int do_write_cache(client_t *client) {
     const local_meta_t * meta =  &client->local_meta;
     assert(meta != NULL);
     // allocate host memory
@@ -571,9 +570,9 @@ int handle_request(client_t *client) {
             return 0;
         }
     }  else if (client->header.op == OP_W) {
-        return_code = do_write_kvcache(client);
+        return_code = do_write_cache(client);
     } else if (client->header.op == OP_R) {
-        return_code = do_read_kvcache(client);
+        return_code = do_read_cache(client);
     } else {
         return_code = INVALID_REQ;
     }

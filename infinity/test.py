@@ -1,13 +1,14 @@
-from infinity.lib import InfinityConnection, DisableTorchCaching
+from infinity.lib import InfinityConnection, DisableTorchCaching, check_infinity_supported
 import torch
 import time
 
 def run(conn):
+    check_infinity_supported()
     src = [i for i in range(4096)]
     with DisableTorchCaching():
         src_tensor = torch.tensor(src, device="cuda:0", dtype=torch.float32)
     now=time.time()
-    conn.write_kvcache(src_tensor, [("key1", 0), ("key2", 1024), ("key3", 2048)], 1024)
+    conn.write_cache(src_tensor, [("key1", 0), ("key2", 1024), ("key3", 2048)], 1024)
     conn.sync()
     print(f"write elapse time is {time.time() - now}")
 
@@ -16,7 +17,7 @@ def run(conn):
         dst_tensor = torch.zeros(4096, device="cuda:2", dtype=torch.float32)
 
 
-    conn.read_kvcache(dst_tensor, [("key1", 0), ("key2", 1024)], 1024)
+    conn.read_cache(dst_tensor, [("key1", 0), ("key2", 1024)], 1024)
     conn.sync()
 
 

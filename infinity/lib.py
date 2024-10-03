@@ -3,9 +3,19 @@ from infinity import _infinity
 import torch
 import os
 from typing import List, Tuple
+import subprocess
 
 
 def register_server(loop):
+    """
+    Registers a server with the given event loop.
+
+    This function is intended for internal use only and should not be called by clients.
+
+    Args:
+        loop: The event loop to register the server with.
+
+    """
     #client does not need to call this function
     from uvloop.loop import libuv_get_loop_t_ptr
     import ctypes
@@ -18,6 +28,49 @@ def register_server(loop):
     #from cpython.pycapsule import PyCapsule_GetPointer
     #<uint64_t>PyCapsule_GetPointer(obj, NULL)
     return _infinity.register_server(loop_ptr)
+
+
+def _kernel_modules():
+    modules = set()
+    try:
+        with open('/proc/modules', 'r') as f:
+            for line in f:
+                sep = line.find(' ')
+                if sep != -1:
+                    modules.add(line[:sep])
+    except IOError as e:
+        raise Exception(f"can not read /proc/modules: {e}")
+    return modules
+
+
+def _check_rdma_devices_ibv():
+    try:
+        result = subprocess.run(['ibv_devinfo'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode != 0:
+            return
+        output = result.stdout
+        devices = output.split('\n\n')
+        port_active = False
+        for device_info in devices:
+            if 'hca_id' in device_info:
+                lines = device_info.splitlines()
+                device_name = lines[0].split()[-1]
+                if 'PORT_ACTIVE' in device_info:
+                    port_active = True
+                    break
+        if port_active is False:
+            raise Exception("No active RDMA device found")
+    except FileNotFoundError:
+        raise Exception("command ibv_devinfo not found, make sure RDMA tools are installed; for ubuntu, run apt install ibv_devinfo")
+
+
+def check_infinity_supported():
+    #check if kernel module nv_peer_mem is available
+    if 'nv_peer_mem' not in _kernel_modules():
+        raise Exception("nv_peer_mem module is not loaded")
+    _check_rdma_devices_ibv()
+
+
 
 class DisableTorchCaching:
     def __enter__(self):
@@ -40,6 +93,12 @@ class InfinityConnection:
         self.rdma_connected = False
     
     def connect(self, ip_addr : str):
+        """
+        Establishes an RDMA connection using the provided IP address.
+
+        Args:
+            ip_addr (str): The IP address of the RDMA instance to connect to.
+        """
         if self.local_connected:
             raise Exception("Already connected to local instance")
         if self.rdma_connected:
@@ -53,6 +112,14 @@ class InfinityConnection:
         self.rdma_connected = True
         
     def local_connect(self):
+        """
+        Establishes a local connection to the instance.
+
+        This method initializes a local connection to the instance using the IP address "127.0.0.1".
+        This connection will use cudaMemcpy to transfer data between the local and remote instances.
+        It raises an exception if a connection is already established either locally or via RDMA.
+
+        """
         if self.rdma_connected:
             raise Exception("Already connected to rdma instance")     
         if self.local_connected:
@@ -62,10 +129,19 @@ class InfinityConnection:
             raise Exception("Failed to initialize local connection")
         self.local_connected = True
 
-    def write_kvcache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], page_size: int):
-        self._verify(kvcache)
-        ptr = kvcache.data_ptr()
-        element_size = kvcache.element_size()
+    def write_cache(self, cache : torch.Tensor, blocks: List[Tuple[str, int]], page_size: int):
+        """
+        Writes the given cache tensor to the specified blocks in memory.
+
+        Args:
+            cache (torch.Tensor): The tensor containing the data to be written.
+            blocks (List[Tuple[str, int]]): A list of tuples where each tuple contains a key and an offset. 
+            each pair represents a page to be written to. The page is fixed size and is specified by the page_size parameter.
+            page_size (int): How many element in one page.
+        """
+        self._verify(cache)
+        ptr = cache.data_ptr()
+        element_size = cache.element_size()
         #each offset should multiply by the element size
         blocks_in_bytes = [(key, offset * element_size) for key, offset in blocks]
         if self.local_connected:
@@ -79,10 +155,22 @@ class InfinityConnection:
         else:
             raise Exception("Not connected to any instance")
 
-    def read_kvcache(self, kvcache : torch.Tensor, blocks: List[Tuple[str, int]], page_size: int):
-        self._verify(kvcache)
-        ptr = kvcache.data_ptr()
-        element_size = kvcache.element_size()
+    def read_cache(self, cache : torch.Tensor, blocks: List[Tuple[str, int]], page_size: int):
+        """
+        Reads data from the cache using either local or RDMA connection.
+
+        Args:
+            cache (torch.Tensor): The tensor containing the cache data.
+            blocks (List[Tuple[str, int]]): A list of tuples where each tuple contains a key and an offset. 
+            each pair represents a page to be written to. The page is fixed size and is specified by the page_size parameter.
+            page_size (int): The size of the page to read.
+
+        Raises:
+            Exception: If the read operation fails or if not connected to any instance.
+        """
+        self._verify(cache)
+        ptr = cache.data_ptr()
+        element_size = cache.element_size()
         #each offset should multiply by the element size
         blocks_in_bytes = [(key, offset * element_size) for key, offset in blocks]
         if self.local_connected:
@@ -97,6 +185,15 @@ class InfinityConnection:
             raise Exception("Not connected to any instance")
     
     def sync(self):
+        """
+        Synchronizes the current instance with the connected infinity instance.
+        This method attempts to synchronize the current instance using either a local
+        connection or an RDMA connection. If neither connection is available, it raises
+        an exception.
+        Raises:
+            Exception: If not connected to any instance.
+            Exception: If synchronization fails with a negative return code.
+        """
         ret = 0
         if self.local_connected:
             return _infinity.sync_local(self.conn)
@@ -110,9 +207,9 @@ class InfinityConnection:
         return
 
 
-    def _verify(self, kv_cache : torch.Tensor):
-        if kv_cache.device.type != "cuda":
+    def _verify(self, cache : torch.Tensor):
+        if cache.device.type != "cuda":
             raise Exception("Tensor must be on CUDA device")
-        if kv_cache.is_contiguous() is False:
+        if cache.is_contiguous() is False:
             raise Exception("Tensor must be contiguous")
 
