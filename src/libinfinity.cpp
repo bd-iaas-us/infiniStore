@@ -534,7 +534,7 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, in
     }
 
     resp_t resp;
-    if(recv(conn->sock, &resp, FIXED_RESP_SIZE, MSG_WAITALL) != FIXED_RESP_SIZE) {
+    if (recv(conn->sock, &resp, FIXED_RESP_SIZE, MSG_WAITALL) != FIXED_RESP_SIZE) {
         ERROR("Failed to receive return code");
         return -1;
     }

@@ -422,7 +422,6 @@ int do_sync_stream(client_t *client) {
         .remain = client->remain,
     };
     do_send(client, &resp, FIXED_RESP_SIZE);
-    INFO("send resp");
     // Reset client state
     reset_client_read_state(client);
     return 0;
@@ -570,7 +569,7 @@ int handle_request(client_t *client) {
     }
     
     INFO("return code: {}", return_code);
-    
+
     resp_t resp = {
         .code = return_code,
         .remain = client->remain,
