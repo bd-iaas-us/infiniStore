@@ -30,7 +30,7 @@ def parse_args():
     parser.add_argument(
         "--host",
         required=False,
-        help="listen on which host",
+        help="listen on which host, default 0.0.0.0",
         default="0.0.0.0",
         type=str,
     )
@@ -38,13 +38,13 @@ def parse_args():
         "--port",
         required=False,
         default=18080,
-        help="Listen on which port",
+        help="Listen on which port, default 18080",
     )
     parser.add_argument(
         "--log_level",
         required=False,
         default='warning',
-        help="The command to run tests and generate coverage report.",
+        help="log level, default warning",
         type=str
     )
     return parser.parse_args()
