@@ -67,7 +67,6 @@ struct Client {
     char *send_buffer;
 
     cudaStream_t cuda_stream;
-        uv_work_t work_req;
 
     rdma_conn_info_t remote_info;
     rdma_conn_info_t local_info;
@@ -167,6 +166,7 @@ void after_ipc_close_completion(uv_work_t* req, int status) {
     wqueue_data->client->remain--;
     INFO("after_ipc_close_completion done");
     delete wqueue_data;
+    delete req;
 }
 
 int do_read_cache(client_t *client) {
@@ -200,8 +200,9 @@ int do_read_cache(client_t *client) {
     wqueue_data_t *wqueue_data = new wqueue_data_t();
     wqueue_data->client = client;
     wqueue_data->d_ptr = d_ptr;
-    client->work_req.data = (void *)wqueue_data;
-    uv_queue_work(loop, &client->work_req, wait_for_ipc_close_completion, after_ipc_close_completion);
+    uv_work_t *req = new uv_work_t();
+    req->data = (void *)wqueue_data;
+    uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);  
 
     return TASK_ACCEPTED;
 }
@@ -238,8 +239,10 @@ int do_write_cache(client_t *client) {
     wqueue_data_t *wqueue_data = new wqueue_data_t();
     wqueue_data->client = client;
     wqueue_data->d_ptr = d_ptr;
-    client->work_req.data = (void *)wqueue_data;
-    uv_queue_work(loop, &client->work_req, wait_for_ipc_close_completion, after_ipc_close_completion);
+    uv_work_t *req = new uv_work_t();
+    req->data = (void *)wqueue_data;
+    uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);    
+
     return TASK_ACCEPTED;
 }
 
