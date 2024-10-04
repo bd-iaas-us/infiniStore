@@ -381,9 +381,6 @@ int exchange_conn_info(connection_t *conn) {
     return 0;
 }
 
-
-
-
 int sync_local(connection_t *conn) {
     assert(conn != NULL);
     header_t header;
@@ -393,9 +390,12 @@ int sync_local(connection_t *conn) {
     };
     send_exact(conn->sock, &header, FIXED_HEADER_SIZE);
 
-    int return_code = -1;
-    recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL);
-    return return_code;
+    resp_t resp;
+    if(recv(conn->sock, &resp, FIXED_RESP_SIZE, MSG_WAITALL) != FIXED_RESP_SIZE) {
+        return -1;
+    }
+
+    return resp.remain;
 }
 
 int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int block_size, void * ptr) {
@@ -533,13 +533,13 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, in
         return -1;
     }
 
-    int return_code;
-    if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
+    resp_t resp;
+    if(recv(conn->sock, &resp, FIXED_RESP_SIZE, MSG_WAITALL) != FIXED_RESP_SIZE) {
         ERROR("Failed to receive return code");
         return -1;
     }
 
-    if (return_code != FINISH && return_code != TASK_ACCEPTED) {
+    if (resp.code != FINISH && resp.code != TASK_ACCEPTED) {
         return -1;
     }
     return 0;

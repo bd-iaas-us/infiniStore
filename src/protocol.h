@@ -55,7 +55,10 @@ typedef struct {
     MSGPACK_DEFINE(key, offset)
 } block_t;
 
-
+typedef struct {
+    unsigned int code;
+    int remain;
+} resp_t;
 
 //implement pack for ipcHandler
 namespace msgpack {
@@ -154,5 +157,6 @@ template bool serialize<remote_meta_request>(const remote_meta_request& data, st
 template bool deserialize<remote_meta_response>(const char* data, size_t size, remote_meta_response& out);
 
 #define FIXED_HEADER_SIZE sizeof(header_t)
+#define FIXED_RESP_SIZE sizeof(resp_t)
 
 #endif

@@ -417,13 +417,16 @@ void do_send(client_t *client, void* buf, size_t size) {
 }
 
 int do_sync_stream(client_t *client) {
-    do_send(client, &client->remain, RETURN_CODE_SIZE);
+    resp_t resp = {
+        .code = FINISH,
+        .remain = client->remain,
+    };
+    do_send(client, &resp, FIXED_RESP_SIZE);
+    INFO("send resp");
     // Reset client state
     reset_client_read_state(client);
     return 0;
 }
-
-
 
 //TODO: refactor this function to use RDMA_WRITE_IMM.
 int do_rdma_read(client_t *client) {
@@ -567,8 +570,13 @@ int handle_request(client_t *client) {
     }
     
     INFO("return code: {}", return_code);
-    do_send(client, &return_code, RETURN_CODE_SIZE);
     
+    resp_t resp = {
+        .code = return_code,
+        .remain = client->remain,
+    };
+    do_send(client, &resp, FIXED_RESP_SIZE);
+
     //success
     //keep connection alive
     reset_client_read_state(client);
