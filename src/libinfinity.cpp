@@ -432,14 +432,8 @@ int exchange_conn_info(connection_t *conn) {
     send_exact(conn->sock, &header, FIXED_HEADER_SIZE);
     send_exact(conn->sock, &conn->local_info, sizeof(rdma_conn_info_t));
 
-
-    // recv(conn->sock, &conn->remote_info, sizeof(rdma_conn_info_t), MSG_WAITALL);
     int return_size;
     return do_recv(conn, &conn->remote_info, &return_size);
-    // if (code != FINISH) {
-    //     return -1;
-    // }
-    // return 0;    
 }
 
 int sync_local(connection_t *conn) {
@@ -450,24 +444,6 @@ int sync_local(connection_t *conn) {
         .op = OP_SYNC,
     };
     send_exact(conn->sock, &header, FIXED_HEADER_SIZE);
-
-    // resp_t resp;
-    // if(recv(conn->sock, &resp, FIXED_RESP_SIZE, MSG_WAITALL) != FIXED_RESP_SIZE) {
-    //     return -1;
-    // }
-    // return resp.remain;
-
-    // resp_header_t resp_header;
-    // if(recv(conn->sock, &resp_header, FIXED_RESP_HEADER_SIZE, MSG_WAITALL) != FIXED_RESP_HEADER_SIZE) {
-    //     return -1;
-    // }  
-
-    // resp_local_t resp_body;
-    // if(recv(conn->sock, &resp_body, FIXED_RESP_LOCAL_SIZE, MSG_WAITALL) != FIXED_RESP_LOCAL_SIZE) {
-    //     return -1;
-    // }        
-
-    // return resp_body.remain;
 
     int remain = -1, return_size = 0;
     do_recv(conn, &remain, &return_size);
@@ -513,22 +489,6 @@ int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int
         return -1;
     }
     remote_meta_response response;
-    // int return_size;
-    // if(recv(conn->sock, &return_size, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
-    //     ERROR("Failed to receive return size");
-    //     return -1;
-    // }
-    // char response_data[return_size];
-    // if(recv(conn->sock, &response_data, return_size, MSG_WAITALL) < 0 ) {
-    //     ERROR("Failed to receive response data");
-    //     return -1;
-    // }
-
-    // if(!deserialize(response_data, return_size, response)) {
-    //     ERROR("deserialize failed");
-    //     return -1;
-    // }
-
     int return_size;
     do_recv(conn, &response, &return_size);    
 
@@ -613,16 +573,6 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, in
         return -1;
     }
 
-    // resp_t resp;
-    // if (recv(conn->sock, &resp, FIXED_RESP_SIZE, MSG_WAITALL) != FIXED_RESP_SIZE) {
-    //     ERROR("Failed to receive return code");
-    //     return -1;
-    // }
-
     int remain = 0, return_size = 0;
     return do_recv(conn, &remain, &return_size);
-    // if (code != FINISH && code != TASK_ACCEPTED) {
-    //     return -1;
-    // }
-    // return 0;
 }

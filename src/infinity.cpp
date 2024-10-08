@@ -230,14 +230,12 @@ int do_read_cache(client_t *client) {
     assert(header != NULL);
     //TODO: check device_id
 
-
     CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, meta->ipc_handle, cudaIpcMemLazyEnablePeerAccess));
 
     for (auto &block : meta->blocks) {
         if (kv_map.count(block.key) == 0) {
             std::cout << "Key not found: " << block.key << std::endl;
             CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
-            // return KEY_NOT_FOUND;
             return do_send_local(client, KEY_NOT_FOUND);
         }
 
@@ -245,7 +243,6 @@ int do_read_cache(client_t *client) {
         //std::cout << "Key found: " << block.key << std::endl;
         void * h_src = kv_map[block.key].ptr;
         if (h_src == NULL) {
-            // return KEY_NOT_FOUND;
             return do_send_local(client, KEY_NOT_FOUND);
         }
         //push the host cpu data to local device
@@ -259,10 +256,7 @@ int do_read_cache(client_t *client) {
     req->data = (void *)wqueue_data;
     uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);  
 
-    // return TASK_ACCEPTED;
     return do_send_local(client, TASK_ACCEPTED);
-    // reset_client_read_state(client);
-    // return 0;
 }
 
 int do_write_cache(client_t *client) {
@@ -280,7 +274,6 @@ int do_write_cache(client_t *client) {
         if (h_dst == NULL) {
             ERROR("Failed to allocat host memroy");
             CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
-            // return SYSTEM_ERROR;
             return do_send_local(client, SYSTEM_ERROR);
         }
         //how to deal with memory overflow? 
@@ -300,10 +293,7 @@ int do_write_cache(client_t *client) {
     req->data = (void *)wqueue_data;
     uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);    
 
-    // return TASK_ACCEPTED;
     return do_send_local(client, TASK_ACCEPTED);
-    // reset_client_read_state(client);
-    // return 0;
 }
 
 int init_rdma_context() {
@@ -338,7 +328,6 @@ int do_rdma_exchange(client_t *client) {
         client->cq = ibv_create_cq(ib_ctx, 1025, NULL, NULL, 0);
         if (!client->cq) {
             ERROR("Failed to create CQ");
-            // return SYSTEM_ERROR;
             return do_send_remote_exchange(client, SYSTEM_ERROR);
         }
 
@@ -355,7 +344,6 @@ int do_rdma_exchange(client_t *client) {
         client->qp = ibv_create_qp(pd, &qp_init_attr);
         if (!client->qp) {
             ERROR("Failed to create QP");
-            // return SYSTEM_ERROR;
             return do_send_remote_exchange(client, SYSTEM_ERROR);
         }
         // Modify QP to INIT state
@@ -370,7 +358,6 @@ int do_rdma_exchange(client_t *client) {
         ret = ibv_modify_qp(client->qp, &attr, flags);
         if (ret) {
             ERROR("Failed to modify QP to INIT");
-            // return SYSTEM_ERROR;
             return do_send_remote_exchange(client, SYSTEM_ERROR);
         }
 
@@ -378,7 +365,6 @@ int do_rdma_exchange(client_t *client) {
         struct ibv_port_attr port_attr;
         if (ibv_query_port(ib_ctx, 1, &port_attr)) {
             ERROR("Failed to query port");
-            // return SYSTEM_ERROR;
             return do_send_remote_exchange(client, SYSTEM_ERROR);
         }
 
@@ -405,12 +391,6 @@ int do_rdma_exchange(client_t *client) {
         print_rdma_conn_info(&client->local_info, false);
     }
 
-    // //Send server's RDMA connection info to client
-    // uv_buf_t wbuf = uv_buf_init((char*)&client->local_info, sizeof(client->local_info));
-
-    // uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
-    // write_req->data = client;
-    // uv_write(write_req, (uv_stream_t*)client->handle, &wbuf, 1, on_write);
     do_send_remote_exchange(client, FINISH);
     
     // Modify QP to RTR state
@@ -464,27 +444,16 @@ int do_rdma_exchange(client_t *client) {
     INFO("RDMA exchange done");
     client->rdma_connected = true;
 
-    // reset_client_read_state(client);
     return 0;
 }
 
 int do_sync_stream(client_t *client) {
-    // resp_t resp = {
-    //     .code = FINISH,
-    //     .remain = client->remain,
-    // };
-    // do_send(client, &resp, FIXED_RESP_SIZE);
-
     return do_send_local(client, FINISH);
-    // Reset client state
-    // reset_client_read_state(client);
-    // return 0;
 }
 
 //TODO: refactor this function to use RDMA_WRITE_IMM.
 int do_rdma_read(client_t *client) {
     INFO("do rdma read keys: {}", client->remote_meta_req.keys.size());
-    auto start = std::chrono::high_resolution_clock::now();
 
     int error_code = TASK_ACCEPTED;
     remote_meta_response resp;
@@ -514,22 +483,8 @@ RETURN:
         ERROR("Failed to serialize response");
         return SYSTEM_ERROR;
     }
-    // client->send_buffer = (char*) realloc(client->send_buffer, out.size() + RETURN_CODE_SIZE);
-
-    // int size = out.size();
-    // memcpy(client->send_buffer, &size, RETURN_CODE_SIZE);
-    // memcpy(client->send_buffer + RETURN_CODE_SIZE, out.c_str(), out.size());
-    // uv_buf_t wbuf = uv_buf_init(client->send_buffer, out.size() + RETURN_CODE_SIZE);
-    // write_req->data = client;
-    // uv_write(write_req, (uv_stream_t*)client->handle, &wbuf, 1, on_write);
-
-    // INFO("send response: size:{}", size);
 
     return do_send_remote(client, &out);
-
-    // reset_client_read_state(client);
-    // INFO("do rdma read runtime: {} ms", std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - start).count());
-    // return 0;
 }
 
 int do_rdma_write(client_t *client) {
@@ -571,22 +526,8 @@ RETURN:
         ERROR("Failed to serialize response");
         return SYSTEM_ERROR;
     }
-    // client->send_buffer = (char*) realloc(client->send_buffer, out.size() + RETURN_CODE_SIZE);
-
-
-    // int size = out.size();
-    // memcpy(client->send_buffer, &size, RETURN_CODE_SIZE);
-    // memcpy(client->send_buffer + RETURN_CODE_SIZE, out.c_str(), out.size());
-    // uv_buf_t wbuf = uv_buf_init(client->send_buffer, out.size() + RETURN_CODE_SIZE);
-    // write_req->data = client;
-    // uv_write(write_req, (uv_stream_t*)client->handle, &wbuf, 1, on_write);
-
-    // DEBUG("send response: size:{}", size);
 
     return do_send_remote(client, &out);
-
-    // reset_client_read_state(client);
-    // return 0;
 }
 
 using opFunc_t = int (*)(client_t *client);
@@ -599,67 +540,9 @@ std::unordered_map<char, opFunc_t> opFuncMp = {
     {OP_RDMA_READ, do_rdma_read},
 };
 
-//return value of handle_request:
-//if ret is less than 0, it is an system error, outer code will close the connection
-//if ret is greater than 0, it is an application error or success
 int handle_request(client_t *client) {    
-    auto start = std::chrono::high_resolution_clock::now();
-    int return_code = SYSTEM_ERROR;
-
-    return_code = (*opFuncMp[client->header.op])(client);
-//    if (client->header.op == OP_RDMA_WRITE) {
-//         return_code = do_rdma_write(client);
-//         // if (return_code == 0) {
-//         //     return 0;
-//         // }
-//    }
-//    else if (client->header.op == OP_RDMA_READ) {
-//         return_code = do_rdma_read(client);
-//         // if (return_code == 0) {
-//         //     return 0;
-//         // }
-//    }
-//    else if (client->header.op == OP_RDMA_EXCHANGE) {
-//         return_code = do_rdma_exchange(client);
-//         // if (return_code == 0) {
-//         //     return 0;
-//         // }
-//    }
-//    else if (client->header.op == OP_SYNC) {
-//         return_code = do_sync_stream(client);
-//         //do_sync_stream will handle return code by itself
-//         // if (return_code == 0) {
-//         //     return 0;
-//         // }
-//     }  else if (client->header.op == OP_W) {
-//         return_code = do_write_cache(client);
-//         // if (return_code == 0) {
-//         //     return 0;
-//         // }        
-//     } else if (client->header.op == OP_R) {
-//         return_code = do_read_cache(client);
-//         // if (return_code == 0) {
-//         //     return 0;
-//         // }        
-//     } else {
-//         return_code = INVALID_REQ;
-//     }
-    
-    // INFO("return code: {}", return_code);
-
-    // resp_t resp = {
-    //     .code = return_code,
-    //     .remain = client->remain,
-    // };
-    // do_send(client, &resp, FIXED_RESP_SIZE);
-
-    //success
-    //keep connection alive
+    (*opFuncMp[client->header.op])(client);
     reset_client_read_state(client);
-
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> elapsed = end - start;
-    INFO("handle request runtime: {} ms", elapsed.count());
     return 0;
 }
 
