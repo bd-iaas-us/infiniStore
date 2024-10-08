@@ -240,7 +240,7 @@ int do_send_remote_exchange (client_t *client, unsigned int return_code) {
     return 0;
 }
 
-int do_read_cache(client_t *client) {
+int read_cache(client_t *client) {
     const header_t *header = &client->header;
     const local_meta_t *meta = &client->local_meta;
     void * d_ptr;
@@ -277,7 +277,7 @@ int do_read_cache(client_t *client) {
     return do_send_local(client, TASK_ACCEPTED);
 }
 
-int do_write_cache(client_t *client) {
+int write_cache(client_t *client) {
     const local_meta_t * meta =  &client->local_meta;
     assert(meta != NULL);
     // allocate host memory
@@ -337,7 +337,7 @@ int init_rdma_context() {
     return 0;
 }
 
-int do_rdma_exchange(client_t *client) {
+int rdma_exchange(client_t *client) {
     INFO("do rdma exchange...");
 
     int ret;
@@ -465,12 +465,12 @@ int do_rdma_exchange(client_t *client) {
     return 0;
 }
 
-int do_sync_stream(client_t *client) {
+int sync_stream(client_t *client) {
     return do_send_local(client, FINISH);
 }
 
 //TODO: refactor this function to use RDMA_WRITE_IMM.
-int do_rdma_read(client_t *client) {
+int rdma_read(client_t *client) {
     INFO("do rdma read keys: {}", client->remote_meta_req.keys.size());
 
     int error_code = TASK_ACCEPTED;
@@ -504,7 +504,7 @@ RETURN:
     return do_send_remote(client, &out);
 }
 
-int do_rdma_write(client_t *client) {
+int rdma_write(client_t *client) {
     INFO("do rdma write keys: {}, remote_block_size: {}", client->remote_meta_req.keys.size(), client->remote_meta_req.block_size);
     remote_meta_response resp;
     std::string out;
@@ -548,12 +548,12 @@ RETURN:
 
 using opFunc_t = int (*)(client_t *client);
 std::unordered_map<char, opFunc_t> opFuncMp = {
-    {OP_R, do_read_cache},
-    {OP_W, do_write_cache},
-    {OP_SYNC, do_sync_stream},
-    {OP_RDMA_EXCHANGE, do_rdma_exchange},
-    {OP_RDMA_WRITE, do_rdma_write},
-    {OP_RDMA_READ, do_rdma_read},
+    {OP_R,              read_cache},
+    {OP_W,              write_cache},
+    {OP_SYNC,           sync_stream},
+    {OP_RDMA_WRITE,     rdma_write},
+    {OP_RDMA_READ,      rdma_read},
+    {OP_RDMA_EXCHANGE,  rdma_exchange},
 };
 
 int handle_request(client_t *client) {    
