@@ -16,9 +16,6 @@
 #include "ibv_helper.h"
 #include "log.h"
 
-#include <iostream>
-
-
 Connection::~Connection() {
     DEBUG("destroying connection");
     if (sock) {
