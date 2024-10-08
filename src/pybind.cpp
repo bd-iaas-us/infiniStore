@@ -46,6 +46,3 @@ PYBIND11_MODULE(_infinity, m) {
     m.def("register_server", &register_server, "register the server");
 
 }
-
-
-

@@ -14,7 +14,7 @@ protected:
         ibv_gid gid;
         gid.global.subnet_prefix = 0x123456789abcdef0;
         gid.global.interface_id = 0x0fedcba987654321;
-        
+
     }
 
     local_meta_t meta;

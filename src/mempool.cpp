@@ -60,7 +60,7 @@ void* MemoryPool::allocate(size_t size) {
         }
 
         for (size_t bit_index = 0; bit_index < bit_per_word; ++bit_index) {
-            
+
             size_t start_block = word_index * bit_per_word + bit_index;
 
             if (start_block + required_blocks > total_blocks_) {
@@ -93,7 +93,7 @@ void* MemoryPool::allocate(size_t size) {
 }
 
 void MemoryPool::deallocate(void* ptr, size_t size) {
-    
+
     size_t blocks_to_free = size / block_size_;
     if (size % block_size_ != 0) {
         blocks_to_free += 1; // round up
@@ -141,4 +141,3 @@ void * MM::allocate(size_t size, int *pool_idx) {
 void MM::deallocate(void* ptr, size_t size, int pool_idx) {
     mempools_[pool_idx]->deallocate(ptr, size);
 }
-

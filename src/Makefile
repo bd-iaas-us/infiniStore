@@ -22,7 +22,7 @@ $(PYBIND_TARGET): pybind.cpp libinfinity.o utils.o protocol.o infinity.o log.o i
 	$(CXX) $(CXXFLAGS) $(INCLUDES) --shared -fPIC $(PYBIND11_INCLUDES) $^ \
 	-o $(PYBIND_TARGET) $(LDFLAGS) $(LIBS)
 	cp $(PYBIND_TARGET) ../infinity/
-	
+
 
 .PHONY: clean test
 clean:

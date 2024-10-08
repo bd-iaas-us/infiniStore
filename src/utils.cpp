@@ -1,51 +1,47 @@
 
 #include "utils.h"
-#include <sys/types.h>
-#include <sys/socket.h>
 #include <errno.h>
+#include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include "log.h"
-#include <iomanip>
-#include <execinfo.h>
-#include <signal.h>
-#include <unistd.h>
-#include <stdlib.h>
 
-
-
-
-int send_exact(int socket, const void *buffer, size_t length) {
+int send_exact(int socket, const void* buffer, size_t length) {
     size_t total_sent = 0;
     while (total_sent < length) {
-        ssize_t bytes_sent = send(socket, (const char *)buffer + total_sent, length - total_sent, 0);
+        ssize_t bytes_sent = send(socket, (const char*)buffer + total_sent,
+                                  length - total_sent, 0);
         if (bytes_sent < 0) {
-            return errno; // Return the error code if send fails
+            return errno;  // Return the error code if send fails
         }
         total_sent += bytes_sent;
     }
-    return 0; // Successfully sent exactly `length` bytes
+    return 0;  // Successfully sent exactly `length` bytes
 }
 
-int recv_exact(int socket, void *buffer, size_t length) {
+int recv_exact(int socket, void* buffer, size_t length) {
     size_t total_received = 0;
     while (total_received < length) {
-        ssize_t bytes_received = recv(socket, (char *)buffer + total_received, length - total_received, 0);
-        //printf("bytes_received: %d\n", bytes_received);
+        ssize_t bytes_received = recv(socket, (char*)buffer + total_received,
+                                      length - total_received, 0);
+        // printf("bytes_received: %d\n", bytes_received);
         if (bytes_received < 0) {
-            return errno; // Return the error code if recv fails
+            return errno;  // Return the error code if recv fails
         } else if (bytes_received == 0) {
-            return ECONNRESET; // Connection reset by peer
+            return ECONNRESET;  // Connection reset by peer
         }
         total_received += bytes_received;
     }
-    return 0; // Successfully received exactly `length` bytes
+    return 0;  // Successfully received exactly `length` bytes
 }
 
-
-
-void print_rdma_conn_info(rdma_conn_info_t *info, bool is_remote) {
+void print_rdma_conn_info(rdma_conn_info_t* info, bool is_remote) {
     std::string gid_str;
     for (int i = 0; i < 16; ++i) {
         gid_str += fmt::format("{:02x}", info->gid.raw[i]);
@@ -54,21 +50,25 @@ void print_rdma_conn_info(rdma_conn_info_t *info, bool is_remote) {
         }
     }
     if (is_remote) {
-        DEBUG("remote rdma_conn_info: psn: {}, qpn: {}, gid: {}", info->psn, info->qpn, gid_str);
+        DEBUG("remote rdma_conn_info: psn: {}, qpn: {}, gid: {}", info->psn,
+              info->qpn, gid_str);
     } else {
-        DEBUG("local rdma_conn_info: psn: {}, qpn: {}, gid: {}", info->psn, info->qpn, gid_str);
+        DEBUG("local rdma_conn_info: psn: {}, qpn: {}, gid: {}", info->psn,
+              info->qpn, gid_str);
     }
 }
 
 void print_ipc_handle(cudaIpcMemHandle_t ipc_handle) {
     std::ostringstream oss;
     for (int i = 0; i < sizeof(cudaIpcMemHandle_t); i++) {
-        oss << std::hex << std::setw(2) << std::setfill('0') << (int)((unsigned char*)&ipc_handle)[i] << " ";
+        oss << std::hex << std::setw(2) << std::setfill('0')
+            << (int)((unsigned char*)&ipc_handle)[i] << " ";
     }
     DEBUG("ipc_handle content: {}", oss.str().c_str());
 }
 
-void compare_ipc_handle(cudaIpcMemHandle_t ipc_handle1, cudaIpcMemHandle_t ipc_handle2) {
+void compare_ipc_handle(cudaIpcMemHandle_t ipc_handle1,
+                        cudaIpcMemHandle_t ipc_handle2) {
     for (int i = 0; i < sizeof(cudaIpcMemHandle_t); i++) {
         unsigned char d1 = ((unsigned char*)&ipc_handle1)[i];
         unsigned char d2 = ((unsigned char*)&ipc_handle2)[i];
@@ -77,23 +77,7 @@ void compare_ipc_handle(cudaIpcMemHandle_t ipc_handle1, cudaIpcMemHandle_t ipc_h
             return;
         }
     }
-
 }
-
-
-void signal_handler(int signum) {
-    void *array[10];
-    size_t size;
-
-    size = backtrace(array, 10);
-
-    fprintf(stderr, "Error: signal %d:\n", signum);
-    backtrace_symbols_fd(array, size, STDERR_FILENO);
-
-    exit(1);
-}
-
-
 
 template <typename T>
 void print_vector(T* ptr, size_t size) {
@@ -108,6 +92,3 @@ template void print_vector<float>(float* ptr, size_t size);
 template void print_vector<double>(double* ptr, size_t size);
 template void print_vector<int>(int* ptr, size_t size);
 template void print_vector<char>(char* ptr, size_t size);
-
-
-

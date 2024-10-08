@@ -26,7 +26,7 @@
 
     rdma_conn_info_t local_info;
     rdma_conn_info_t remote_info;
-    
+
     std::map<uintptr_t, struct ibv_mr *> local_mr;
     int rdma_write_count = 0;
     int rdma_read_count = 0;

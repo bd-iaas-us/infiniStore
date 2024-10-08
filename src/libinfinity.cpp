@@ -85,7 +85,7 @@ int init_rdma_resources(connection_t *conn) {
         ERROR("Failed to get GID");
         return -1;
     }
-    
+
     // Allocate Protection Domain
     conn->pd = ibv_alloc_pd(conn->ib_ctx);
     if (!conn->pd) {
@@ -160,7 +160,7 @@ int modify_qp_to_init(struct ibv_qp *qp) {
 
 int perform_rdma_read(connection_t *conn, uintptr_t src_buf, size_t src_size,
                       char * dst_buf, size_t dst_size, uint32_t rkey, struct ibv_mr *mr) {
-    
+
     assert(mr != NULL);
 
     // Prepare RDMA read operation
@@ -230,7 +230,7 @@ int perform_rdma_write(connection_t *conn, char * src_buf, size_t src_size,
     // Prepare RDMA write operation
     struct ibv_sge sge = {};
     sge.addr = (uintptr_t)src_buf;
-    sge.length = src_size; 
+    sge.length = src_size;
     sge.lkey = mr->lkey;
 
     struct ibv_send_wr wr = {};
@@ -501,7 +501,7 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, in
 
     cudaIpcMemHandle_t ipc_handle;
     memset(&ipc_handle, 0, sizeof(cudaIpcMemHandle_t));
-     
+
     CHECK_CUDA(cudaIpcGetMemHandle(&ipc_handle, ptr));
 
     local_meta_t meta = {

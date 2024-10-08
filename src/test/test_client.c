@@ -53,7 +53,7 @@ int main() {
         printf("Failed to init connection\n");
         goto out;
     }
-    
+
     ret = rw_local(&conn, OP_W, blocks, size, d_ptr);
     if (ret < 0) {
         printf("Failed to write local memory %d\n", ret);
@@ -65,9 +65,9 @@ int main() {
         printf("Failed to sync local memory\n");
         goto out;
     }
-    
 
-    //allocate a new cuda memory    
+
+    //allocate a new cuda memory
     CHECK_CUDA(cudaMalloc(&d_ptr2, size));
     printf("out:print address of d_ptr:  %p\n", d_ptr);
     printf("out:print address of d_ptr2: %p\n", d_ptr2);

@@ -86,7 +86,7 @@ struct convert<cudaIpcMemHandle_t> {
 
 } // namespace adaptor
 } // MSGPACK_API_VERSION_NAMESPACE(MSGPACK_DEFAULT_API_NS)
-} 
+}
 
 typedef struct {
     cudaIpcMemHandle_t ipc_handle;

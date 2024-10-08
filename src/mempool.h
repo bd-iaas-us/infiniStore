@@ -27,16 +27,16 @@ public:
     uint32_t get_rkey() const { return mr_->rkey; }
 
 private:
-    void* pool_;                
-    size_t pool_size_;           
-    size_t block_size_;          
-    size_t total_blocks_;        
+    void* pool_;
+    size_t pool_size_;
+    size_t block_size_;
+    size_t total_blocks_;
 
     //TODO: use judy libray to speed up the bitmap?
-    std::vector<uint64_t> bitmap_;  
+    std::vector<uint64_t> bitmap_;
 
-    struct ibv_mr* mr_;        
-    struct ibv_pd* pd_;         
+    struct ibv_mr* mr_;
+    struct ibv_pd* pd_;
 };
 
 class MM {
@@ -49,9 +49,9 @@ class MM {
         MM(const MM& mm) = delete;
         void * allocate(size_t size, int *pool_idx);
         void deallocate(void* ptr, size_t size, int pool_idx);
-        uint32_t get_rkey(int pool_idx) const { 
+        uint32_t get_rkey(int pool_idx) const {
             assert(pool_idx >= 0 && pool_idx < mempools_.size());
-            return mempools_[pool_idx]->get_rkey(); 
+            return mempools_[pool_idx]->get_rkey();
         }
 
         ~MM() {
