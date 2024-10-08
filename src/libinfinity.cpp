@@ -16,6 +16,7 @@
 #include "ibv_helper.h"
 #include "log.h"
 
+#include <iostream>
 
 
 Connection::~Connection() {
@@ -367,6 +368,61 @@ int modify_qp_to_rts(connection_t *conn) {
     return 0;
 }
 
+int do_recv(connection_t *conn, void *data, int *return_size) {
+    resp_header_t resp_header;
+    resp_header.body_size = 0;
+    resp_header.resp_type = LOCAL;
+    if(recv(conn->sock, &resp_header, FIXED_RESP_HEADER_SIZE, MSG_WAITALL) != FIXED_RESP_HEADER_SIZE) {
+        return -1;
+    }    
+    *return_size = resp_header.body_size;
+    int res = 0;
+    switch (resp_header.resp_type) {
+        case LOCAL: {
+            resp_local_t resp_body;
+            if(recv(conn->sock, &resp_body, FIXED_RESP_LOCAL_SIZE, MSG_WAITALL) != FIXED_RESP_LOCAL_SIZE) {
+                return -1;
+            }          
+            if (resp_body.code == FINISH || resp_body.code == TASK_ACCEPTED) {
+                *(int*)data = resp_body.remain;
+            } else {
+                res = -1;
+            }
+            
+            break;
+        }
+        case REMOTE_EXCHANGE: {
+            resp_remote_conninfo_t resp_remote_conninfo;
+            if(recv(conn->sock, &resp_remote_conninfo, FIXED_RESP_REMOTE_CONNINFO_SIZE, MSG_WAITALL) != FIXED_RESP_REMOTE_CONNINFO_SIZE) {
+                return -1;
+            }            
+            if (resp_remote_conninfo.code == FINISH) {
+                *(rdma_conn_info_t*)data = resp_remote_conninfo.conn_info;
+            } else {
+                res = -1;
+            }
+            
+            break;
+        }
+        case REMOTE: {
+            char response_data[resp_header.body_size];
+            if(recv(conn->sock, &response_data, resp_header.body_size, MSG_WAITALL) < 0 ) {
+                ERROR("Failed to receive response data");
+                return -1;
+            }
+            remote_meta_response response;
+            if(!deserialize(response_data, resp_header.body_size, response)) {
+                ERROR("deserialize failed");
+                return -1;
+            }
+            *(remote_meta_response*)data = response;
+
+            break;
+        }
+    }
+    return res;
+}
+
 int exchange_conn_info(connection_t *conn) {
     header_t header = {
         .magic = MAGIC,
@@ -377,8 +433,13 @@ int exchange_conn_info(connection_t *conn) {
     send_exact(conn->sock, &conn->local_info, sizeof(rdma_conn_info_t));
 
 
-    recv(conn->sock, &conn->remote_info, sizeof(rdma_conn_info_t), MSG_WAITALL);
-    return 0;
+    // recv(conn->sock, &conn->remote_info, sizeof(rdma_conn_info_t), MSG_WAITALL);
+    int return_size;
+    return do_recv(conn, &conn->remote_info, &return_size);
+    // if (code != FINISH) {
+    //     return -1;
+    // }
+    // return 0;    
 }
 
 int sync_local(connection_t *conn) {
@@ -390,12 +451,28 @@ int sync_local(connection_t *conn) {
     };
     send_exact(conn->sock, &header, FIXED_HEADER_SIZE);
 
-    resp_t resp;
-    if(recv(conn->sock, &resp, FIXED_RESP_SIZE, MSG_WAITALL) != FIXED_RESP_SIZE) {
-        return -1;
-    }
+    // resp_t resp;
+    // if(recv(conn->sock, &resp, FIXED_RESP_SIZE, MSG_WAITALL) != FIXED_RESP_SIZE) {
+    //     return -1;
+    // }
+    // return resp.remain;
 
-    return resp.remain;
+    // resp_header_t resp_header;
+    // if(recv(conn->sock, &resp_header, FIXED_RESP_HEADER_SIZE, MSG_WAITALL) != FIXED_RESP_HEADER_SIZE) {
+    //     return -1;
+    // }  
+
+    // resp_local_t resp_body;
+    // if(recv(conn->sock, &resp_body, FIXED_RESP_LOCAL_SIZE, MSG_WAITALL) != FIXED_RESP_LOCAL_SIZE) {
+    //     return -1;
+    // }        
+
+    // return resp_body.remain;
+
+    int remain = -1, return_size = 0;
+    do_recv(conn, &remain, &return_size);
+    return remain;
+
 }
 
 int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int block_size, void * ptr) {
@@ -436,21 +513,24 @@ int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int
         return -1;
     }
     remote_meta_response response;
-    int return_size;
-    if(recv(conn->sock, &return_size, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
-        ERROR("Failed to receive return size");
-        return -1;
-    }
-    char response_data[return_size];
-    if(recv(conn->sock, &response_data, return_size, MSG_WAITALL) < 0 ) {
-        ERROR("Failed to receive response data");
-        return -1;
-    }
+    // int return_size;
+    // if(recv(conn->sock, &return_size, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
+    //     ERROR("Failed to receive return size");
+    //     return -1;
+    // }
+    // char response_data[return_size];
+    // if(recv(conn->sock, &response_data, return_size, MSG_WAITALL) < 0 ) {
+    //     ERROR("Failed to receive response data");
+    //     return -1;
+    // }
 
-    if(!deserialize(response_data, return_size, response)) {
-        ERROR("deserialize failed");
-        return -1;
-    }
+    // if(!deserialize(response_data, return_size, response)) {
+    //     ERROR("deserialize failed");
+    //     return -1;
+    // }
+
+    int return_size;
+    do_recv(conn, &response, &return_size);    
 
     if (response.error_code != TASK_ACCEPTED) {
         ERROR("Remote operation failed {}", response.error_code);
@@ -533,14 +613,16 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, in
         return -1;
     }
 
-    resp_t resp;
-    if (recv(conn->sock, &resp, FIXED_RESP_SIZE, MSG_WAITALL) != FIXED_RESP_SIZE) {
-        ERROR("Failed to receive return code");
-        return -1;
-    }
+    // resp_t resp;
+    // if (recv(conn->sock, &resp, FIXED_RESP_SIZE, MSG_WAITALL) != FIXED_RESP_SIZE) {
+    //     ERROR("Failed to receive return code");
+    //     return -1;
+    // }
 
-    if (resp.code != FINISH && resp.code != TASK_ACCEPTED) {
-        return -1;
-    }
-    return 0;
+    int remain = 0, return_size = 0;
+    return do_recv(conn, &remain, &return_size);
+    // if (code != FINISH && code != TASK_ACCEPTED) {
+    //     return -1;
+    // }
+    // return 0;
 }

@@ -43,6 +43,12 @@ Error code:
 
 #define RETURN_CODE_SIZE sizeof(int)
 
+enum payload_t { 
+    LOCAL, 
+    REMOTE,
+    REMOTE_EXCHANGE
+};
+
 typedef struct __attribute__((packed)){
     unsigned int magic;
     char op;
@@ -55,10 +61,20 @@ typedef struct {
     MSGPACK_DEFINE(key, offset)
 } block_t;
 
+// typedef struct {
+//     unsigned int code;
+//     int remain;
+// } resp_t;
+
+typedef struct {
+    enum payload_t resp_type;
+    unsigned int body_size;
+} resp_header_t;
+
 typedef struct {
     unsigned int code;
     int remain;
-} resp_t;
+} resp_local_t;
 
 //implement pack for ipcHandler
 namespace msgpack {
@@ -127,6 +143,15 @@ typedef struct __attribute__((packed)) rdma_conn_info_t {
     union ibv_gid gid;
 } rdma_conn_info_t;
 
+// typedef struct {
+//     unsigned int code;
+//     std::vector<remote_block_t> blocks;
+// } resp_remote_t;
+
+typedef struct {
+    unsigned int code;
+   rdma_conn_info_t conn_info;
+} resp_remote_conninfo_t;
 
 template <typename T>
 bool serialize(const T& data, std::string& out) {
@@ -157,6 +182,10 @@ template bool serialize<remote_meta_request>(const remote_meta_request& data, st
 template bool deserialize<remote_meta_response>(const char* data, size_t size, remote_meta_response& out);
 
 #define FIXED_HEADER_SIZE sizeof(header_t)
-#define FIXED_RESP_SIZE sizeof(resp_t)
+// #define FIXED_RESP_SIZE sizeof(resp_t)
+#define FIXED_RESP_HEADER_SIZE sizeof(resp_header_t)
+#define FIXED_RESP_LOCAL_SIZE sizeof(resp_local_t)
+#define FIXED_RESP_REMOTE_CONNINFO_SIZE sizeof(resp_remote_conninfo_t)
+// #define FIXED_RESP_REMOTE_SIZE sizeof(resp_remote_t)
 
 #endif

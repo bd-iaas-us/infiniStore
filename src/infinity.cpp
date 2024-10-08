@@ -52,7 +52,7 @@ void print_header(header_t *header) {
 typedef enum {
     READ_HEADER,
     READ_BODY,
-    } read_state_t;
+} read_state_t;
 
 struct Client {
     uv_tcp_t* handle; //uv_stream_t
@@ -164,12 +164,62 @@ void wait_for_ipc_close_completion(uv_work_t* req) {
 }
 
 void after_ipc_close_completion(uv_work_t* req, int status) {
-    ERROR("after_ipc_close_comp");
     wqueue_data_t *wqueue_data = (wqueue_data_t *)req->data;
     wqueue_data->client->remain--;
     INFO("after_ipc_close_completion done");
     delete wqueue_data;
     delete req;
+}
+
+void do_send(client_t *client, void* buf, size_t size) {
+    uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
+    client->send_buffer = (char*)realloc(client->send_buffer, size);
+    memcpy(client->send_buffer, buf, size);
+    write_req->data = client;
+    uv_buf_t wbuf = uv_buf_init(client->send_buffer, size);
+    uv_write(write_req, (uv_stream_t *)client->handle, &wbuf, 1, on_write);    
+}
+
+int do_send_local (client_t *client, unsigned int return_code) {
+    resp_header_t resp_header = {
+        .resp_type = LOCAL,
+        .body_size = FIXED_RESP_LOCAL_SIZE,
+    };
+    do_send(client, &resp_header, FIXED_RESP_HEADER_SIZE);
+    resp_local_t resp_body = {
+        .code = return_code,
+        .remain = client->remain,
+    };
+    do_send(client, &resp_body, FIXED_RESP_LOCAL_SIZE);
+
+    return 0;
+}
+
+int do_send_remote (client_t *client, std::string *out) {
+    int size = out->size();
+    resp_header_t resp_header = {
+        .resp_type = REMOTE,
+        .body_size = size,
+    };
+
+    do_send(client, &resp_header, FIXED_RESP_HEADER_SIZE);    
+    do_send(client, (void *)out->c_str(), size);
+
+    return 0;
+}
+
+int do_send_remote_exchange (client_t *client, unsigned int return_code) {
+    resp_header_t resp_header = {
+        .resp_type = REMOTE_EXCHANGE,
+        .body_size = FIXED_RESP_REMOTE_CONNINFO_SIZE,
+    };
+    do_send(client, &resp_header, FIXED_RESP_HEADER_SIZE);    
+    resp_remote_conninfo_t resp_remote_conninfo = {
+        .code = return_code,
+        .conn_info = client->local_info,
+    };
+    do_send(client, &resp_remote_conninfo, FIXED_RESP_REMOTE_CONNINFO_SIZE);
+    return 0;
 }
 
 int do_read_cache(client_t *client) {
@@ -187,14 +237,16 @@ int do_read_cache(client_t *client) {
         if (kv_map.count(block.key) == 0) {
             std::cout << "Key not found: " << block.key << std::endl;
             CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
-            return KEY_NOT_FOUND;
+            // return KEY_NOT_FOUND;
+            return do_send_local(client, KEY_NOT_FOUND);
         }
 
         //key found
         //std::cout << "Key found: " << block.key << std::endl;
         void * h_src = kv_map[block.key].ptr;
         if (h_src == NULL) {
-            return KEY_NOT_FOUND;
+            // return KEY_NOT_FOUND;
+            return do_send_local(client, KEY_NOT_FOUND);
         }
         //push the host cpu data to local device
         CHECK_CUDA(cudaMemcpyAsync((char*)d_ptr + block.offset, h_src, meta->block_size, cudaMemcpyHostToDevice, client->cuda_stream));
@@ -207,7 +259,10 @@ int do_read_cache(client_t *client) {
     req->data = (void *)wqueue_data;
     uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);  
 
-    return TASK_ACCEPTED;
+    // return TASK_ACCEPTED;
+    return do_send_local(client, TASK_ACCEPTED);
+    // reset_client_read_state(client);
+    // return 0;
 }
 
 int do_write_cache(client_t *client) {
@@ -225,7 +280,8 @@ int do_write_cache(client_t *client) {
         if (h_dst == NULL) {
             ERROR("Failed to allocat host memroy");
             CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
-            return SYSTEM_ERROR;
+            // return SYSTEM_ERROR;
+            return do_send_local(client, SYSTEM_ERROR);
         }
         //how to deal with memory overflow? 
         //pull data from local device to CPU host
@@ -244,7 +300,10 @@ int do_write_cache(client_t *client) {
     req->data = (void *)wqueue_data;
     uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);    
 
-    return TASK_ACCEPTED;
+    // return TASK_ACCEPTED;
+    return do_send_local(client, TASK_ACCEPTED);
+    // reset_client_read_state(client);
+    // return 0;
 }
 
 int init_rdma_context() {
@@ -279,7 +338,8 @@ int do_rdma_exchange(client_t *client) {
         client->cq = ibv_create_cq(ib_ctx, 1025, NULL, NULL, 0);
         if (!client->cq) {
             ERROR("Failed to create CQ");
-            return SYSTEM_ERROR;
+            // return SYSTEM_ERROR;
+            return do_send_remote_exchange(client, SYSTEM_ERROR);
         }
 
         // Create Queue Pair
@@ -295,7 +355,8 @@ int do_rdma_exchange(client_t *client) {
         client->qp = ibv_create_qp(pd, &qp_init_attr);
         if (!client->qp) {
             ERROR("Failed to create QP");
-            return SYSTEM_ERROR;
+            // return SYSTEM_ERROR;
+            return do_send_remote_exchange(client, SYSTEM_ERROR);
         }
         // Modify QP to INIT state
         struct ibv_qp_attr attr = {};
@@ -309,14 +370,16 @@ int do_rdma_exchange(client_t *client) {
         ret = ibv_modify_qp(client->qp, &attr, flags);
         if (ret) {
             ERROR("Failed to modify QP to INIT");
-            return SYSTEM_ERROR;
+            // return SYSTEM_ERROR;
+            return do_send_remote_exchange(client, SYSTEM_ERROR);
         }
 
         // Get local connection information
         struct ibv_port_attr port_attr;
         if (ibv_query_port(ib_ctx, 1, &port_attr)) {
             ERROR("Failed to query port");
-            return SYSTEM_ERROR;
+            // return SYSTEM_ERROR;
+            return do_send_remote_exchange(client, SYSTEM_ERROR);
         }
 
         int gidx = ibv_find_sgid_type(ib_ctx, 1, IBV_GID_TYPE_ROCE_V2, AF_INET);
@@ -342,13 +405,13 @@ int do_rdma_exchange(client_t *client) {
         print_rdma_conn_info(&client->local_info, false);
     }
 
-    //Send server's RDMA connection info to client
-    uv_buf_t wbuf = uv_buf_init((char*)&client->local_info, sizeof(client->local_info));
+    // //Send server's RDMA connection info to client
+    // uv_buf_t wbuf = uv_buf_init((char*)&client->local_info, sizeof(client->local_info));
 
-    uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
-    write_req->data = client;
-    uv_write(write_req, (uv_stream_t*)client->handle, &wbuf, 1, on_write);
-    
+    // uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
+    // write_req->data = client;
+    // uv_write(write_req, (uv_stream_t*)client->handle, &wbuf, 1, on_write);
+    do_send_remote_exchange(client, FINISH);
     
     // Modify QP to RTR state
     struct ibv_qp_attr attr = {};
@@ -401,30 +464,21 @@ int do_rdma_exchange(client_t *client) {
     INFO("RDMA exchange done");
     client->rdma_connected = true;
 
-
-    reset_client_read_state(client);
+    // reset_client_read_state(client);
     return 0;
-}
-
-void do_send(client_t *client, void* buf, size_t size) {
-    uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
-    int ret = client->remain;
-    client->send_buffer = (char*)realloc(client->send_buffer, size);
-    memcpy(client->send_buffer, buf, size);
-    write_req->data = client;
-    uv_buf_t wbuf = uv_buf_init(client->send_buffer, size);
-    uv_write(write_req, (uv_stream_t *)client->handle, &wbuf, 1, on_write);    
 }
 
 int do_sync_stream(client_t *client) {
-    resp_t resp = {
-        .code = FINISH,
-        .remain = client->remain,
-    };
-    do_send(client, &resp, FIXED_RESP_SIZE);
+    // resp_t resp = {
+    //     .code = FINISH,
+    //     .remain = client->remain,
+    // };
+    // do_send(client, &resp, FIXED_RESP_SIZE);
+
+    return do_send_local(client, FINISH);
     // Reset client state
-    reset_client_read_state(client);
-    return 0;
+    // reset_client_read_state(client);
+    // return 0;
 }
 
 //TODO: refactor this function to use RDMA_WRITE_IMM.
@@ -460,19 +514,22 @@ RETURN:
         ERROR("Failed to serialize response");
         return SYSTEM_ERROR;
     }
-    client->send_buffer = (char*) realloc(client->send_buffer, out.size() + RETURN_CODE_SIZE);
+    // client->send_buffer = (char*) realloc(client->send_buffer, out.size() + RETURN_CODE_SIZE);
 
-    int size = out.size();
-    memcpy(client->send_buffer, &size, RETURN_CODE_SIZE);
-    memcpy(client->send_buffer + RETURN_CODE_SIZE, out.c_str(), out.size());
-    uv_buf_t wbuf = uv_buf_init(client->send_buffer, out.size() + RETURN_CODE_SIZE);
-    write_req->data = client;
-    uv_write(write_req, (uv_stream_t*)client->handle, &wbuf, 1, on_write);
+    // int size = out.size();
+    // memcpy(client->send_buffer, &size, RETURN_CODE_SIZE);
+    // memcpy(client->send_buffer + RETURN_CODE_SIZE, out.c_str(), out.size());
+    // uv_buf_t wbuf = uv_buf_init(client->send_buffer, out.size() + RETURN_CODE_SIZE);
+    // write_req->data = client;
+    // uv_write(write_req, (uv_stream_t*)client->handle, &wbuf, 1, on_write);
 
-    INFO("send response: size:{}", size);
-    reset_client_read_state(client);
-    INFO("do rdma read runtime: {} ms", std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - start).count());
-    return 0;
+    // INFO("send response: size:{}", size);
+
+    return do_send_remote(client, &out);
+
+    // reset_client_read_state(client);
+    // INFO("do rdma read runtime: {} ms", std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - start).count());
+    // return 0;
 }
 
 int do_rdma_write(client_t *client) {
@@ -514,20 +571,33 @@ RETURN:
         ERROR("Failed to serialize response");
         return SYSTEM_ERROR;
     }
-    client->send_buffer = (char*) realloc(client->send_buffer, out.size() + RETURN_CODE_SIZE);
+    // client->send_buffer = (char*) realloc(client->send_buffer, out.size() + RETURN_CODE_SIZE);
 
 
-    int size = out.size();
-    memcpy(client->send_buffer, &size, RETURN_CODE_SIZE);
-    memcpy(client->send_buffer + RETURN_CODE_SIZE, out.c_str(), out.size());
-    uv_buf_t wbuf = uv_buf_init(client->send_buffer, out.size() + RETURN_CODE_SIZE);
-    write_req->data = client;
-    uv_write(write_req, (uv_stream_t*)client->handle, &wbuf, 1, on_write);
+    // int size = out.size();
+    // memcpy(client->send_buffer, &size, RETURN_CODE_SIZE);
+    // memcpy(client->send_buffer + RETURN_CODE_SIZE, out.c_str(), out.size());
+    // uv_buf_t wbuf = uv_buf_init(client->send_buffer, out.size() + RETURN_CODE_SIZE);
+    // write_req->data = client;
+    // uv_write(write_req, (uv_stream_t*)client->handle, &wbuf, 1, on_write);
 
-    DEBUG("send response: size:{}", size);
-    reset_client_read_state(client);
-    return 0;
+    // DEBUG("send response: size:{}", size);
+
+    return do_send_remote(client, &out);
+
+    // reset_client_read_state(client);
+    // return 0;
 }
+
+using opFunc_t = int (*)(client_t *client);
+std::unordered_map<char, opFunc_t> opFuncMp = {
+    {OP_R, do_read_cache},
+    {OP_W, do_write_cache},
+    {OP_SYNC, do_sync_stream},
+    {OP_RDMA_EXCHANGE, do_rdma_exchange},
+    {OP_RDMA_WRITE, do_rdma_write},
+    {OP_RDMA_READ, do_rdma_read},
+};
 
 //return value of handle_request:
 //if ret is less than 0, it is an system error, outer code will close the connection
@@ -536,45 +606,52 @@ int handle_request(client_t *client) {
     auto start = std::chrono::high_resolution_clock::now();
     int return_code = SYSTEM_ERROR;
 
-   if (client->header.op == OP_RDMA_WRITE) {
-        return_code = do_rdma_write(client);
-        if (return_code == 0) {
-            return 0;
-        }
-   }
-   else if (client->header.op == OP_RDMA_READ) {
-        return_code = do_rdma_read(client);
-        if (return_code == 0) {
-            return 0;
-        }
-   }
-   else if (client->header.op == OP_RDMA_EXCHANGE) {
-        return_code = do_rdma_exchange(client);
-        if (return_code == 0) {
-            return 0;
-        }
-   }
-   else if (client->header.op == OP_SYNC) {
-        return_code = do_sync_stream(client);
-        //do_sync_stream will handle return code by itself
-        if (return_code == 0) {
-            return 0;
-        }
-    }  else if (client->header.op == OP_W) {
-        return_code = do_write_cache(client);
-    } else if (client->header.op == OP_R) {
-        return_code = do_read_cache(client);
-    } else {
-        return_code = INVALID_REQ;
-    }
+    return_code = (*opFuncMp[client->header.op])(client);
+//    if (client->header.op == OP_RDMA_WRITE) {
+//         return_code = do_rdma_write(client);
+//         // if (return_code == 0) {
+//         //     return 0;
+//         // }
+//    }
+//    else if (client->header.op == OP_RDMA_READ) {
+//         return_code = do_rdma_read(client);
+//         // if (return_code == 0) {
+//         //     return 0;
+//         // }
+//    }
+//    else if (client->header.op == OP_RDMA_EXCHANGE) {
+//         return_code = do_rdma_exchange(client);
+//         // if (return_code == 0) {
+//         //     return 0;
+//         // }
+//    }
+//    else if (client->header.op == OP_SYNC) {
+//         return_code = do_sync_stream(client);
+//         //do_sync_stream will handle return code by itself
+//         // if (return_code == 0) {
+//         //     return 0;
+//         // }
+//     }  else if (client->header.op == OP_W) {
+//         return_code = do_write_cache(client);
+//         // if (return_code == 0) {
+//         //     return 0;
+//         // }        
+//     } else if (client->header.op == OP_R) {
+//         return_code = do_read_cache(client);
+//         // if (return_code == 0) {
+//         //     return 0;
+//         // }        
+//     } else {
+//         return_code = INVALID_REQ;
+//     }
     
-    INFO("return code: {}", return_code);
+    // INFO("return code: {}", return_code);
 
-    resp_t resp = {
-        .code = return_code,
-        .remain = client->remain,
-    };
-    do_send(client, &resp, FIXED_RESP_SIZE);
+    // resp_t resp = {
+    //     .code = return_code,
+    //     .remain = client->remain,
+    // };
+    // do_send(client, &resp, FIXED_RESP_SIZE);
 
     //success
     //keep connection alive
