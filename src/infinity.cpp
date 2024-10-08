@@ -10,7 +10,6 @@
 #include <time.h>
 #include <assert.h>
 
-
 #include <string>
 #include <unordered_map>
 #include <iostream>
@@ -23,9 +22,7 @@
 #include "utils.h"
 #include "mempool.h"
 
-
 #define BUFFER_SIZE (64<<10)
-
 
 struct PTR {
     void *ptr;
@@ -56,6 +53,7 @@ typedef enum {
 
 struct Client {
     uv_tcp_t* handle; //uv_stream_t
+    uv_write_t* write_req;
     read_state_t state; //state of the client, for parsing the request
     size_t bytes_read; //bytes read so far, for parsing the request
     size_t expected_bytes; //expected size of the body
@@ -171,13 +169,10 @@ void after_ipc_close_completion(uv_work_t* req, int status) {
     delete req;
 }
 
-void do_send(client_t *client, void* buf, size_t size) {
-    uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
-    client->send_buffer = (char*)realloc(client->send_buffer, size);
-    memcpy(client->send_buffer, buf, size);
-    write_req->data = client;
+void do_send(client_t *client, size_t size) {
+    client->write_req->data = client;
     uv_buf_t wbuf = uv_buf_init(client->send_buffer, size);
-    uv_write(write_req, (uv_stream_t *)client->handle, &wbuf, 1, on_write);    
+    uv_write(client->write_req, (uv_stream_t *)client->handle, &wbuf, 1, on_write);
 }
 
 int do_send_local (client_t *client, unsigned int return_code) {
@@ -185,12 +180,20 @@ int do_send_local (client_t *client, unsigned int return_code) {
         .resp_type = LOCAL,
         .body_size = FIXED_RESP_LOCAL_SIZE,
     };
-    do_send(client, &resp_header, FIXED_RESP_HEADER_SIZE);
     resp_local_t resp_body = {
         .code = return_code,
         .remain = client->remain,
     };
-    do_send(client, &resp_body, FIXED_RESP_LOCAL_SIZE);
+
+    client->send_buffer = (char*)realloc(client->send_buffer, FIXED_RESP_HEADER_SIZE + FIXED_RESP_LOCAL_SIZE);
+    if (client->send_buffer == NULL) {
+        INFO("realloc failed to send back");
+        return -1;
+    }
+    memcpy(client->send_buffer, &resp_header, FIXED_RESP_HEADER_SIZE);
+    memcpy(client->send_buffer + FIXED_RESP_HEADER_SIZE, &resp_body, FIXED_RESP_HEADER_SIZE);
+
+    do_send(client, FIXED_RESP_HEADER_SIZE + FIXED_RESP_LOCAL_SIZE);
 
     return 0;
 }
@@ -202,8 +205,15 @@ int do_send_remote (client_t *client, std::string *out) {
         .body_size = size,
     };
 
-    do_send(client, &resp_header, FIXED_RESP_HEADER_SIZE);    
-    do_send(client, (void *)out->c_str(), size);
+    client->send_buffer = (char*)realloc(client->send_buffer, FIXED_RESP_HEADER_SIZE + size);
+    if (client->send_buffer == NULL) {
+        INFO("realloc failed to send back");
+        return -1;
+    }
+    memcpy(client->send_buffer, &resp_header, FIXED_RESP_HEADER_SIZE);
+    memcpy(client->send_buffer + FIXED_RESP_HEADER_SIZE, out->c_str(), size);    
+    
+    do_send(client, FIXED_RESP_HEADER_SIZE + size);
 
     return 0;
 }
@@ -213,12 +223,20 @@ int do_send_remote_exchange (client_t *client, unsigned int return_code) {
         .resp_type = REMOTE_EXCHANGE,
         .body_size = FIXED_RESP_REMOTE_CONNINFO_SIZE,
     };
-    do_send(client, &resp_header, FIXED_RESP_HEADER_SIZE);    
     resp_remote_conninfo_t resp_remote_conninfo = {
         .code = return_code,
         .conn_info = client->local_info,
     };
-    do_send(client, &resp_remote_conninfo, FIXED_RESP_REMOTE_CONNINFO_SIZE);
+
+    client->send_buffer = (char*)realloc(client->send_buffer, FIXED_RESP_HEADER_SIZE + FIXED_RESP_REMOTE_CONNINFO_SIZE);
+    if (client->send_buffer == NULL) {
+        INFO("realloc failed to send back");
+        return -1;
+    }
+    memcpy(client->send_buffer, &resp_header, FIXED_RESP_HEADER_SIZE);
+    memcpy(client->send_buffer + FIXED_RESP_HEADER_SIZE, &resp_remote_conninfo, FIXED_RESP_REMOTE_CONNINFO_SIZE);
+
+    do_send(client, FIXED_RESP_HEADER_SIZE + FIXED_RESP_REMOTE_CONNINFO_SIZE);    
     return 0;
 }
 
@@ -457,7 +475,6 @@ int do_rdma_read(client_t *client) {
 
     int error_code = TASK_ACCEPTED;
     remote_meta_response resp;
-    uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
     std::string out;
 
 
@@ -490,7 +507,6 @@ RETURN:
 int do_rdma_write(client_t *client) {
     INFO("do rdma write keys: {}, remote_block_size: {}", client->remote_meta_req.keys.size(), client->remote_meta_req.block_size);
     remote_meta_response resp;
-    uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
     std::string out;
     int error_code = TASK_ACCEPTED;
 
@@ -649,6 +665,7 @@ void on_new_connection(uv_stream_t* server, int status) {
         client_t *client = new client_t();
         CHECK_CUDA(cudaStreamCreate(&client->cuda_stream));
         client->handle = client_handle;
+        client->write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
         client_handle->data = client;
         client->state = READ_HEADER;
         client->bytes_read = 0;
