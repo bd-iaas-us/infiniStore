@@ -69,7 +69,7 @@ if __name__ == "__main__":
         args.control_port, args.data_port, args.log_level, args.prealloc_size
 
     check_p2p_access()
-    # infinity.check_infinity_supported()
+    infinity.check_infinity_supported()
 
     loop = uvloop.new_event_loop()
     asyncio.set_event_loop(loop)
