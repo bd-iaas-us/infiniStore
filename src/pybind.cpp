@@ -1,13 +1,14 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include "libinfinity.h"
+#include "config.h"
 #include <vector>
 #include <string>
 #include <tuple>
 #include <iostream>
 
 namespace py = pybind11;
-extern int register_server(unsigned long loop_ptr, size_t prealloc_size);
+extern int register_server(unsigned long loop_ptr, server_config_t config);
 
 int rw_local_wrapper(connection_t *conn, char op, const std::vector<std::tuple<std::string, unsigned long>> &blocks, \
             int block_size, uintptr_t ptr) {
@@ -31,6 +32,12 @@ int rw_rdma_wrapper(connection_t *conn, char op, const std::vector<std::tuple<st
 
 PYBIND11_MODULE(_infinity, m) {
     //client side
+    py::class_<client_config_t>(m, "ClientConfig")
+        .def(py::init<>())
+        .def_readwrite("data_port", &client_config_t::data_port)
+        .def_readwrite("control_port", &client_config_t::control_port)
+        .def_readwrite("log_level", &client_config_t::log_level)
+        .def_readwrite("connect_host", &client_config_t::connect_host);
     py::class_<connection_t>(m, "Connection")
         .def(py::init<>());
     m.def("init_connection", &init_connection, "Initialize a connection");
@@ -42,6 +49,12 @@ PYBIND11_MODULE(_infinity, m) {
 
 
     //server side
+    py::class_<server_config_t>(m, "ServerConfig")
+        .def(py::init<>())
+        .def_readwrite("data_port", &ServerConfig::data_port)
+        .def_readwrite("control_port", &ServerConfig::control_port)
+        .def_readwrite("log_level", &ServerConfig::log_level)
+        .def_readwrite("prealloc_size", &ServerConfig::prealloc_size);    
     m.def("get_kvmap_len", &get_kvmap_len, "get kv map size");
     m.def("register_server", &register_server, "register the server");
 

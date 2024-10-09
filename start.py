@@ -4,7 +4,7 @@ import uvloop
 from fastapi import FastAPI
 import uvicorn
 import torch
-
+import argparse
 
 app = FastAPI()
 
@@ -13,6 +13,41 @@ app = FastAPI()
 async def read_status():
     return infinity._infinity.get_kvmap_len()
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--host",
+        required=False,
+        help="listen on which host, default 0.0.0.0",
+        default="0.0.0.0",
+        type=str,
+    )
+    parser.add_argument(
+        "--control_port",
+        required=False,
+        default=18080,
+        help="port for control plane, default 18080",
+    )
+    parser.add_argument(
+        "--data_port",
+        required=False,
+        default=22345,
+        help="port for data plane, default 22345",
+    )    
+    parser.add_argument(
+        "--log_level",
+        required=False,
+        default='warning',
+        help="log level, default warning",
+        type=str
+    )
+    parser.add_argument(
+        "--prealloc_size",
+        required=False,
+        default=16,
+        help="prealloc mem pool size, default 16GB, unit: GB",
+    )      
+    return parser.parse_args()
 
 def check_p2p_access():
     num_devices = torch.cuda.device_count()
@@ -28,20 +63,25 @@ def check_p2p_access():
 
 
 if __name__ == "__main__":
+    args = parse_args()
+    config = infinity._infinity.ServerConfig()
+    config.control_port, config.data_port, config.log_level, config.prealloc_size = \
+        args.control_port, args.data_port, args.log_level, args.prealloc_size
+
     check_p2p_access()
-    infinity.check_infinity_supported()
+    # infinity.check_infinity_supported()
 
     loop = uvloop.new_event_loop()
     asyncio.set_event_loop(loop)
     # 16 GB pre allocated
     # TODO: find the minimum size for pinning memory and ib_reg_mr
-    infinity.register_server(loop, 16 << 30)
+    infinity.register_server(loop, config)
     config = uvicorn.Config(
         app,
         host="0.0.0.0",
-        port=18080,
+        port=config.control_port,
         loop="uvloop",
-        log_level="warning",  # Disables logging
+        log_level=config.log_level,  # Disables logging
     )
 
     server = uvicorn.Server(config)

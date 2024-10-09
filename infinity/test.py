@@ -5,7 +5,7 @@ from infinity.lib import (
 )
 import torch
 import time
-
+from infinity._infinity import ClientConfig
 
 def run(conn):
     check_infinity_supported()
@@ -31,10 +31,14 @@ def run(conn):
 
 
 if __name__ == "__main__":
-    rdma_conn = InfinityConnection()
-    rdma_conn.connect("127.0.0.1")
+    config = ClientConfig()
+    config.data_port = 22345
+    config.connect_host = "10.192.24.216"
+
+    rdma_conn = InfinityConnection(config)
+    rdma_conn.connect()
     run(rdma_conn)
 
-    local_conn = InfinityConnection()
-    local_conn.local_connect()
-    run(local_conn)
+    # local_conn = InfinityConnection(config)
+    # local_conn.local_connect()
+    # run(local_conn)

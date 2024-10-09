@@ -7,7 +7,7 @@ import subprocess
 import time
 
 
-def register_server(loop, prealloc_size):
+def register_server(loop, config):
     """
     Registers a server with the given event loop.
 
@@ -29,7 +29,7 @@ def register_server(loop, prealloc_size):
 
     # from cpython.pycapsule import PyCapsule_GetPointer
     # <uint64_t>PyCapsule_GetPointer(obj, NULL)
-    return _infinity.register_server(loop_ptr, prealloc_size)
+    return _infinity.register_server(loop_ptr, config)
 
 
 def _kernel_modules():
@@ -94,23 +94,22 @@ class InfinityConnection:
 
     def __init__(
         self,
+        config
     ):
         self.conn = _infinity.Connection()
         self.local_connected = False
         self.rdma_connected = False
+        self.config = config
 
-    def connect(self, ip_addr: str):
+    def connect(self):
         """
         Establishes an RDMA connection using the provided IP address.
-
-        Args:
-            ip_addr (str): The IP address of the RDMA instance to connect to.
         """
         if self.local_connected:
             raise Exception("Already connected to local instance")
         if self.rdma_connected:
             raise Exception("Already connected to remote instance")
-        ret = _infinity.init_connection(self.conn, ip_addr)
+        ret = _infinity.init_connection(self.conn, self.config)
         if ret < 0:
             raise Exception("Failed to initialize remote connection")
         ret = _infinity.setup_rdma(self.conn)
@@ -131,7 +130,8 @@ class InfinityConnection:
             raise Exception("Already connected to rdma instance")
         if self.local_connected:
             raise Exception("Already connected to local instance")
-        ret = _infinity.init_connection(self.conn, "127.0.0.1")
+        self.config.connect_host = "127.0.0.1"
+        ret = _infinity.init_connection(self.conn, self.config)
         if ret < 0:
             raise Exception("Failed to initialize local connection")
         self.local_connected = True
