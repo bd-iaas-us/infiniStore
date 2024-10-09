@@ -68,16 +68,15 @@ if __name__ == "__main__":
 
     loop = uvloop.new_event_loop()
     asyncio.set_event_loop(loop)
-    #16 GB pre allocated
+    #64 GB pre allocated
     #TODO: find the minimum size for pinning memory and ib_reg_mr
-    # infinity.register_server(loop, pool_size<<30)
     infinity.register_server(loop, args.prealloc_size, args.data_port, args.log_level)
     config = uvicorn.Config(
         app,
         host=args.host,
         port=args.control_port,
         loop="uvloop",
-        log_level=args.log_level  # Disables logging
+        log_level=args.log_level
     )
 
     server = uvicorn.Server(config)
