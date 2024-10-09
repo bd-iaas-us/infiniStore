@@ -5,7 +5,7 @@ typedef struct ServerConfig {
     int service_port;
     int manage_port;
     std::string log_level;
-    size_t prealloc_size;
+    size_t prealloc_size; // unit: GB
 } server_config_t;
 
 typedef struct ClientConfig {
