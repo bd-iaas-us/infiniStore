@@ -293,10 +293,10 @@ int init_connection(connection_t *conn, client_config_t config)   {
     }
 
     serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(config.data_port);
+    serv_addr.sin_port = htons(config.service_port);
 
     // always connect to localhost
-    if(inet_pton(AF_INET, config.connect_host.data(), &serv_addr.sin_addr) <= 0) {
+    if(inet_pton(AF_INET, config.host_addr.data(), &serv_addr.sin_addr) <= 0) {
         ERROR("Invalid address/ Address not supported");
         return -1;
     }

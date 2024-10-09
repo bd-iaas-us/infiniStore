@@ -2,17 +2,17 @@
 #define LIBCONFIG_H
 
 typedef struct ServerConfig {
-    int data_port;
-    int control_port;
+    int service_port;
+    int manage_port;
     std::string log_level;
     size_t prealloc_size;
 } server_config_t;
 
 typedef struct ClientConfig {
-    int data_port;
-    int control_port;
+    int service_port;
+    int manage_port;
     std::string log_level;
-    std::string connect_host;
+    std::string host_addr;
 } client_config_t;
 
 #endif 

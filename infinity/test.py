@@ -32,13 +32,13 @@ def run(conn):
 
 if __name__ == "__main__":
     config = ClientConfig()
-    config.data_port = 22345
-    config.connect_host = "10.192.24.216"
+    config.service_port = 22345
+    config.host_addr = "10.192.24.216"
 
     rdma_conn = InfinityConnection(config)
     rdma_conn.connect()
     run(rdma_conn)
 
-    # local_conn = InfinityConnection(config)
-    # local_conn.local_connect()
-    # run(local_conn)
+    local_conn = InfinityConnection(config)
+    local_conn.local_connect()
+    run(local_conn)

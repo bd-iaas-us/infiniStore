@@ -23,13 +23,13 @@ def parse_args():
         type=str,
     )
     parser.add_argument(
-        "--control_port",
+        "--manage_port",
         required=False,
         default=18080,
         help="port for control plane, default 18080",
     )
     parser.add_argument(
-        "--data_port",
+        "--service_port",
         required=False,
         default=22345,
         help="port for data plane, default 22345",
@@ -65,8 +65,8 @@ def check_p2p_access():
 if __name__ == "__main__":
     args = parse_args()
     config = infinity._infinity.ServerConfig()
-    config.control_port, config.data_port, config.log_level, config.prealloc_size = \
-        args.control_port, args.data_port, args.log_level, args.prealloc_size
+    config.manage_port, config.service_port, config.log_level, config.prealloc_size = \
+        args.manage_port, args.service_port, args.log_level, args.prealloc_size
 
     check_p2p_access()
     infinity.check_infinity_supported()
@@ -79,7 +79,7 @@ if __name__ == "__main__":
     config = uvicorn.Config(
         app,
         host="0.0.0.0",
-        port=config.control_port,
+        port=config.manage_port,
         loop="uvloop",
         log_level=config.log_level,  # Disables logging
     )

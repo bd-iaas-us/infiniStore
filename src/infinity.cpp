@@ -736,7 +736,7 @@ int register_server(unsigned long loop_ptr, server_config_t config) {
     assert(loop != NULL);
     uv_tcp_init(loop, &server);
     struct sockaddr_in addr;
-    uv_ip4_addr("0.0.0.0", config.data_port, &addr);
+    uv_ip4_addr("0.0.0.0", config.service_port, &addr);
 
     uv_tcp_bind(&server, (const struct sockaddr *)&addr, 0);
     int r = uv_listen((uv_stream_t *)&server, 128, on_new_connection);

@@ -130,7 +130,7 @@ class InfinityConnection:
             raise Exception("Already connected to rdma instance")
         if self.local_connected:
             raise Exception("Already connected to local instance")
-        self.config.connect_host = "127.0.0.1"
+        self.config.host_addr = "127.0.0.1"
         ret = _infinity.init_connection(self.conn, self.config)
         if ret < 0:
             raise Exception("Failed to initialize local connection")
