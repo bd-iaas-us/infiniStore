@@ -54,7 +54,7 @@ PYBIND11_MODULE(_infinity, m) {
         .def_readwrite("service_port", &ServerConfig::service_port)
         .def_readwrite("manage_port", &ServerConfig::manage_port)
         .def_readwrite("log_level", &ServerConfig::log_level)
-        .def_readwrite("prealloc_size", &ServerConfig::prealloc_size);    
+        .def_readwrite("prealloc_size", &ServerConfig::prealloc_size);
     m.def("get_kvmap_len", &get_kvmap_len, "get kv map size");
     m.def("register_server", &register_server, "register the server");
 

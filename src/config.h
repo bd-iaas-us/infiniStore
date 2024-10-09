@@ -15,4 +15,4 @@ typedef struct ClientConfig {
     std::string host_addr;
 } client_config_t;
 
-#endif 
+#endif

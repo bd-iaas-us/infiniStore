@@ -7,6 +7,7 @@ import torch
 import time
 from infinity._infinity import ClientConfig
 
+
 def run(conn):
     check_infinity_supported()
     src = [i for i in range(4096)]

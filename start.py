@@ -13,6 +13,7 @@ app = FastAPI()
 async def read_status():
     return infinity._infinity.get_kvmap_len()
 
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -33,21 +34,22 @@ def parse_args():
         required=False,
         default=22345,
         help="port for data plane, default 22345",
-    )    
+    )
     parser.add_argument(
         "--log_level",
         required=False,
-        default='warning',
+        default="warning",
         help="log level, default warning",
-        type=str
+        type=str,
     )
     parser.add_argument(
         "--prealloc_size",
         required=False,
         default=16,
         help="prealloc mem pool size, default 16GB, unit: GB",
-    )      
+    )
     return parser.parse_args()
+
 
 def check_p2p_access():
     num_devices = torch.cuda.device_count()
@@ -65,8 +67,12 @@ def check_p2p_access():
 if __name__ == "__main__":
     args = parse_args()
     config = infinity._infinity.ServerConfig()
-    config.manage_port, config.service_port, config.log_level, config.prealloc_size = \
-        args.manage_port, args.service_port, args.log_level, args.prealloc_size
+    config.manage_port, config.service_port, config.log_level, config.prealloc_size = (
+        args.manage_port,
+        args.service_port,
+        args.log_level,
+        args.prealloc_size,
+    )
 
     check_p2p_access()
     infinity.check_infinity_supported()

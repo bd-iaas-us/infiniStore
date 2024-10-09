@@ -92,10 +92,7 @@ class InfinityConnection:
     OP_RDMA_WRITE = "D"
     OP_RDMA_READ = "A"
 
-    def __init__(
-        self,
-        config
-    ):
+    def __init__(self, config):
         self.conn = _infinity.Connection()
         self.local_connected = False
         self.rdma_connected = False
