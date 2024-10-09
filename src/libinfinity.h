@@ -39,7 +39,12 @@
 
 typedef struct Connection connection_t;
 
-
+struct Config {
+    int data_port;
+    std::string log_level;
+    size_t prealloc_size;
+};
+typedef struct Config config_t;
 
 
 int init_connection(connection_t *conn, std::string ip_addr);

@@ -21,6 +21,7 @@
 #include "protocol.h"
 #include "utils.h"
 #include "mempool.h"
+#include "libinfinity.h"
 
 #define BUFFER_SIZE (64<<10)
 
@@ -677,7 +678,7 @@ void on_new_connection(uv_stream_t* server, int status) {
     }
 }
 
-int register_server(unsigned long loop_ptr, size_t prealloc_size) {
+int register_server(unsigned long loop_ptr, config_t config) {
 
     signal(SIGSEGV, signal_handler);
 
@@ -685,7 +686,7 @@ int register_server(unsigned long loop_ptr, size_t prealloc_size) {
     assert(loop != NULL);
     uv_tcp_init(loop, &server);
     struct sockaddr_in addr;
-    uv_ip4_addr("0.0.0.0", PORT, &addr);
+    uv_ip4_addr("0.0.0.0", config.data_port, &addr);
 
     uv_tcp_bind(&server, (const struct sockaddr*)&addr, 0);
     int r = uv_listen((uv_stream_t*) &server, 128, on_new_connection);
@@ -697,7 +698,7 @@ int register_server(unsigned long loop_ptr, size_t prealloc_size) {
     if (init_rdma_context() < 0) {
         return -1;
     }
-    mm = new MM(prealloc_size, 32<<10, pd);
+    mm = new MM(config.prealloc_size<<30, 32<<10, pd);
 
     INFO("register server done");
 

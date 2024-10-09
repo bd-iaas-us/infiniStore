@@ -7,7 +7,7 @@
 #include <iostream>
 
 namespace py = pybind11;
-extern int register_server(unsigned long loop_ptr, size_t prealloc_size);
+extern int register_server(unsigned long loop_ptr, config_t config);
 
 int rw_local_wrapper(connection_t *conn, char op, const std::vector<std::tuple<std::string, unsigned long>> &blocks, \
             int block_size, uintptr_t ptr) {
@@ -42,6 +42,11 @@ PYBIND11_MODULE(_infinity, m) {
 
 
     //server side
+    py::class_<config_t>(m, "Config")
+         .def(py::init<>())
+         .def_readwrite("data_port", &Config::data_port)
+         .def_readwrite("log_level", &Config::log_level)
+         .def_readwrite("prealloc_size", &Config::prealloc_size);
     m.def("get_kvmap_len", &get_kvmap_len, "get kv map size");
     m.def("register_server", &register_server, "register the server");
 
