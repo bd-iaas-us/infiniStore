@@ -6,6 +6,8 @@ from typing import List, Tuple
 import subprocess
 import time
 
+ClientConfig = _infinity.ClientConfig
+
 
 def register_server(loop, config):
     """
@@ -109,29 +111,13 @@ class InfinityConnection:
         ret = _infinity.init_connection(self.conn, self.config)
         if ret < 0:
             raise Exception("Failed to initialize remote connection")
-        ret = _infinity.setup_rdma(self.conn)
-        if ret < 0:
-            raise Exception("Failed to setup RDMA connection")
-        self.rdma_connected = True
-
-    def local_connect(self):
-        """
-        Establishes a local connection to the instance.
-
-        This method initializes a local connection to the instance using the IP address "127.0.0.1".
-        This connection will use cudaMemcpy to transfer data between the local and remote instances.
-        It raises an exception if a connection is already established either locally or via RDMA.
-
-        """
-        if self.rdma_connected:
-            raise Exception("Already connected to rdma instance")
-        if self.local_connected:
-            raise Exception("Already connected to local instance")
-        self.config.host_addr = "127.0.0.1"
-        ret = _infinity.init_connection(self.conn, self.config)
-        if ret < 0:
-            raise Exception("Failed to initialize local connection")
-        self.local_connected = True
+        if self.config.host_addr == "127.0.0.1":
+            self.local_connected = True
+        else:
+            ret = _infinity.setup_rdma(self.conn)
+            if ret < 0:
+                raise Exception("Failed to setup RDMA connection")
+            self.rdma_connected = True
 
     def write_cache(
         self, cache: torch.Tensor, blocks: List[Tuple[str, int]], page_size: int

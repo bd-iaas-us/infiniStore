@@ -8,7 +8,7 @@ import subprocess
 import random
 import string
 import contextlib
-from infinity._infinity import ClientConfig
+from infinity import ClientConfig
 
 
 # Fixture to start the TCzpserver before running tests
@@ -48,13 +48,10 @@ def get_gpu_count():
 def test_basic_read_write_cache(server, dtype, new_connection, local):
     config = ClientConfig()
     config.service_port = 22345
-    config.host_addr = "10.192.24.218"
+    config.host_addr = "127.0.0.1"
 
     conn = infinity.InfinityConnection(config)
-    if local:
-        conn.local_connect()
-    else:
-        conn.connect()
+    conn.connect()
 
     # key is random string
     key = generate_random_string(10)
@@ -68,7 +65,7 @@ def test_basic_read_write_cache(server, dtype, new_connection, local):
     conn.sync()
 
     conn = infinity.InfinityConnection(config)
-    conn.local_connect() if local else conn.connect()
+    conn.connect()
 
     with infinity.DisableTorchCaching() if local else contextlib.nullcontext():
         dst = torch.zeros(4096, device="cuda:0", dtype=dtype)
@@ -94,11 +91,10 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
 
     config = ClientConfig()
     config.service_port = 22345
-    config.host_addr = "10.192.24.218"        
+    config.host_addr = "127.0.0.1"
 
     conn = infinity.InfinityConnection(config)
-
-    conn.local_connect() if local else conn.connect()
+    conn.connect()
 
     num_of_blocks = 10
     keys = [generate_random_string(num_of_blocks) for i in range(10)]
