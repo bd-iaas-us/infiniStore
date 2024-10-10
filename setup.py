@@ -4,16 +4,16 @@ from setuptools import setup, find_packages
 from setuptools.command.build_ext import build_ext
 
 
-def get_git_commit_hash():
+def get_git_commit_count():
     try:
-        commit_hash = (
-            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"])
+        commit_count = (
+            subprocess.check_output(["git", "rev-list", "--count", "HEAD"])
             .decode("utf-8")
             .strip()
         )
-        return commit_hash
+        return commit_count
     except subprocess.CalledProcessError:
-        return "unknown"
+        return "0"
 
 
 # invoke the make command to build the shared library
@@ -33,11 +33,11 @@ class CustomBuildExt(build_ext):
         super().run()
 
 
-commit_hash = get_git_commit_hash()
+commit_count = get_git_commit_count()
 
 setup(
     name="infinistore",
-    version=f"0.1+{commit_hash}",
+    version=f"0.1+.{commit_count}",
     packages=find_packages(),
     cmdclass={"build_ext": CustomBuildExt},
     package_data={
