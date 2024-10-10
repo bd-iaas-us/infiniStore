@@ -8,6 +8,7 @@ import subprocess
 import random
 import string
 import contextlib
+from infinity._infinity import ClientConfig
 
 
 # Fixture to start the TCzpserver before running tests
@@ -45,11 +46,15 @@ def get_gpu_count():
 @pytest.mark.parametrize("new_connection", [True, False])
 @pytest.mark.parametrize("local", [True, False])
 def test_basic_read_write_cache(server, dtype, new_connection, local):
-    conn = infinity.InfinityConnection()
+    config = ClientConfig()
+    config.service_port = 22345
+    config.host_addr = "10.192.24.218"
+
+    conn = infinity.InfinityConnection(config)
     if local:
         conn.local_connect()
     else:
-        conn.connect("127.0.0.1")
+        conn.connect()
 
     # key is random string
     key = generate_random_string(10)
@@ -62,8 +67,8 @@ def test_basic_read_write_cache(server, dtype, new_connection, local):
     conn.write_cache(src_tensor, [(key, 0)], 4096)
     conn.sync()
 
-    conn = infinity.InfinityConnection()
-    conn.local_connect() if local else conn.connect("127.0.0.1")
+    conn = infinity.InfinityConnection(config)
+    conn.local_connect() if local else conn.connect()
 
     with infinity.DisableTorchCaching() if local else contextlib.nullcontext():
         dst = torch.zeros(4096, device="cuda:0", dtype=dtype)
@@ -87,9 +92,13 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
         src_device = "cuda:0"
         dst_device = "cuda:0"
 
-    conn = infinity.InfinityConnection()
+    config = ClientConfig()
+    config.service_port = 22345
+    config.host_addr = "10.192.24.218"        
 
-    conn.local_connect() if local else conn.connect("127.0.0.1")
+    conn = infinity.InfinityConnection(config)
+
+    conn.local_connect() if local else conn.connect()
 
     num_of_blocks = 10
     keys = [generate_random_string(num_of_blocks) for i in range(10)]
