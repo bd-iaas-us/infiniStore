@@ -142,14 +142,17 @@ class InfinityConnection:
         self._verify(cache)
         ptr = cache.data_ptr()
         element_size = cache.element_size()
+        #RMDA will register the whole cache tensor
+        whole_region_size = cache.numel() * element_size 
         #each offset should multiply by the element size
         blocks_in_bytes = [(key, offset * element_size) for key, offset in blocks]
+        block_size_in_bytes = page_size * element_size
         if self.local_connected:
-            ret = _infinity.rw_local(self.conn, self.OP_W, blocks_in_bytes, page_size * element_size, ptr)
+            ret = _infinity.rw_local(self.conn, self.OP_W, blocks_in_bytes, block_size_in_bytes, ptr)
             if ret < 0:
                 raise Exception(f"Failed to write to infinity, ret = {ret}")
         elif self.rdma_connected:
-            ret = _infinity.rw_rdma(self.conn, self.OP_RDMA_WRITE, blocks_in_bytes, page_size * element_size, ptr)
+            ret = _infinity.rw_rdma(self.conn, self.OP_RDMA_WRITE, blocks_in_bytes, block_size_in_bytes, ptr, whole_region_size)
             if ret < 0:
                 raise Exception(f"Failed to write to infinity, ret = {ret}")
         else:
@@ -171,14 +174,18 @@ class InfinityConnection:
         self._verify(cache)
         ptr = cache.data_ptr()
         element_size = cache.element_size()
+        #RMDA will register the whole cache tensor
+        whole_region_size = cache.numel() * element_size 
+
         #each offset should multiply by the element size
         blocks_in_bytes = [(key, offset * element_size) for key, offset in blocks]
+        block_size_in_bytes = page_size * element_size
         if self.local_connected:
             ret = _infinity.rw_local(self.conn, self.OP_R, blocks_in_bytes, page_size * element_size, ptr)
             if ret < 0:
                 raise Exception(f"Failed to read to infinity, ret = {ret}")
         elif self.rdma_connected:
-            ret = _infinity.rw_rdma(self.conn, self.OP_RDMA_READ, blocks_in_bytes, page_size * element_size, ptr)
+            ret = _infinity.rw_rdma(self.conn, self.OP_RDMA_READ, blocks_in_bytes, block_size_in_bytes, ptr, whole_region_size)
             if ret < 0:
                 raise Exception(f"Failed to read to infinity, ret = {ret}")
         else:

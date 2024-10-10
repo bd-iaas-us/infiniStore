@@ -395,7 +395,7 @@ int sync_local(connection_t *conn) {
     return return_code;
 }
 
-int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int block_size, void * ptr) {
+int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int block_size, void * ptr, size_t ptr_region_size) {
     assert(conn != NULL);
     assert(op == OP_RDMA_READ || op == OP_RDMA_WRITE);
     assert(ptr != NULL);
@@ -462,7 +462,7 @@ int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int
 
     struct ibv_mr *mr = NULL;
     if (conn->local_mr.find((uintptr_t)ptr) == conn->local_mr.end()) {
-        mr = ibv_reg_mr(conn->pd, ptr, block_size * blocks.size(),
+        mr = ibv_reg_mr(conn->pd, ptr, ptr_region_size,
                                        IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
         if (!mr) {
             ERROR("Failed to register MR");

@@ -48,7 +48,7 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, in
 int sync_local(connection_t *conn);
 int get_kvmap_len();
 int setup_rdma(connection_t *conn);
-int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int block_size, void * ptr);
+int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int block_size, void * ptr, size_t ptr_region_size);
 
 int sync_rdma(connection_t *conn);
 

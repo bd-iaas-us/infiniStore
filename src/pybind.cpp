@@ -20,12 +20,12 @@ int rw_local_wrapper(connection_t *conn, char op, const std::vector<std::tuple<s
 }
 
 int rw_rdma_wrapper(connection_t *conn, char op, const std::vector<std::tuple<std::string, unsigned long>> &blocks, \
-            int block_size, uintptr_t ptr) {
+            int block_size, uintptr_t ptr, size_t ptr_region_size) {
         std::vector<block_t> c_blocks;
     for (const auto& block : blocks) {
             c_blocks.push_back(block_t{std::get<0>(block), std::get<1>(block)});
     }
-    return rw_rdma(conn, op, c_blocks, block_size, (void*)ptr);
+    return rw_rdma(conn, op, c_blocks, block_size, (void*)ptr, ptr_region_size);
 }
 
 
