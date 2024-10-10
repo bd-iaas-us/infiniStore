@@ -3,7 +3,7 @@ from .lib import (
     DisableTorchCaching,
     register_server,
     check_supported,
-    ClientConfig
+    ClientConfig,
 )
 
 __all__ = [
@@ -11,5 +11,5 @@ __all__ = [
     "DisableTorchCaching",
     "register_server",
     "check_supported",
-    "ClientConfig"
+    "ClientConfig",
 ]

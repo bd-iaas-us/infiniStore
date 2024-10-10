@@ -37,7 +37,7 @@ PYBIND11_MODULE(_infinistore, m) {
         .def_readwrite("service_port", &client_config_t::service_port)
         .def_readwrite("manage_port", &client_config_t::manage_port)
         .def_readwrite("log_level", &client_config_t::log_level)
-        .def_readwrite("host_addr", &client_config_t::host_addr);    
+        .def_readwrite("host_addr", &client_config_t::host_addr);
     py::class_<connection_t>(m, "Connection")
         .def(py::init<>());
     m.def("init_connection", &init_connection, "Initialize a connection");
@@ -54,7 +54,7 @@ PYBIND11_MODULE(_infinistore, m) {
         .def_readwrite("service_port", &ServerConfig::service_port)
         .def_readwrite("manage_port", &ServerConfig::manage_port)
         .def_readwrite("log_level", &ServerConfig::log_level)
-        .def_readwrite("prealloc_size", &ServerConfig::prealloc_size);    
+        .def_readwrite("prealloc_size", &ServerConfig::prealloc_size);
     m.def("get_kvmap_len", &get_kvmap_len, "get kv map size");
     m.def("register_server", &register_server, "register the server");
 

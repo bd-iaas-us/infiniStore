@@ -26,6 +26,7 @@ def check_p2p_access():
                 else:
                     print(f"Peer access NOT supported between device {i} and {j}")
 
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -61,6 +62,7 @@ def parse_args():
         help="prealloc mem pool size, default 16GB, unit: GB",
     )
     return parser.parse_args()
+
 
 if __name__ == "__main__":
     args = parse_args()

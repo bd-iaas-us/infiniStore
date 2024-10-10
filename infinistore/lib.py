@@ -8,6 +8,7 @@ import time
 
 ClientConfig = _infinistore.ClientConfig
 
+
 def register_server(loop, config):
     """
     Registers a server with the given event loop.
