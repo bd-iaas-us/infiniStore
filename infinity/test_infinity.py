@@ -10,6 +10,9 @@ import string
 import contextlib
 from infinity import ClientConfig
 
+config = ClientConfig()
+config.service_port = 22345
+config.host_addr = "127.0.0.1"
 
 # Fixture to start the TCzpserver before running tests
 @pytest.fixture(scope="module")
@@ -46,10 +49,6 @@ def get_gpu_count():
 @pytest.mark.parametrize("new_connection", [True, False])
 @pytest.mark.parametrize("local", [True, False])
 def test_basic_read_write_cache(server, dtype, new_connection, local):
-    config = ClientConfig()
-    config.service_port = 22345
-    config.host_addr = "127.0.0.1"
-
     conn = infinity.InfinityConnection(config)
     conn.connect()
 
@@ -88,10 +87,6 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
     else:
         src_device = "cuda:0"
         dst_device = "cuda:0"
-
-    config = ClientConfig()
-    config.service_port = 22345
-    config.host_addr = "127.0.0.1"
 
     conn = infinity.InfinityConnection(config)
     conn.connect()
