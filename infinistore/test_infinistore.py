@@ -1,6 +1,6 @@
 import torch
 import pytest
-import infinity
+import infinistore
 import time
 import os
 import signal
@@ -45,7 +45,7 @@ def get_gpu_count():
 @pytest.mark.parametrize("new_connection", [True, False])
 @pytest.mark.parametrize("local", [True, False])
 def test_basic_read_write_cache(server, dtype, new_connection, local):
-    conn = infinity.InfinityConnection()
+    conn = infinistore.InfinityConnection()
     if local:
         conn.local_connect()
     else:
@@ -56,16 +56,16 @@ def test_basic_read_write_cache(server, dtype, new_connection, local):
     src = [i for i in range(4096)]
 
     # local GPU write is tricky, we need to disable the pytorch allocator's caching
-    with infinity.DisableTorchCaching() if local else contextlib.nullcontext():
+    with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
         src_tensor = torch.tensor(src, device="cuda:0", dtype=dtype)
 
     conn.write_cache(src_tensor, [(key, 0)], 4096)
     conn.sync()
 
-    conn = infinity.InfinityConnection()
+    conn = infinistore.InfinityConnection()
     conn.local_connect() if local else conn.connect("127.0.0.1")
 
-    with infinity.DisableTorchCaching() if local else contextlib.nullcontext():
+    with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
         dst = torch.zeros(4096, device="cuda:0", dtype=dtype)
     conn.read_cache(dst, [(key, 0)], 4096)
     conn.sync()
@@ -87,7 +87,7 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
         src_device = "cuda:0"
         dst_device = "cuda:0"
 
-    conn = infinity.InfinityConnection()
+    conn = infinistore.InfinityConnection()
 
     conn.local_connect() if local else conn.connect("127.0.0.1")
 
@@ -96,7 +96,7 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
     block_size = 4096
     src = [i for i in range(num_of_blocks * block_size)]
 
-    with infinity.DisableTorchCaching() if local else contextlib.nullcontext():
+    with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
         src_tensor = torch.tensor(src, device=src_device, dtype=torch.float32)
 
     blocks = [(keys[i], i * block_size) for i in range(num_of_blocks)]
@@ -104,7 +104,7 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
     conn.write_cache(src_tensor, blocks, block_size)
     conn.sync()
 
-    with infinity.DisableTorchCaching() if local else contextlib.nullcontext():
+    with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
         dst = torch.zeros(
             num_of_blocks * block_size, device=dst_device, dtype=torch.float32
         )

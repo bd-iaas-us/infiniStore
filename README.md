@@ -28,7 +28,7 @@ python start.py
 ## unit test
 
 ```
-pytest infinity/test_infinity.py
+pytest infinistore/test_infinistore.py
 ```
 
 ##

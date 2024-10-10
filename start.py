@@ -1,4 +1,4 @@
-import infinity
+import infinistore
 import asyncio
 import uvloop
 from fastapi import FastAPI
@@ -11,7 +11,7 @@ app = FastAPI()
 
 @app.get("/kvmapSize")
 async def read_status():
-    return infinity._infinity.get_kvmap_len()
+    return infinistore._infinistore.get_kvmap_len()
 
 
 def check_p2p_access():
@@ -29,13 +29,13 @@ def check_p2p_access():
 
 if __name__ == "__main__":
     check_p2p_access()
-    infinity.check_infinity_supported()
+    infinistore.check_supported()
 
     loop = uvloop.new_event_loop()
     asyncio.set_event_loop(loop)
     # 16 GB pre allocated
     # TODO: find the minimum size for pinning memory and ib_reg_mr
-    infinity.register_server(loop, 16 << 30)
+    infinistore.register_server(loop, 16 << 30)
     config = uvicorn.Config(
         app,
         host="0.0.0.0",

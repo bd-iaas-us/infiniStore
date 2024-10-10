@@ -11,7 +11,7 @@
 #include <assert.h>
 #include <time.h>
 #include <math.h>
-#include "libinfinity.h"
+#include "libinfinistore.h"
 #include <vector>
 #include "ibv_helper.h"
 #include "log.h"

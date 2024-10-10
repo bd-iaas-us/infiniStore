@@ -1,4 +1,4 @@
-from infinity import _infinity
+from infinistore import _infinistore
 
 import torch
 import os
@@ -29,7 +29,7 @@ def register_server(loop, prealloc_size):
 
     # from cpython.pycapsule import PyCapsule_GetPointer
     # <uint64_t>PyCapsule_GetPointer(obj, NULL)
-    return _infinity.register_server(loop_ptr, prealloc_size)
+    return _infinistore.register_server(loop_ptr, prealloc_size)
 
 
 def _kernel_modules():
@@ -68,7 +68,7 @@ def _check_rdma_devices_ibv():
         )
 
 
-def check_infinity_supported():
+def check_supported():
     # check if kernel module nv_peer_mem is available
     if "nv_peer_mem" not in _kernel_modules():
         raise Exception("nv_peer_mem module is not loaded")
@@ -95,7 +95,7 @@ class InfinityConnection:
     def __init__(
         self,
     ):
-        self.conn = _infinity.Connection()
+        self.conn = _infinistore.Connection()
         self.local_connected = False
         self.rdma_connected = False
 
@@ -110,10 +110,10 @@ class InfinityConnection:
             raise Exception("Already connected to local instance")
         if self.rdma_connected:
             raise Exception("Already connected to remote instance")
-        ret = _infinity.init_connection(self.conn, ip_addr)
+        ret = _infinistore.init_connection(self.conn, ip_addr)
         if ret < 0:
             raise Exception("Failed to initialize remote connection")
-        ret = _infinity.setup_rdma(self.conn)
+        ret = _infinistore.setup_rdma(self.conn)
         if ret < 0:
             raise Exception("Failed to setup RDMA connection")
         self.rdma_connected = True
@@ -131,7 +131,7 @@ class InfinityConnection:
             raise Exception("Already connected to rdma instance")
         if self.local_connected:
             raise Exception("Already connected to local instance")
-        ret = _infinity.init_connection(self.conn, "127.0.0.1")
+        ret = _infinistore.init_connection(self.conn, "127.0.0.1")
         if ret < 0:
             raise Exception("Failed to initialize local connection")
         self.local_connected = True
@@ -154,13 +154,13 @@ class InfinityConnection:
         # each offset should multiply by the element size
         blocks_in_bytes = [(key, offset * element_size) for key, offset in blocks]
         if self.local_connected:
-            ret = _infinity.rw_local(
+            ret = _infinistore.rw_local(
                 self.conn, self.OP_W, blocks_in_bytes, page_size * element_size, ptr
             )
             if ret < 0:
-                raise Exception(f"Failed to write to infinity, ret = {ret}")
+                raise Exception(f"Failed to write to infinistore, ret = {ret}")
         elif self.rdma_connected:
-            ret = _infinity.rw_rdma(
+            ret = _infinistore.rw_rdma(
                 self.conn,
                 self.OP_RDMA_WRITE,
                 blocks_in_bytes,
@@ -168,7 +168,7 @@ class InfinityConnection:
                 ptr,
             )
             if ret < 0:
-                raise Exception(f"Failed to write to infinity, ret = {ret}")
+                raise Exception(f"Failed to write to infinistore, ret = {ret}")
         else:
             raise Exception("Not connected to any instance")
 
@@ -193,13 +193,13 @@ class InfinityConnection:
         # each offset should multiply by the element size
         blocks_in_bytes = [(key, offset * element_size) for key, offset in blocks]
         if self.local_connected:
-            ret = _infinity.rw_local(
+            ret = _infinistore.rw_local(
                 self.conn, self.OP_R, blocks_in_bytes, page_size * element_size, ptr
             )
             if ret < 0:
-                raise Exception(f"Failed to read to infinity, ret = {ret}")
+                raise Exception(f"Failed to read to infinistore, ret = {ret}")
         elif self.rdma_connected:
-            ret = _infinity.rw_rdma(
+            ret = _infinistore.rw_rdma(
                 self.conn,
                 self.OP_RDMA_READ,
                 blocks_in_bytes,
@@ -207,13 +207,13 @@ class InfinityConnection:
                 ptr,
             )
             if ret < 0:
-                raise Exception(f"Failed to read to infinity, ret = {ret}")
+                raise Exception(f"Failed to read to infinistore, ret = {ret}")
         else:
             raise Exception("Not connected to any instance")
 
     def sync(self):
         """
-        Synchronizes the current instance with the connected infinity instance.
+        Synchronizes the current instance with the connected infinistore instance.
         This method attempts to synchronize the current instance using either a local
         connection or an RDMA connection. If neither connection is available, it raises
         an exception.
@@ -226,9 +226,9 @@ class InfinityConnection:
             n = 0
             timeout = 1  # 1 second timeout
             while True:
-                ret = _infinity.sync_local(self.conn)
+                ret = _infinistore.sync_local(self.conn)
                 if ret < 0:
-                    raise Exception(f"Failed to sync to infinity, ret = {ret}")
+                    raise Exception(f"Failed to sync to infinistore, ret = {ret}")
                 elif ret > 0:
                     # how many inflight requests
                     # print(f"waiting for {ret} inflight requests")
@@ -238,12 +238,12 @@ class InfinityConnection:
                 else:
                     return
         elif self.rdma_connected:
-            ret = _infinity.sync_rdma(self.conn)
+            ret = _infinistore.sync_rdma(self.conn)
         else:
             raise Exception("Not connected to any instance")
 
         if ret < 0:
-            raise Exception(f"Failed to sync to infinity, ret = {ret}")
+            raise Exception(f"Failed to sync to infinistore, ret = {ret}")
         return
 
     def _verify(self, cache: torch.Tensor):

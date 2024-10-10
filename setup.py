@@ -16,22 +16,22 @@ class CustomBuildExt(build_ext):
             .strip()
         )
         # Ensure the .so file is copied to the correct place
-        shutil.copy(f"src/_infinity{suffix}", "infinity")
+        shutil.copy(f"src/_infinistore{suffix}", "infinistore")
 
         super().run()
 
 
 setup(
-    name="infinity",
+    name="infinistore",
     version="0.1",
     packages=find_packages(),
     cmdclass={"build_ext": CustomBuildExt},
     package_data={
-        "infinity": ["*.so"],
+        "infinistore": ["*.so"],
     },
     install_requires=["torch", "uvloop", "fastapi", "pybind11", "uvicorn"],
     description="A kvcache memory pool",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
-    url="https://github.com/bd-iaas-us/infinity",
+    url="https://github.com/bd-iaas-us/infiniStore",
 )

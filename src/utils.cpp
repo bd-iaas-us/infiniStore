@@ -44,17 +44,17 @@ int recv_exact(int socket, void* buffer, size_t length) {
 void print_rdma_conn_info(rdma_conn_info_t* info, bool is_remote) {
     std::string gid_str;
     for (int i = 0; i < 16; ++i) {
-        gid_str += fmt::format("{:02x}", info->gid.raw[i]);
+        gid_str += fmt::format("{:02x}", (char)info->gid.raw[i]);
         if (i % 2 == 1 && i != 15) {
             gid_str += ":";
         }
     }
     if (is_remote) {
-        DEBUG("remote rdma_conn_info: psn: {}, qpn: {}, gid: {}", info->psn,
-              info->qpn, gid_str);
+        DEBUG("remote rdma_conn_info: psn: {}, qpn: {}, gid: {}", (uint32_t)info->psn,
+              (uint32_t)info->qpn, gid_str);
     } else {
-        DEBUG("local rdma_conn_info: psn: {}, qpn: {}, gid: {}", info->psn,
-              info->qpn, gid_str);
+        DEBUG("local rdma_conn_info: psn: {}, qpn: {}, gid: {}", (uint32_t)info->psn,
+              (uint32_t)info->qpn, gid_str);
     }
 }
 

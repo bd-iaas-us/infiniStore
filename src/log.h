@@ -6,7 +6,7 @@
 
 // give me some color see see
 
-#define APP_NAME "infinity"
+#define APP_NAME "infini"
 
 #define DEBUG(fmt, ...) \
         do { spdlog::get(APP_NAME)->debug(fmt, ##__VA_ARGS__); } while (0)

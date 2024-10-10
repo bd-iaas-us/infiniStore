@@ -1,5 +1,5 @@
-#ifndef LIBINFINITY_H
-#define LIBINFINITY_H
+#ifndef LIBINFINISTORE_H
+#define LIBINFINISTORE_H
 
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -53,4 +53,4 @@ int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int
 int sync_rdma(connection_t *conn);
 
 
-#endif // LIBINFINITY_H
+#endif // LIBINFINISTORE_H

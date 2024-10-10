@@ -1,6 +1,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include "libinfinity.h"
+#include "libinfinistore.h"
 #include <vector>
 #include <string>
 #include <tuple>
@@ -29,7 +29,7 @@ int rw_rdma_wrapper(connection_t *conn, char op, const std::vector<std::tuple<st
 }
 
 
-PYBIND11_MODULE(_infinity, m) {
+PYBIND11_MODULE(_infinistore, m) {
     //client side
     py::class_<connection_t>(m, "Connection")
         .def(py::init<>());

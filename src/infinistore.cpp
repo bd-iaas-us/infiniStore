@@ -42,7 +42,7 @@ MM *mm;
 int get_kvmap_len() { return kv_map.size(); }
 
 void print_header(header_t *header) {
-    INFO("HEADER: op: {}, body_size :{}", header->op, header->body_size);
+    INFO("HEADER: op: {}, body_size :{}", header->op, (unsigned int)header->body_size);
 }
 
 typedef enum {
@@ -160,7 +160,6 @@ void wait_for_ipc_close_completion(uv_work_t *req) {
 }
 
 void after_ipc_close_completion(uv_work_t *req, int status) {
-    ERROR("after_ipc_close_comp");
     wqueue_data_t *wqueue_data = (wqueue_data_t *)req->data;
     wqueue_data->client->remain--;
     INFO("after_ipc_close_completion done");

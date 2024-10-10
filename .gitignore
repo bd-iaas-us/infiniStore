@@ -4,8 +4,8 @@ test_client
 experiments/client
 experiments/server
 .vscode/
-_infinity.*.so
+_infini.*.so
 infinity_server
 __pycache__
-infinity.egg-info
+infini*.egg-info
 test_run
