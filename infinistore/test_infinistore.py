@@ -9,6 +9,9 @@ import random
 import string
 import contextlib
 
+config = infinistore.ClientConfig()
+config.service_port = 22345
+config.host_addr = "127.0.0.1"
 
 # Fixture to start the TCzpserver before running tests
 @pytest.fixture(scope="module")
@@ -45,11 +48,8 @@ def get_gpu_count():
 @pytest.mark.parametrize("new_connection", [True, False])
 @pytest.mark.parametrize("local", [True, False])
 def test_basic_read_write_cache(server, dtype, new_connection, local):
-    conn = infinistore.InfinityConnection()
-    if local:
-        conn.local_connect()
-    else:
-        conn.connect("127.0.0.1")
+    conn = infinistore.InfinityConnection(config)
+    conn.connect()
 
     # key is random string
     key = generate_random_string(10)
@@ -62,8 +62,8 @@ def test_basic_read_write_cache(server, dtype, new_connection, local):
     conn.write_cache(src_tensor, [(key, 0)], 4096)
     conn.sync()
 
-    conn = infinistore.InfinityConnection()
-    conn.local_connect() if local else conn.connect("127.0.0.1")
+    conn = infinistore.InfinityConnection(config)
+    conn.connect()
 
     with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
         dst = torch.zeros(4096, device="cuda:0", dtype=dtype)
@@ -87,9 +87,8 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
         src_device = "cuda:0"
         dst_device = "cuda:0"
 
-    conn = infinistore.InfinityConnection()
-
-    conn.local_connect() if local else conn.connect("127.0.0.1")
+    conn = infinistore.InfinityConnection(config)
+    conn.connect()
 
     num_of_blocks = 10
     keys = [generate_random_string(num_of_blocks) for i in range(10)]

@@ -6,8 +6,9 @@ from typing import List, Tuple
 import subprocess
 import time
 
+ClientConfig = _infinistore.ClientConfig
 
-def register_server(loop, prealloc_size):
+def register_server(loop, config):
     """
     Registers a server with the given event loop.
 
@@ -29,7 +30,7 @@ def register_server(loop, prealloc_size):
 
     # from cpython.pycapsule import PyCapsule_GetPointer
     # <uint64_t>PyCapsule_GetPointer(obj, NULL)
-    return _infinistore.register_server(loop_ptr, prealloc_size)
+    return _infinistore.register_server(loop_ptr, config)
 
 
 def _kernel_modules():
@@ -92,49 +93,30 @@ class InfinityConnection:
     OP_RDMA_WRITE = "D"
     OP_RDMA_READ = "A"
 
-    def __init__(
-        self,
-    ):
+    def __init__(self, config):
         self.conn = _infinistore.Connection()
         self.local_connected = False
         self.rdma_connected = False
+        self.config = config
 
-    def connect(self, ip_addr: str):
+    def connect(self):
         """
         Establishes an RDMA connection using the provided IP address.
-
-        Args:
-            ip_addr (str): The IP address of the RDMA instance to connect to.
         """
         if self.local_connected:
             raise Exception("Already connected to local instance")
         if self.rdma_connected:
             raise Exception("Already connected to remote instance")
-        ret = _infinistore.init_connection(self.conn, ip_addr)
+        ret = _infinistore.init_connection(self.conn, self.config)
         if ret < 0:
             raise Exception("Failed to initialize remote connection")
-        ret = _infinistore.setup_rdma(self.conn)
-        if ret < 0:
-            raise Exception("Failed to setup RDMA connection")
-        self.rdma_connected = True
-
-    def local_connect(self):
-        """
-        Establishes a local connection to the instance.
-
-        This method initializes a local connection to the instance using the IP address "127.0.0.1".
-        This connection will use cudaMemcpy to transfer data between the local and remote instances.
-        It raises an exception if a connection is already established either locally or via RDMA.
-
-        """
-        if self.rdma_connected:
-            raise Exception("Already connected to rdma instance")
-        if self.local_connected:
-            raise Exception("Already connected to local instance")
-        ret = _infinistore.init_connection(self.conn, "127.0.0.1")
-        if ret < 0:
-            raise Exception("Failed to initialize local connection")
-        self.local_connected = True
+        if self.config.host_addr == "127.0.0.1":
+            self.local_connected = True
+        else:
+            ret = _infinistore.setup_rdma(self.conn)
+            if ret < 0:
+                raise Exception("Failed to setup RDMA connection")
+            self.rdma_connected = True
 
     def write_cache(
         self, cache: torch.Tensor, blocks: List[Tuple[str, int]], page_size: int

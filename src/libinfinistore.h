@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <time.h>
 #include "protocol.h"
+#include "config.h"
 #include <infiniband/verbs.h>
 #include <map>
 
@@ -42,7 +43,7 @@ typedef struct Connection connection_t;
 
 
 
-int init_connection(connection_t *conn, std::string ip_addr);
+int init_connection(connection_t *conn, client_config_t config);
 //async rw local cpu memory, even rw_local returns, it is not guaranteed that the operation is completed until sync_local is recved.
 int rw_local(connection_t *conn, char op, const std::vector<block_t>& blocks, int block_size, void *ptr);
 int sync_local(connection_t *conn);
