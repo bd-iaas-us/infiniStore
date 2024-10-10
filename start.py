@@ -66,13 +66,14 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    config = infinistore._infinistore.ServerConfig()
-    config.manage_port, config.service_port, config.log_level, config.prealloc_size = (
-        args.manage_port,
-        args.service_port,
-        args.log_level,
-        args.prealloc_size,
+    config = infinistore.ServerConfig(
+        manage_port=args.manage_port,
+        service_port=args.service_port,
+        log_level=args.log_level,
+        prealloc_size=args.prealloc_size,
     )
+    print(f"Server config: {config}")
+    config.verify()
 
     check_p2p_access()
     infinistore.check_supported()
@@ -82,7 +83,8 @@ if __name__ == "__main__":
     # 16 GB pre allocated
     # TODO: find the minimum size for pinning memory and ib_reg_mr
     infinistore.register_server(loop, config)
-    config = uvicorn.Config(
+
+    http_config = uvicorn.Config(
         app,
         host="0.0.0.0",
         port=config.manage_port,
@@ -90,7 +92,7 @@ if __name__ == "__main__":
         log_level=config.log_level,
     )
 
-    server = uvicorn.Server(config)
+    server = uvicorn.Server(http_config)
 
     # 运行服务器
     loop.run_until_complete(server.serve())

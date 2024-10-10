@@ -9,10 +9,6 @@ import random
 import string
 import contextlib
 
-config = infinistore.ClientConfig()
-config.service_port = 22345
-config.host_addr = "127.0.0.1"
-
 
 # Fixture to start the TCzpserver before running tests
 @pytest.fixture(scope="module")
@@ -49,6 +45,14 @@ def get_gpu_count():
 @pytest.mark.parametrize("new_connection", [True, False])
 @pytest.mark.parametrize("local", [True, False])
 def test_basic_read_write_cache(server, dtype, new_connection, local):
+    config = infinistore.ClientConfig(
+        host_addr="127.0.0.1",
+        service_port=22345,
+    )
+    config.connection_type = (
+        infinistore.TYPE_LOCAL_GPU if local else infinistore.TYPE_RDMA
+    )
+
     conn = infinistore.InfinityConnection(config)
     conn.connect()
 
@@ -76,6 +80,13 @@ def test_basic_read_write_cache(server, dtype, new_connection, local):
 @pytest.mark.parametrize("seperated_gpu", [True, False])
 @pytest.mark.parametrize("local", [True, False])
 def test_batch_read_write_cache(server, seperated_gpu, local):
+    config = infinistore.ClientConfig(
+        host_addr="127.0.0.1",
+        service_port=22345,
+    )
+    config.connection_type = (
+        infinistore.TYPE_LOCAL_GPU if local else infinistore.TYPE_RDMA
+    )
     # test if we have multiple GPUs
     if seperated_gpu:
         if get_gpu_count() >= 2:

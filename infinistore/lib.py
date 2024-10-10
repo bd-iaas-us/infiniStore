@@ -6,10 +6,57 @@ from typing import List, Tuple
 import subprocess
 import time
 
-ClientConfig = _infinistore.ClientConfig
+# connection type: default is RDMA
+TYPE_LOCAL_GPU = "LOCAL_GPU"
+TYPE_RDMA = "RDMA"
 
 
-def register_server(loop, config):
+class ClientConfig(_infinistore.ClientConfig):
+    def __init__(self, **kwargs):
+        super().__init__()
+        self.connection_type = kwargs.get("connection_type", None)
+        self.host_addr = kwargs.get("host_addr", None)
+        self.service_port = kwargs.get("service_port", None)
+        self.log_level = kwargs.get("log_level", "warning")
+
+    def __repr__(self):
+        return (
+            f"ServerConfig(service_port={self.service_port}, "
+            f"log_level='{self.log_level}', host_addr='{self.host_addr}', "
+            f"connection_type='{self.connection_type.name}')"
+        )
+
+    def verify(self):
+        if self.connection_type not in [TYPE_LOCAL_GPU, TYPE_RDMA]:
+            raise Exception("Invalid connection type")
+        if self.host_addr == "":
+            raise Exception("Host address is empty")
+        if self.service_port == 0:
+            raise Exception("Service port is 0")
+
+
+class ServerConfig(_infinistore.ServerConfig):
+    def __init__(self, **kwargs):
+        super().__init__()
+        self.manage_port = kwargs.get("manage_port", 0)
+        self.service_port = kwargs.get("service_port", 0)
+        self.log_level = kwargs.get("log_level", "warning")
+        self.prealloc_size = kwargs.get("prealloc_size", 16)
+
+    def __repr__(self):
+        return (
+            f"ServerConfig(service_port={self.service_port}, manage_port={self.manage_port}, "
+            f"log_level='{self.log_level}')"
+        )
+
+    def verify(self):
+        if self.service_port == 0:
+            raise Exception("Service port is 0")
+        if self.manage_port == 0:
+            raise Exception("Manage port is 0")
+
+
+def register_server(loop, config: ServerConfig):
     """
     Registers a server with the given event loop.
 
@@ -94,7 +141,8 @@ class InfinityConnection:
     OP_RDMA_WRITE = "D"
     OP_RDMA_READ = "A"
 
-    def __init__(self, config):
+    def __init__(self, config: ClientConfig):
+        config.verify()
         self.conn = _infinistore.Connection()
         self.local_connected = False
         self.rdma_connected = False
@@ -111,7 +159,10 @@ class InfinityConnection:
         ret = _infinistore.init_connection(self.conn, self.config)
         if ret < 0:
             raise Exception("Failed to initialize remote connection")
-        if self.config.host_addr == "127.0.0.1":
+
+        if self.config.connection_type == TYPE_LOCAL_GPU:
+            if self.config.host_addr not in ["127.0.0.1", "localhost"]:
+                raise Exception("Local GPU connection must be to localhost")
             self.local_connected = True
         else:
             ret = _infinistore.setup_rdma(self.conn)

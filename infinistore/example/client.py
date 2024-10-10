@@ -1,8 +1,10 @@
-from infinistore.lib import (
-    InfinityConnection,
-    DisableTorchCaching,
+from infinistore import (
+    ClientConfig,
     check_supported,
+    DisableTorchCaching,
+    InfinityConnection,
 )
+import infinistore
 import torch
 import time
 
@@ -31,10 +33,17 @@ def run(conn):
 
 
 if __name__ == "__main__":
-    rdma_conn = InfinityConnection()
-    rdma_conn.connect("127.0.0.1")
+    config = ClientConfig(
+        host_addr="127.0.0.1",
+        service_port=22345,
+        log_level="warning",
+        connection_type=infinistore.TYPE_RDMA,
+    )
+    rdma_conn = InfinityConnection(config)
+    rdma_conn.connect()
     run(rdma_conn)
 
-    local_conn = InfinityConnection()
-    local_conn.local_connect()
+    config.connection_type = infinistore.TYPE_LOCAL_GPU
+    local_conn = InfinityConnection(config)
+    local_conn.connect()
     run(local_conn)

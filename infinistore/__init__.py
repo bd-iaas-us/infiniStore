@@ -4,6 +4,9 @@ from .lib import (
     register_server,
     check_supported,
     ClientConfig,
+    ServerConfig,
+    TYPE_RDMA,
+    TYPE_LOCAL_GPU,
 )
 
 __all__ = [
@@ -12,4 +15,7 @@ __all__ = [
     "register_server",
     "check_supported",
     "ClientConfig",
+    "ServerConfig",
+    "TYPE_RDMA",
+    "TYPE_LOCAL_GPU",
 ]
