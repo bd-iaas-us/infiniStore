@@ -37,7 +37,7 @@ commit_count = get_git_commit_count()
 
 setup(
     name="infinistore",
-    version=f"0.1+.{commit_count}",
+    version=f"0.1.{commit_count}",
     packages=find_packages(),
     cmdclass={"build_ext": CustomBuildExt},
     package_data={
