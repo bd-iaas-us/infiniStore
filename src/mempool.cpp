@@ -12,7 +12,6 @@
 MemoryPool::MemoryPool(size_t pool_size, size_t block_size, struct ibv_pd* pd)
     : pool_(nullptr), pool_size_(pool_size), block_size_(block_size), pd_(pd), mr_(nullptr) {
 
-    // 计算总的内存块数量
     total_blocks_ = pool_size_ / block_size_;
     assert(pool_size % block_size == 0);
 
@@ -22,7 +21,6 @@ MemoryPool::MemoryPool(size_t pool_size, size_t block_size, struct ibv_pd* pd)
 
 
 
-    // 注册内存区域
     mr_ = ibv_reg_mr(pd_, pool_, pool_size_, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
     if (!mr_) {
         ERROR("Failed to register MR");

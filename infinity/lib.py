@@ -215,8 +215,9 @@ class InfinityConnection:
 
 
     def _verify(self, cache : torch.Tensor):
-        if cache.device.type != "cuda":
-            raise Exception("Tensor must be on CUDA device")
+
+        if self.local_connected and cache.device.type != "cuda":
+             raise Exception("Tensor must be on CUDA device")
         if cache.is_contiguous() is False:
             raise Exception("Tensor must be contiguous")
 

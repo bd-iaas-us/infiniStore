@@ -153,15 +153,70 @@ int modify_qp_to_init(struct ibv_qp *qp) {
     return 0;
 }
 
+//FIXME:
+//only GPU memory has this limitation, while CPU memory could support larger size
+//But I do not know how to get the max size of MR??
+#define MAX_MR_SIZE (128 << 10) // 128MB
+
+int register_memory(connection_t *conn, void *ptr, size_t size) {
+    size_t offset = 0;
+    DEBUG("Registering memory region: ptr {}, size {}", ptr, size);
+    int sum = 0;
+    while (offset < size) {
+        size_t len = MIN(size - offset, MAX_MR_SIZE);
+        void * base_ptr = (void *)((uintptr_t)ptr + offset);
+        //attention: the first base_ptr may not be aligned to MAX_MR_SIZE
+        if (conn->local_mr.find((uintptr_t)base_ptr) != conn->local_mr.end()) {
+            // Already registered
+            offset += len;
+            continue;
+        }
+        struct ibv_mr *mr = NULL;
+
+            mr = ibv_reg_mr(conn->pd, base_ptr, len, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+            if (!mr) {
+                ERROR("Failed to register memory region ptr {}, len {}, {}", base_ptr, len, strerror(errno));
+                return -1;
+            }
+            sum += len;
+ 
+ 
+        conn->local_mr[(uintptr_t)base_ptr] = mr;
+        DEBUG("Registered memory region: base_ptr {}, len {}, total registed region {}, sum {}", base_ptr, len, conn->local_mr.size(), sum);
+        offset += len;
+    }
+}
+
+//assume all memory regions are registered
+uint32_t search_lkey_from_ptr(connection_t *conn, void *ptr) {
+    DEBUG("searching lkey ptr {}", ptr);
+    auto it = conn->local_mr.upper_bound((uintptr_t)ptr);
+    //if not found
+    if (it == conn->local_mr.begin()) {
+        ERROR("Failed to find lkey from ptr {}, reason 1", ptr);
+        assert(false);
+        return 0;
+    }
+    //it could be end. this means the ptr is larger than all registered memory regions
+    it --;
+    if (it->first <= (uintptr_t)ptr && (uintptr_t)ptr < it->first + MAX_MR_SIZE) {
+        return it->second->lkey;
+    }
+    //if not found, it should be an error
+    ERROR("Failed to find lkey from ptr {}, reason 2", ptr);
+    assert(false);
+    return 0;
+}
+
 
 int perform_rdma_read(connection_t *conn, uintptr_t src_buf, size_t src_size,
-                      char * dst_buf, size_t dst_size, uint32_t rkey, uint32_t lkey) {
+                      char * dst_buf, size_t dst_size, uint32_t rkey) {
     
     // Prepare RDMA read operation
     struct ibv_sge sge = {};
     sge.addr = (uintptr_t)dst_buf;
     sge.length = dst_size;
-    sge.lkey = lkey;
+    sge.lkey = search_lkey_from_ptr(conn, dst_buf);
 
     struct ibv_send_wr wr = {};
     wr.wr_id = (uintptr_t)conn;
@@ -217,14 +272,16 @@ int sync_rdma(connection_t *conn) {
 
 
 int perform_rdma_write(connection_t *conn, char * src_buf, size_t src_size,
-                       uintptr_t dst_buf, size_t dst_size, uint32_t rkey, uint32_t lkey) {
+                       uintptr_t dst_buf, size_t dst_size, uint32_t rkey) {
 
 
     // Prepare RDMA write operation
     struct ibv_sge sge = {};
     sge.addr = (uintptr_t)src_buf;
     sge.length = src_size; 
-    sge.lkey = lkey;
+
+    
+    sge.lkey = search_lkey_from_ptr(conn, src_buf);
 
     struct ibv_send_wr wr = {};
     wr.wr_id = (uintptr_t)conn;
@@ -314,7 +371,7 @@ int modify_qp_to_rtr(connection_t *conn) {
 
     struct ibv_qp_attr attr = {};
     attr.qp_state = IBV_QPS_RTR;
-    attr.path_mtu = IBV_MTU_1024;
+    attr.path_mtu = IBV_MTU_4096;
     attr.dest_qp_num = remote_info->qpn;
     attr.rq_psn = remote_info->psn;
     attr.max_dest_rd_atomic = 1;
@@ -460,26 +517,19 @@ int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int
         return -1;
     }
 
-    struct ibv_mr *mr = NULL;
-    if (conn->local_mr.find((uintptr_t)ptr) == conn->local_mr.end()) {
-        mr = ibv_reg_mr(conn->pd, ptr, ptr_region_size,
-                                       IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-        if (!mr) {
-            ERROR("Failed to register MR");
-            return -1;
-        }
-        conn->local_mr[(uintptr_t)ptr] = mr;
-    } else {
-        mr = conn->local_mr[(uintptr_t)ptr];
+
+    if (register_memory(conn, ptr, ptr_region_size) < 0) {
+        return -1;
     }
 
+
     for (int i = 0; i < response.blocks.size(); i++) {
-        DEBUG("remote response: addr: {}, rkey: {}, lkey : {}", response.blocks[i].remote_addr, response.blocks[i].rkey, mr->lkey);
+        DEBUG("remote response: addr: {}, rkey: {}", response.blocks[i].remote_addr, response.blocks[i].rkey);
         int ret;
         if (op == OP_RDMA_WRITE) {
-            ret = perform_rdma_write(conn, (char *)ptr + blocks[i].offset, block_size, response.blocks[i].remote_addr, block_size, response.blocks[i].rkey, mr->lkey);
+            ret = perform_rdma_write(conn, (char *)ptr + blocks[i].offset, block_size, response.blocks[i].remote_addr, block_size, response.blocks[i].rkey);
         } else if (op == OP_RDMA_READ) {
-            ret = perform_rdma_read(conn, response.blocks[i].remote_addr, block_size, (char *)ptr + blocks[i].offset, block_size, response.blocks[i].rkey, mr->lkey);
+            ret = perform_rdma_read(conn, response.blocks[i].remote_addr, block_size, (char *)ptr + blocks[i].offset, block_size, response.blocks[i].rkey);
         } else {
             ERROR("Invalid operation");
             return -1;

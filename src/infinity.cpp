@@ -350,7 +350,7 @@ int do_rdma_exchange(client_t *client) {
     struct ibv_qp_attr attr = {};
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTR;
-    attr.path_mtu = IBV_MTU_1024; //FIXME: hard coded
+    attr.path_mtu = IBV_MTU_4096; //FIXME: hard coded
     attr.dest_qp_num = client->remote_info.qpn;
     attr.rq_psn = client->remote_info.psn;
     attr.max_dest_rd_atomic = 1;
