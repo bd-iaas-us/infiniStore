@@ -13,11 +13,7 @@ import contextlib
 # Fixture to start the TCzpserver before running tests
 @pytest.fixture(scope="module")
 def server():
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    parent_dir = os.path.dirname(current_dir)
-    start_script_path = os.path.join(parent_dir, "start.py")
-    server_process = subprocess.Popen(["python", start_script_path])
-
+    server_process = subprocess.Popen(["python", "-m", "infinistore.server"])
     time.sleep(4)
     yield
     os.kill(server_process.pid, signal.SIGINT)

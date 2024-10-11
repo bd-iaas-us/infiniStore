@@ -12,7 +12,7 @@ import time
 def run(conn):
     check_supported()
     src = [i for i in range(4096)]
-    with DisableTorchCaching():
+    with DisableTorchCaching():  # not required if using RDMA
         src_tensor = torch.tensor(src, device="cuda:0", dtype=torch.float32)
     now = time.time()
     conn.write_cache(src_tensor, [("key1", 0), ("key2", 1024), ("key3", 2048)], 1024)

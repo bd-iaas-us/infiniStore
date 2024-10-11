@@ -64,7 +64,7 @@ def parse_args():
     return parser.parse_args()
 
 
-if __name__ == "__main__":
+def main():
     args = parse_args()
     config = infinistore.ServerConfig(
         manage_port=args.manage_port,
@@ -74,10 +74,8 @@ if __name__ == "__main__":
     )
     print(f"Server config: {config}")
     config.verify()
-
     check_p2p_access()
     infinistore.check_supported()
-
     loop = uvloop.new_event_loop()
     asyncio.set_event_loop(loop)
     # 16 GB pre allocated
@@ -94,5 +92,8 @@ if __name__ == "__main__":
 
     server = uvicorn.Server(http_config)
 
-    # 运行服务器
     loop.run_until_complete(server.serve())
+
+
+if __name__ == "__main__":
+    main()

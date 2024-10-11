@@ -48,4 +48,9 @@ setup(
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     url="https://github.com/bd-iaas-us/infiniStore",
+    entry_points={
+        "console_scripts": [
+            "infinistore=infinistore.server:main",
+        ],
+    },
 )

@@ -6,6 +6,21 @@
 * kernel moduel nv_peer_mem https://github.com/Mellanox/nv_peer_memory
 
 
+## install
+
+```
+pip install infinistore
+```
+
+## run
+
+```
+infinistore
+```
+or
+```
+python -m infinistore.server
+```
 ## build
 
 ```
@@ -18,11 +33,9 @@ pip install -e .
 pip install pre-commit
 pre-commit install
 ```
-## run
+## client example
 
-```
-python start.py
-```
+check example code ```infinistore/example/client.py```
 
 
 ## unit test
@@ -31,7 +44,7 @@ python start.py
 pytest infinistore/test_infinistore.py
 ```
 
-##
+## pre-commit
 
 ```
 pre-commit run --all-files
