@@ -16,6 +16,7 @@ OBJECTS = $(SOURCES:.cpp=.o)
 all:$(PYBIND_TARGET)
 
 manylinux: PYTHON = python3.11
+manylinux: CXXFLAGS = -std=c++11 -g -O3 -Wall
 manylinux: INCLUDES += -I/usr/local/include -I$(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")/triton/backends/nvidia/include/
 manylinux: LDFLAGS += -L$(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")/nvidia/cuda_runtime/lib/
 manylinux: PYBIND11_INCLUDES = $(shell $(PYTHON) -m pybind11 --includes)
