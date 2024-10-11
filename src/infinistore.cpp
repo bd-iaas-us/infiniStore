@@ -359,13 +359,6 @@ int do_rdma_exchange(client_t *client) {
         print_rdma_conn_info(&client->local_info, false);
     }
 
-    // Send server's RDMA connection info to client
-    client->send_buffer = (char*)realloc(client->send_buffer, RETURN_CODE_SIZE + sizeof(client->local_info));
-    int return_code = FINISH;
-    memcpy(client->send_buffer, &return_code, RETURN_CODE_SIZE);
-    memcpy(client->send_buffer + RETURN_CODE_SIZE, &client->local_info, sizeof(client->local_info));
-    do_send(client, RETURN_CODE_SIZE + sizeof(client->local_info));
-
     // Modify QP to RTR state
     struct ibv_qp_attr attr = {};
     memset(&attr, 0, sizeof(attr));
@@ -415,7 +408,14 @@ int do_rdma_exchange(client_t *client) {
     INFO("RDMA exchange done");
     client->rdma_connected = true;
 
-    return TASK_ACCEPTED;
+    // Send server's RDMA connection info to client
+    client->send_buffer = (char*)realloc(client->send_buffer, RETURN_CODE_SIZE + sizeof(client->local_info));
+    int return_code = FINISH;
+    memcpy(client->send_buffer, &return_code, RETURN_CODE_SIZE);
+    memcpy(client->send_buffer + RETURN_CODE_SIZE, &client->local_info, sizeof(client->local_info));
+    do_send(client, RETURN_CODE_SIZE + sizeof(client->local_info));    
+
+    return FINISH;
 }
 
 int do_sync_stream(client_t *client) {
