@@ -4,8 +4,9 @@ CXXFLAGS = -std=c++11 -Wall -g
 INCLUDES = -I/usr/local/cuda/include
 LDFLAGS = -L/usr/local/cuda/lib64
 LIBS = -lcudart -luv -libverbs
-PYBIND11_INCLUDES = $(shell python3 -m pybind11 --includes)
-PYTHON_EXTENSION_SUFFIX = $(shell python3-config --extension-suffix)
+PYTHON=python3
+PYBIND11_INCLUDES = $(shell $(PYTHON) -m pybind11 --includes)
+PYTHON_EXTENSION_SUFFIX = $(shell $(PYTHON)-config --extension-suffix)
 
 PYBIND_TARGET= _infinistore$(PYTHON_EXTENSION_SUFFIX)
 
@@ -13,6 +14,14 @@ SOURCES := $(wildcard *.cpp)
 OBJECTS = $(SOURCES:.cpp=.o)
 
 all:$(PYBIND_TARGET)
+
+manylinux: PYTHON = python3.11
+manylinux: INCLUDES += -I/usr/local/include -I$(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")/triton/backends/nvidia/include/
+manylinux: LDFLAGS += -L$(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")/nvidia/cuda_runtime/lib/
+manylinux: PYBIND11_INCLUDES = $(shell $(PYTHON) -m pybind11 --includes)
+manylinux: PYTHON_EXTENSION_SUFFIX = $(shell $(PYTHON)-config --extension-suffix)
+manylinux: PYBIND_TARGET = _infinistore$(PYTHON_EXTENSION_SUFFIX)
+manylinux: $(PYBIND_TARGET)
 
 -include $(OBJECTS:.o=.d)
 %.o: %.cpp
