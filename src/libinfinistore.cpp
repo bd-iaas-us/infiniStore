@@ -377,12 +377,21 @@ int exchange_conn_info(connection_t *conn) {
     send_exact(conn->sock, &conn->local_info, sizeof(rdma_conn_info_t));
 
 
-    recv(conn->sock, &conn->remote_info, sizeof(rdma_conn_info_t), MSG_WAITALL);
+    int return_code = -1;
+    if(recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
+        ERROR("Failed to receive return code");
+        return -1;
+    }
+    if (return_code != FINISH) {
+        return -1;
+    }
+
+    if(recv(conn->sock, &conn->remote_info, sizeof(rdma_conn_info_t), MSG_WAITALL) != sizeof(rdma_conn_info_t)) {
+        ERROR("Failed to receive remote info");
+        return -1;
+    }
     return 0;
 }
-
-
-
 
 int sync_local(connection_t *conn) {
     assert(conn != NULL);
@@ -435,8 +444,17 @@ int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int
         ERROR("Failed to send body");
         return -1;
     }
+
     remote_meta_response response;
-    int return_size;
+    int return_size, return_code = -1;
+    if(recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
+        ERROR("Failed to receive return code");
+        return -1;
+    }
+    if (return_code != TASK_ACCEPTED) {
+        return -1;
+    }
+
     if(recv(conn->sock, &return_size, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
         ERROR("Failed to receive return size");
         return -1;
