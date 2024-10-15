@@ -1,5 +1,4 @@
 import subprocess
-import shutil
 from setuptools import setup, find_packages
 from setuptools.command.build_ext import build_ext
 
@@ -21,19 +20,11 @@ class CustomBuildExt(build_ext):
     def run(self):
         # Run the make command in the src directory
         subprocess.check_call(["make"], cwd="src")
-        # get result of 'python3-config --extension-suffix'
-        suffix = (
-            subprocess.check_output(["python3-config", "--extension-suffix"])
-            .decode("utf-8")
-            .strip()
-        )
-        # Ensure the .so file is copied to the correct place
-        shutil.copy(f"src/_infinistore{suffix}", "infinistore")
-
         super().run()
 
 
 commit_count = get_git_commit_count()
+
 
 setup(
     name="infinistore",

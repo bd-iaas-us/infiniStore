@@ -1,4 +1,5 @@
-import infinistore
+from .lib import register_server, check_supported, ServerConfig
+
 import asyncio
 import uvloop
 from fastapi import FastAPI
@@ -9,9 +10,9 @@ import argparse
 app = FastAPI()
 
 
-@app.get("/kvmapSize")
-async def read_status():
-    return infinistore._infinistore.get_kvmap_len()
+# @app.get("/kvmapSize")
+# async def read_status():
+#     return infinistore._infinistore.get_kvmap_len()
 
 
 def check_p2p_access():
@@ -39,12 +40,14 @@ def parse_args():
     parser.add_argument(
         "--manage_port",
         required=False,
+        type=int,
         default=18080,
         help="port for control plane, default 18080",
     )
     parser.add_argument(
         "--service_port",
         required=False,
+        type=int,
         default=22345,
         help="port for data plane, default 22345",
     )
@@ -58,6 +61,7 @@ def parse_args():
     parser.add_argument(
         "--prealloc_size",
         required=False,
+        type=int,
         default=16,
         help="prealloc mem pool size, default 16GB, unit: GB",
     )
@@ -66,7 +70,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    config = infinistore.ServerConfig(
+    config = ServerConfig(
         manage_port=args.manage_port,
         service_port=args.service_port,
         log_level=args.log_level,
@@ -75,12 +79,12 @@ def main():
     print(f"Server config: {config}")
     config.verify()
     check_p2p_access()
-    infinistore.check_supported()
+    check_supported()
     loop = uvloop.new_event_loop()
     asyncio.set_event_loop(loop)
     # 16 GB pre allocated
     # TODO: find the minimum size for pinning memory and ib_reg_mr
-    infinistore.register_server(loop, config)
+    register_server(loop, config)
 
     http_config = uvicorn.Config(
         app,

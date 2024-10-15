@@ -1,8 +1,6 @@
 from .lib import (
     InfinityConnection,
     DisableTorchCaching,
-    register_server,
-    check_supported,
     ClientConfig,
     ServerConfig,
     TYPE_RDMA,
@@ -12,8 +10,6 @@ from .lib import (
 __all__ = [
     "InfinityConnection",
     "DisableTorchCaching",
-    "register_server",
-    "check_supported",
     "ClientConfig",
     "ServerConfig",
     "TYPE_RDMA",
