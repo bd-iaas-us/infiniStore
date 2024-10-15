@@ -73,14 +73,14 @@ int init_rdma_resources(connection_t *conn, const char *dev_name) {
             break;
         }
     }
-    
+
     if (!conn->ib_ctx) {
         INFO("Can't find or failed to open the specified device, try to open the default device");
         conn->ib_ctx = ibv_open_device(dev_list[0]);
         if (!conn->ib_ctx) {
             ERROR("Failed to open the default device");
             return -1;
-        }    
+        }
     }
     ibv_free_device_list(dev_list);
 

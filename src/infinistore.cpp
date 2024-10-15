@@ -266,14 +266,14 @@ int init_rdma_context(const char *dev_name) {
             break;
         }
     }
-    
+
     if (!ib_ctx) {
         INFO("Can't find or failed to open the specified device, try to open the default device");
         ib_ctx = ibv_open_device(dev_list[0]);
         if (!ib_ctx) {
             ERROR("Failed to open the default device");
             return -1;
-        }    
+        }
     }
 
 
