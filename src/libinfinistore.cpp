@@ -52,9 +52,10 @@ int modify_qp_to_rts(connection_t *conn);
 int modify_qp_to_rtr(connection_t *conn);
 int exchange_conn_info(connection_t *conn);
 
-int init_rdma_resources(connection_t *conn) {
+int init_rdma_resources(connection_t *conn, const char *dev_name) {
     // Get list of RDMA devices
     struct ibv_device **dev_list;
+    struct ibv_device  *ib_dev;
     int num_devices;
 
     dev_list = ibv_get_device_list(&num_devices);
@@ -63,11 +64,23 @@ int init_rdma_resources(connection_t *conn) {
         return -1;
     }
 
-    // Open the first available device
-    conn->ib_ctx = ibv_open_device(dev_list[0]);
+    for (int i = 0; i < num_devices; ++i) {
+        char *dev_name_from_list = (char*)ibv_get_device_name(dev_list[i]);
+        if (strcmp(dev_name_from_list, dev_name) == 0) {
+            INFO("found device {}", dev_name_from_list);
+            ib_dev = dev_list[i];
+            conn->ib_ctx = ibv_open_device(ib_dev);
+            break;
+        }
+    }
+
     if (!conn->ib_ctx) {
-        ERROR("Failed to open RDMA device");
-        return -1;
+        INFO("Can't find or failed to open the specified device, try to open the default device");
+        conn->ib_ctx = ibv_open_device(dev_list[0]);
+        if (!conn->ib_ctx) {
+            ERROR("Failed to open the default device");
+            return -1;
+        }
     }
     ibv_free_device_list(dev_list);
 
@@ -277,8 +290,8 @@ int perform_rdma_write(connection_t *conn, char * src_buf, size_t src_size,
 }
 
 
-int setup_rdma(connection_t *conn) {
-    if(init_rdma_resources(conn) < 0) {
+int setup_rdma(connection_t *conn, client_config_t config) {
+    if(init_rdma_resources(conn, config.dev_name.c_str()) < 0) {
         ERROR("Failed to initialize RDMA resources");
         return -1;
     }

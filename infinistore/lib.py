@@ -16,6 +16,7 @@ class ClientConfig(_infinistore.ClientConfig):
         super().__init__()
         self.connection_type = kwargs.get("connection_type", None)
         self.host_addr = kwargs.get("host_addr", None)
+        self.dev_name = kwargs.get("dev_name", "")
         self.service_port = kwargs.get("service_port", None)
         self.log_level = kwargs.get("log_level", "warning")
 
@@ -41,6 +42,7 @@ class ServerConfig(_infinistore.ServerConfig):
         self.manage_port = kwargs.get("manage_port", 0)
         self.service_port = kwargs.get("service_port", 0)
         self.log_level = kwargs.get("log_level", "warning")
+        self.dev_name = kwargs.get("dev_name", "")
         self.prealloc_size = kwargs.get("prealloc_size", 16)
 
     def __repr__(self):
@@ -165,7 +167,7 @@ class InfinityConnection:
                 raise Exception("Local GPU connection must be to localhost")
             self.local_connected = True
         else:
-            ret = _infinistore.setup_rdma(self.conn)
+            ret = _infinistore.setup_rdma(self.conn, self.config)
             if ret < 0:
                 raise Exception("Failed to setup RDMA connection")
             self.rdma_connected = True
