@@ -247,8 +247,9 @@ int do_write_cache(client_t *client) {
     return TASK_ACCEPTED;
 }
 
-int init_rdma_context() {
+int init_rdma_context(const char *dev_name) {
     struct ibv_device **dev_list;
+    struct ibv_device  *ib_dev;
     int num_devices;
     dev_list = ibv_get_device_list(&num_devices);
     if (!dev_list) {
@@ -256,11 +257,25 @@ int init_rdma_context() {
         return -1;
     }
 
-    ib_ctx = ibv_open_device(dev_list[0]);
-    if (!ib_ctx) {
-        ERROR("Failed to open device");
-        return -1;
+    for (int i = 0; i < num_devices; ++i) {
+        char *dev_name_from_list = (char*)ibv_get_device_name(dev_list[i]);
+        if (strcmp(dev_name_from_list, dev_name) == 0) {
+            INFO("found device {}", dev_name_from_list);
+            ib_dev = dev_list[i];
+            ib_ctx = ibv_open_device(ib_dev);
+            break;
+        }
     }
+    
+    if (!ib_ctx) {
+        INFO("Can't find or failed to open the specified device, try to open the default device");
+        ib_ctx = ibv_open_device(dev_list[0]);
+        if (!ib_ctx) {
+            ERROR("Failed to open the default device");
+            return -1;
+        }    
+    }
+
 
     pd = ibv_alloc_pd(ib_ctx);
     if (!pd) {
@@ -745,7 +760,7 @@ int register_server(unsigned long loop_ptr, server_config_t config) {
         return -1;
     }
 
-    if (init_rdma_context() < 0) {
+    if (init_rdma_context(config.dev_name.c_str()) < 0) {
         return -1;
     }
     mm = new MM(config.prealloc_size<<30, 32 << 10, pd);

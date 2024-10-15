@@ -61,6 +61,13 @@ def parse_args():
         default=16,
         help="prealloc mem pool size, default 16GB, unit: GB",
     )
+    parser.add_argument(
+        "--dev_name",
+        required=False,
+        default="",
+        help="Use IB device <dev> (default first device found)",
+        type=str,
+    )    
     return parser.parse_args()
 
 
@@ -71,6 +78,7 @@ def main():
         service_port=args.service_port,
         log_level=args.log_level,
         prealloc_size=args.prealloc_size,
+        dev_name=args.dev_name
     )
     print(f"Server config: {config}")
     config.verify()

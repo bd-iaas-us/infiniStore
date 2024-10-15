@@ -44,6 +44,7 @@ def test_basic_read_write_cache(server, dtype, new_connection, local):
     config = infinistore.ClientConfig(
         host_addr="127.0.0.1",
         service_port=22345,
+        dev_name="mlx5_0"
     )
     config.connection_type = (
         infinistore.TYPE_LOCAL_GPU if local else infinistore.TYPE_RDMA
