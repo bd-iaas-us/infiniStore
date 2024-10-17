@@ -23,6 +23,10 @@ Connection::~Connection() {
     if (sock) {
         close(sock);
     }
+    for (auto it = local_mr.begin(); it != local_mr.end(); it++) {
+        ibv_dereg_mr(it->second);
+    }
+    local_mr.clear();
     //print ptr
     if (qp) {
         struct ibv_qp_attr attr;
@@ -41,9 +45,6 @@ Connection::~Connection() {
     }
     if (ib_ctx) {
         ibv_close_device(ib_ctx);
-    }
-    for (auto it = local_mr.begin(); it != local_mr.end(); it++) {
-        ibv_dereg_mr(it->second);
     }
 }
 
@@ -107,7 +108,7 @@ int init_rdma_resources(connection_t *conn, const char *dev_name) {
     }
 
     // Create Completion Queue
-    conn->cq = ibv_create_cq(conn->ib_ctx, 1025, NULL, NULL, 0);
+    conn->cq = ibv_create_cq(conn->ib_ctx, MAX_WR * 2, NULL, NULL, 0);
     if (!conn->cq) {
         ERROR("Failed to create CQ");
         return -1;
@@ -118,27 +119,27 @@ int init_rdma_resources(connection_t *conn, const char *dev_name) {
     qp_init_attr.send_cq = conn->cq;
     qp_init_attr.recv_cq = conn->cq;
     qp_init_attr.qp_type = IBV_QPT_RC; // Reliable Connection
-    qp_init_attr.cap.max_send_wr = 1024;
-    qp_init_attr.cap.max_recv_wr = 1024;
+    qp_init_attr.cap.max_send_wr = MAX_WR;
+    qp_init_attr.cap.max_recv_wr = MAX_WR;
     qp_init_attr.cap.max_send_sge = 1;
     qp_init_attr.cap.max_recv_sge = 1;
 
     conn->qp = ibv_create_qp(conn->pd, &qp_init_attr);
     if (!conn->qp) {
-        ERROR("Failed to create QP");
+        ERROR("Failed to create QP, {}", strerror(errno));
         return -1;
     }
 
     // Modify QP to INIT state
     if (modify_qp_to_init(conn->qp)) {
-        ERROR("Failed to modify QP to INIT");
+        ERROR("Failed to modify QP to INIT, {}", strerror(errno));
         return -1;
     }
 
     // Get local connection information
     struct ibv_port_attr port_attr;
     if (ibv_query_port(conn->ib_ctx, 1, &port_attr)) {
-        ERROR("Failed to query port");
+        ERROR("Failed to query port, {}", strerror(errno));
         return -1;
     }
 
@@ -169,11 +170,51 @@ int modify_qp_to_init(struct ibv_qp *qp) {
     return 0;
 }
 
+int _sync_rdma(connection_t *conn, int total_completions) {
+    //TODO: implement this function
+    struct ibv_wc wc[128];
+    int num_completions = 0;
 
+    DEBUG("Waiting for %d completions", total_completions);
+    while (num_completions < total_completions) {
+        int waiting_completions = MIN(128, total_completions - num_completions);
+        int ne = ibv_poll_cq(conn->cq, waiting_completions, wc);
+        if (ne < 0) {
+            ERROR("Failed to poll CQ");
+            return -1;
+        }
+
+        for (int i = 0; i < ne; i++) {
+            if (wc[i].status != IBV_WC_SUCCESS) {
+                ERROR("Failed status {}: wr_id {}\n", ibv_wc_status_str(wc[i].status), (int)wc[i].wr_id);
+                return -1;
+            }
+            num_completions++;
+        }
+    }
+
+    conn->rdma_inflight_count -= total_completions;
+
+    for (auto it = conn->local_mr.begin(); it != conn->local_mr.end(); it++) {
+        ibv_dereg_mr(it->second);
+    }
+    conn->local_mr.clear();
+    return 0;
+}
+
+
+//tthis compare inflight opeartions and MAX_WR, if inflight operations exceed MAX_WR, wait for completions
+void drain(connection_t *conn) {
+    if (conn->rdma_inflight_count >= MAX_WR) {
+        INFO("Inflight operations: {} is exceeding MAX_WR: {}, we should increase MAX_WR", conn->rdma_inflight_count, MAX_WR);
+        _sync_rdma(conn, MAX_WR);
+    }
+}
 
 int perform_rdma_read(connection_t *conn, uintptr_t src_buf, size_t src_size,
                       char * dst_buf, size_t dst_size, uint32_t rkey) {
 
+    drain(conn);
     struct ibv_mr *mr = NULL;
     if (conn->local_mr.find((uintptr_t)dst_buf) == conn->local_mr.end()) {
         mr = ibv_reg_mr(conn->pd, dst_buf, dst_size,
@@ -210,46 +251,25 @@ int perform_rdma_read(connection_t *conn, uintptr_t src_buf, size_t src_size,
         return -1;
     }
 
-    conn->rdma_write_count++;
+    conn->rdma_inflight_count ++;
     DEBUG("RDMA read completed successfully");
     // RDMA read successful
     return 0;
 }
 
 
+
+
+
+
 int sync_rdma(connection_t *conn) {
-    //TODO: implement this function
-    struct ibv_wc wc[32];
-    int total_completions = conn->rdma_write_count + conn->rdma_read_count;
-    int num_completions = 0;
-
-    DEBUG("Waiting for %d completions", total_completions);
-    while (num_completions < total_completions) {
-        int waiting_completions = MIN(32, total_completions - num_completions);
-        int ne = ibv_poll_cq(conn->cq, waiting_completions, wc);
-        if (ne < 0) {
-            ERROR("Failed to poll CQ");
-            return -1;
-        }
-
-        for (int i = 0; i < ne; i++) {
-            if (wc[i].status != IBV_WC_SUCCESS) {
-                ERROR("Failed status {}: wr_id {}\n", ibv_wc_status_str(wc[i].status), (int)wc[i].wr_id);
-                return -1;
-            }
-            num_completions++;
-        }
-    }
-
-    conn->rdma_write_count = 0;
-    conn->rdma_read_count = 0;
-    return 0;
+    return _sync_rdma(conn, conn->rdma_inflight_count);
 }
-
 
 int perform_rdma_write(connection_t *conn, char * src_buf, size_t src_size,
                        uintptr_t dst_buf, size_t dst_size, uint32_t rkey) {
 
+    drain(conn);
     struct ibv_mr *mr = NULL;
     if (conn->local_mr.find((uintptr_t)src_buf) == conn->local_mr.end()) {
         mr = ibv_reg_mr(conn->pd, src_buf, src_size,
@@ -285,7 +305,7 @@ int perform_rdma_write(connection_t *conn, char * src_buf, size_t src_size,
         return -1;
     }
 
-    conn->rdma_read_count++;
+    conn->rdma_inflight_count ++;
     return 0;
 }
 
@@ -439,6 +459,9 @@ int rw_rdma(connection_t *conn, char op, const std::vector<block_t>& blocks, int
     assert(op == OP_RDMA_READ || op == OP_RDMA_WRITE);
     assert(ptr != NULL);
 
+    if (blocks.size() >= MAX_WR) {
+        ERROR("Too many blocks, you should invoke sync before sending more blocks, the performance may be affected");
+    }
 
     std::vector<std::string> keys;
     for (auto &block : blocks) {

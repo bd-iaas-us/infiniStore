@@ -105,6 +105,7 @@ Client::~Client() {
     if (qp) {
         ibv_destroy_qp(qp);
         qp = NULL;
+        INFO("QP destroyed");
     }
 }
 typedef struct Client client_t;
@@ -291,7 +292,7 @@ int do_rdma_exchange(client_t *client) {
     int ret;
     // RDMA setup if not already done
     if (!client->qp) {
-        client->cq = ibv_create_cq(ib_ctx, 1025, NULL, NULL, 0);
+        client->cq = ibv_create_cq(ib_ctx, MAX_WR * 2, NULL, NULL, 0);
         if (!client->cq) {
             ERROR("Failed to create CQ");
             return SYSTEM_ERROR;
@@ -302,8 +303,8 @@ int do_rdma_exchange(client_t *client) {
         qp_init_attr.send_cq = client->cq;
         qp_init_attr.recv_cq = client->cq;
         qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
-        qp_init_attr.cap.max_send_wr = 1024;
-        qp_init_attr.cap.max_recv_wr = 1024;
+        qp_init_attr.cap.max_send_wr = MAX_WR;
+        qp_init_attr.cap.max_recv_wr = MAX_WR;
         qp_init_attr.cap.max_send_sge = 1;
         qp_init_attr.cap.max_recv_sge = 1;
 
@@ -509,7 +510,7 @@ int do_rdma_write(client_t *client) {
         kv_map[key] = {.ptr = h_dst,
                        .size = client->remote_meta_req.block_size,
                        .pool_idx = pool_idx};
-        INFO("rkey: {}, local_addr: {}, size : {}", mm->get_rkey(pool_idx),
+        DEBUG("rkey: {}, local_addr: {}, size : {}", mm->get_rkey(pool_idx),
              (uintptr_t)h_dst, client->remote_meta_req.block_size);
 
         resp.blocks.push_back(
