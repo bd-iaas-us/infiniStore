@@ -10,6 +10,7 @@
 #include "config.h"
 #include <infiniband/verbs.h>
 #include <map>
+#include <future>
 
 //typedef struct connection connection_t;
 
@@ -29,7 +30,15 @@
     rdma_conn_info_t remote_info;
 
     std::map<uintptr_t, struct ibv_mr *> local_mr;
-    int rdma_inflight_count = 0;
+
+
+    struct ibv_comp_channel *comp_channel;
+    std::future<void> cq_future; //cq thread
+    std::atomic<int> rdma_inflight_count;
+    std::atomic<bool> stop;
+    std::mutex mutex;
+    std::condition_variable cv;
+
 
     Connection()=default;
     Connection (const Connection&) = delete;

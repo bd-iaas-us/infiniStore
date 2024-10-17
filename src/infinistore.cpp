@@ -503,6 +503,7 @@ int do_rdma_write(client_t *client) {
         h_dst = mm->allocate(client->remote_meta_req.block_size, &pool_idx);
         // FIXME: only one h_dst is sent
         if (h_dst == NULL) {
+            ERROR("Failed to allocate host memory");
             error_code = SYSTEM_ERROR;
             goto RETURN;
         }
