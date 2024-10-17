@@ -8,6 +8,10 @@ import uvicorn
 import torch
 import argparse
 
+import logging
+
+logging.disable(logging.INFO)
+
 app = FastAPI()
 
 
@@ -55,7 +59,7 @@ def parse_args():
     parser.add_argument(
         "--log-level",
         required=False,
-        default="warning",
+        default="info",
         help="log level, default warning",
         type=str,
     )
@@ -96,11 +100,7 @@ def main():
     register_server(loop, config)
 
     http_config = uvicorn.Config(
-        app,
-        host="0.0.0.0",
-        port=config.manage_port,
-        loop="uvloop",
-        log_level=config.log_level,
+        app, host="0.0.0.0", port=config.manage_port, loop="uvloop"
     )
 
     server = uvicorn.Server(http_config)

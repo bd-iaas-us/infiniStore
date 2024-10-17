@@ -18,4 +18,6 @@
 #define _stringify(_x) #_x
 #define stringify(_x) _stringify(_x)
 
+int set_log_level(std::string level);
+
 #endif // __LOG_H__
