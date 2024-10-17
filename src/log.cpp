@@ -21,6 +21,19 @@ spdlog::level::level_enum get_log_level() {
 
 static auto console = spdlog::stdout_color_mt(APP_NAME);
 
+int set_log_level(std::string level) {
+    if (level == "info") {
+        spdlog::get(APP_NAME)->set_level(spdlog::level::info);
+    } else if (level == "error") {
+        spdlog::get(APP_NAME)->set_level(spdlog::level::err);
+    } else if (level == "debug") {
+        spdlog::get(APP_NAME)->set_level(spdlog::level::debug);
+    } else {
+        return -1;
+    }
+    return 0;
+}
+
 static bool log_level_set = []() {
     console->set_level(get_log_level());
     return true;

@@ -747,6 +747,10 @@ int register_server(unsigned long loop_ptr, server_config_t config) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
+    if (set_log_level(config.log_level) == -1) {
+        INFO("Incorrect log level, use INFO");
+    }
+
     loop = (uv_loop_t *)loop_ptr;
     assert(loop != NULL);
     uv_tcp_init(loop, &server);

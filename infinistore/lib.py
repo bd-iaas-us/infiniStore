@@ -56,6 +56,8 @@ class ServerConfig(_infinistore.ServerConfig):
             raise Exception("Service port is 0")
         if self.manage_port == 0:
             raise Exception("Manage port is 0")
+        if self.log_level not in ["error", "debug", "info"]:
+            raise Exception("log level should be error, debug or info")
 
 
 def register_server(loop, config: ServerConfig):
