@@ -31,6 +31,7 @@ manylinux: $(PYBIND_TARGET)
 $(PYBIND_TARGET): pybind.cpp libinfinistore.o utils.o protocol.o infinistore.o log.o ibv_helper.o mempool.o
 	$(CXX) $(CXXFLAGS) $(INCLUDES) --shared -fPIC $(PYBIND11_INCLUDES) $^ \
 	-o $(PYBIND_TARGET) $(LDFLAGS) $(LIBS)
+	rm -rf ../infinistore/$(PYBIND_TARGET)
 	cp $(PYBIND_TARGET) ../infinistore/
 
 

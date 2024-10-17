@@ -8,6 +8,14 @@ import argparse
 
 def parse_args():
     parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--rdma",
+        required=False,
+        action="store_true",
+        help="use rdma connection, default False",
+    )
+
     parser.add_argument(
         "--server",
         required=False,
@@ -16,14 +24,14 @@ def parse_args():
         type=str,
     )
     parser.add_argument(
-        "--service_port",
+        "--service-port",
         required=False,
         type=int,
         default=22345,
         help="port for data plane, default 22345",
     )
     parser.add_argument(
-        "--dev_name",
+        "--dev-name",
         required=False,
         default="",
         help="Use IB device <dev> (default first device found)",
@@ -37,7 +45,7 @@ def parse_args():
         help="number of iterations, default 100",
     )
     parser.add_argument(
-        "--block_size",
+        "--block-size",
         required=False,
         type=int,
         default=32,
@@ -51,14 +59,14 @@ def parse_args():
         help="size for benchmarking, unit: MB, default 128",
     )
     parser.add_argument(
-        "--src_gpu",
+        "--src-gpu",
         required=False,
         type=int,
         default=0,
         help="gpu# for data write from, default 0",
     )
     parser.add_argument(
-        "--dst_gpu",
+        "--dst-gpu",
         required=False,
         type=int,
         default=0,
@@ -77,11 +85,11 @@ def run(args):
     config = infinistore.ClientConfig(
         host_addr=args.server, service_port=args.service_port, dev_name=args.dev_name
     )
+
     config.connection_type = (
-        infinistore.TYPE_LOCAL_GPU
-        if args.server == "127.0.0.1"
-        else infinistore.TYPE_RDMA
+        infinistore.TYPE_RDMA if args.rdma else infinistore.TYPE_LOCAL_GPU
     )
+
     conn = infinistore.InfinityConnection(config)
     conn.connect()
 

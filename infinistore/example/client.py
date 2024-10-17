@@ -43,7 +43,7 @@ if __name__ == "__main__":
     rdma_conn.connect()
     run(rdma_conn)
 
-    config.connection_type = infinistore.TYPE_LOCAL_GPU
-    local_conn = InfinityConnection(config)
-    local_conn.connect()
-    run(local_conn)
+    # config.connection_type = infinistore.TYPE_LOCAL_GPU
+    # local_conn = InfinityConnection(config)
+    # local_conn.connect()
+    # run(local_conn)
