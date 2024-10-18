@@ -52,6 +52,7 @@ def parse_args():
         default=22345,
         help="port for data plane, default 22345",
     )
+
     parser.add_argument(
         "--log-level",
         required=False,
@@ -59,6 +60,7 @@ def parse_args():
         help="log level, default warning",
         type=str,
     )
+
     parser.add_argument(
         "--prealloc-size",
         required=False,
@@ -100,7 +102,7 @@ def main():
         host="0.0.0.0",
         port=config.manage_port,
         loop="uvloop",
-        log_level=config.log_level,
+        # log_level=config.log_level,
     )
 
     server = uvicorn.Server(http_config)
