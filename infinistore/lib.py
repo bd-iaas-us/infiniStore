@@ -71,8 +71,8 @@ class Logger:
     def error(msg, line_no, file_name):
         _infinistore.printing("error", "[{}:{}] {}".format(file_name, line_no, msg))
     @staticmethod
-    def error(msg, line_no, file_name):
-        _infinistore.printing("error", "[{}:{}] {}".format(file_name, line_no, msg))              
+    def warn(msg, line_no, file_name):
+        _infinistore.printing("warning", "[{}:{}] {}".format(file_name, line_no, msg))              
     @staticmethod
     def set_log_level(level):
         _infinistore.set_log_level(level)  
