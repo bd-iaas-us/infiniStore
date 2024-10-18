@@ -268,7 +268,7 @@ int init_rdma_context(const char *dev_name) {
     }
 
     if (!ib_ctx) {
-        INFO("Can't find or failed to open the specified device, try to open the default device");
+        INFO("Can't find or failed to open the specified device, try to open the default device {}", (char*)ibv_get_device_name(dev_list[0]));
         ib_ctx = ibv_open_device(dev_list[0]);
         if (!ib_ctx) {
             ERROR("Failed to open the default device");
@@ -746,10 +746,6 @@ int register_server(unsigned long loop_ptr, server_config_t config) {
     signal(SIGSEGV, signal_handler);
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
-
-    if (set_log_level(config.log_level) == -1) {
-        INFO("Incorrect log level, use INFO");
-    }
 
     loop = (uv_loop_t *)loop_ptr;
     assert(loop != NULL);

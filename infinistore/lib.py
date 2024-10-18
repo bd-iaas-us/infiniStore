@@ -34,7 +34,8 @@ class ClientConfig(_infinistore.ClientConfig):
             raise Exception("Host address is empty")
         if self.service_port == 0:
             raise Exception("Service port is 0")
-
+        if self.log_level not in ["error", "debug", "info", "warning"]:
+            raise Exception("log level should be error, debug, info or warning")            
 
 class ServerConfig(_infinistore.ServerConfig):
     def __init__(self, **kwargs):
@@ -56,8 +57,25 @@ class ServerConfig(_infinistore.ServerConfig):
             raise Exception("Service port is 0")
         if self.manage_port == 0:
             raise Exception("Manage port is 0")
-        if self.log_level not in ["error", "debug", "info"]:
-            raise Exception("log level should be error, debug or info")
+        if self.log_level not in ["error", "debug", "info", "warning"]:
+            raise Exception("log level should be error, debug, info or warning")
+
+class Logger:
+    @staticmethod
+    def info(msg):
+        _infinistore.printing("info", str(msg))
+    @staticmethod
+    def debug(msg):
+        _infinistore.printing("debug", str(msg))      
+    @staticmethod
+    def error(msg, line_no, file_name):
+        _infinistore.printing("error", "[{}:{}] {}".format(file_name, line_no, msg))
+    @staticmethod
+    def error(msg, line_no, file_name):
+        _infinistore.printing("error", "[{}:{}] {}".format(file_name, line_no, msg))              
+    @staticmethod
+    def set_log_level(level):
+        _infinistore.set_log_level(level)  
 
 
 def register_server(loop, config: ServerConfig):

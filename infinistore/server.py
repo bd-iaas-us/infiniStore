@@ -1,5 +1,5 @@
-from .lib import register_server, check_supported, ServerConfig
-
+from .lib import register_server, check_supported, ServerConfig, Logger
+import sys
 import asyncio
 import uvloop
 from fastapi import FastAPI
@@ -88,10 +88,15 @@ def main():
         prealloc_size=args.prealloc_size,
         dev_name=args.dev_name,
     )
-    print(f"Server config: {config}")
     config.verify()
     check_p2p_access()
     check_supported()
+
+    Logger.set_log_level(config.log_level)
+    Logger.info(config)
+    # print error
+    # Logger.error("test error", sys._getframe(1).f_lineno, __file__)
+
     loop = uvloop.new_event_loop()
     asyncio.set_event_loop(loop)
     # 16 GB pre allocated
