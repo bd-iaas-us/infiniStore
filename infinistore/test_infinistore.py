@@ -136,11 +136,8 @@ def test_read_write_bottom_cache(server):
     # allocate a 4(float32) * 100 tensor on GPU, the size is 400MB
     size = 100 << 20
 
-    # FIXME: why torch.randn will cause the error?
-    src = torch.randn(size, dtype=torch.float32)
-    src = src.cuda()
     # bad code, this line test will fail.
-    # src = torch.randn(size, device="cuda", dtype=torch.float32)
+    src = torch.randn(size, device="cuda", dtype=torch.float32)
     key = generate_random_string(20)
 
     # write the bottom cache
@@ -170,8 +167,6 @@ def test_read_write_interleave_cache(server):
     size = 100 << 20
 
     src = torch.randn(size, device="cuda", dtype=torch.float32)
-    src[0:1024] = torch.randn(1024, dtype=torch.float32)
-    src[-1024:] = torch.randn(1024, dtype=torch.float32)
     key1 = generate_random_string(5)
     key2 = generate_random_string(5)
 

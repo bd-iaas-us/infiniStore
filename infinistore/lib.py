@@ -259,6 +259,7 @@ class InfinityConnection:
         # each offset should multiply by the element size
         blocks_in_bytes = [(key, offset * element_size) for key, offset in blocks]
 
+        torch.cuda.synchronize()
         if self.local_connected:
             ret = _infinistore.rw_local(
                 self.conn, self.OP_W, blocks_in_bytes, page_size * element_size, ptr
