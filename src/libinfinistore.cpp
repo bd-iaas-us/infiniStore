@@ -547,7 +547,7 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t>& blocks, int block
         //compare already registered blocks with incoming blocks
 
         if (conn->rdma_inflight_mr_size + blocks.size() * block_size > conn->bar1_mem_in_mib * 1024 * 1024) {
-            ERROR("Not enough BAR1 memory rdma_inflight_mr_size {} + incoming size {} > bar1 size {}", conn->rdma_inflight_mr_size, blocks.size() * block_size, conn->bar1_mem_in_mib * 1024 * 1024);
+            ERROR("Not enough BAR1 memory rdma_inflight_mr_size {} + incoming size {} > bar1 size {}", conn->rdma_inflight_mr_size.load(), blocks.size() * block_size, conn->bar1_mem_in_mib * 1024 * 1024);
             return -1;
         }
 

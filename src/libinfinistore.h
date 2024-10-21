@@ -28,7 +28,7 @@ public:
 
     ~IBVMemoryRegion() {
         if (mr_) {
-            INFO("deregister mr: {}", (void*)this);
+            DEBUG("deregister mr: {}", (void*)this);
             ibv_dereg_mr(mr_);
         }
     }

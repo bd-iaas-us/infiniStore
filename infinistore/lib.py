@@ -1,15 +1,4 @@
-try:
-    from . import _infinistore
-except ImportError as e:
-    import os
-
-    so_file = os.path.join(os.path.dirname(__file__), "_infinistore.so")
-    if not os.path.exists(so_file):
-        raise ImportError(f"Missing required .so file: {so_file}") from e
-    else:
-        raise e
-
-
+from . import _infinistore
 import torch
 import os
 from typing import List, Tuple
