@@ -11,9 +11,49 @@
 #include <infiniband/verbs.h>
 #include <map>
 #include <future>
+#include "log.h"
 
 //typedef struct connection connection_t;
 
+
+class IBVMemoryRegion {
+public:
+    IBVMemoryRegion(struct ibv_pd *pd, void *addr, size_t length)
+        : ref_count_(0) {
+        mr_ = ibv_reg_mr(pd, addr, length, IBV_ACCESS_LOCAL_WRITE|IBV_ACCESS_REMOTE_WRITE);
+        if (!mr_) {
+            throw std::runtime_error("Failed to register memory region");
+        }
+    }
+
+    ~IBVMemoryRegion() {
+        if (mr_) {
+            INFO("deregister mr: {}", (void*)this);
+            ibv_dereg_mr(mr_);
+        }
+    }
+
+    void add_ref() {
+        ref_count_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    size_t release() {
+        if (ref_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            size_t ret = mr_->length;
+            delete this;
+            return ret;
+        }
+        return 0;
+    }
+
+    struct ibv_mr* get_mr() const {
+        return mr_;
+    }
+
+private:
+    struct ibv_mr *mr_;
+    std::atomic<int> ref_count_;
+};
 
  struct Connection{
     //tcp socket
@@ -29,7 +69,7 @@
     rdma_conn_info_t local_info;
     rdma_conn_info_t remote_info;
 
-    std::map<uintptr_t, struct ibv_mr *> local_mr;
+    std::map<uintptr_t, IBVMemoryRegion *> local_mr;
 
 
     struct ibv_comp_channel *comp_channel = NULL;
@@ -42,9 +82,9 @@
 
     //if GPU's bar1 is less than total avaliable memory, we need to set this flag.
     //so every RDMA read/write will have to check if the memory region is bigger than bar1. use have to split the requests
-    //
     bool limited_bar1 = false;
     unsigned int bar1_mem_in_mib = 0;
+    std::atomic<size_t> rdma_inflight_mr_size{0};
 
 
     Connection()=default;

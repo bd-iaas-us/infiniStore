@@ -121,7 +121,8 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
     assert torch.equal(src_tensor.cpu(), dst.cpu())
 
 
-def test_read_write_bottom_cache(server):
+@pytest.mark.parametrize("limited_bar1", [(True, 100 << 20), (False, 10 << 20)])
+def test_read_write_bottom_cache(server, limited_bar1):
     config = infinistore.ClientConfig(
         host_addr="127.0.0.1",
         service_port=22345,
@@ -131,12 +132,11 @@ def test_read_write_bottom_cache(server):
     conn = infinistore.InfinityConnection(config)
     conn.connect()
     # force the limit, for GPU T4, limited_bar1 must be True
-    conn.conn.limited_bar1 = True
+    conn.conn.limited_bar1 = limited_bar1[0]
 
     # allocate a 4(float32) * 100 tensor on GPU, the size is 400MB
-    size = 100 << 20
+    size = limited_bar1[1]
 
-    # bad code, this line test will fail.
     src = torch.randn(size, device="cuda", dtype=torch.float32)
     key = generate_random_string(20)
 
@@ -152,7 +152,8 @@ def test_read_write_bottom_cache(server):
     assert torch.equal(src[-512:], dst)
 
 
-def test_read_write_interleave_cache(server):
+@pytest.mark.parametrize("limited_bar1", [(True, 100 << 20), (False, 10 << 20)])
+def test_read_write_interleave_cache(server, limited_bar1):
     config = infinistore.ClientConfig(
         host_addr="127.0.0.1",
         service_port=22345,
@@ -162,9 +163,9 @@ def test_read_write_interleave_cache(server):
     conn = infinistore.InfinityConnection(config)
     conn.connect()
     # force the limit, for GPU T4, limited_bar1 must be True
-    conn.conn.limited_bar1 = True
+    conn.conn.limited_bar1 = limited_bar1[0]
     # allocate a 4(float32) * 100 tensor on GPU, the size is 400MB
-    size = 100 << 20
+    size = limited_bar1[1]
 
     src = torch.randn(size, device="cuda", dtype=torch.float32)
     key1 = generate_random_string(5)

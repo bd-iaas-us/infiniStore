@@ -1,4 +1,14 @@
-from infinistore import _infinistore
+try:
+    from . import _infinistore
+except ImportError as e:
+    import os
+
+    so_file = os.path.join(os.path.dirname(__file__), "_infinistore.so")
+    if not os.path.exists(so_file):
+        raise ImportError(f"Missing required .so file: {so_file}") from e
+    else:
+        raise e
+
 
 import torch
 import os
