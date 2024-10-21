@@ -52,26 +52,26 @@ typedef enum {
 } read_state_t;
 
 struct Client {
-    uv_tcp_t *handle;       // uv_stream_t
+    uv_tcp_t *handle = NULL;      // uv_stream_t
     read_state_t state;     // state of the client, for parsing the request
-    size_t bytes_read;      // bytes read so far, for parsing the request
-    size_t expected_bytes;  // expected size of the body
+    size_t bytes_read = 0;      // bytes read so far, for parsing the request
+    size_t expected_bytes = 0;  // expected size of the body
     header_t header;
 
-    char *recv_buffer;
+    char *recv_buffer = NULL;
     local_meta_t local_meta;
     remote_meta_request remote_meta_req;
 
     // TODO: remove send_buffer
-    char *send_buffer;
+    char *send_buffer = NULL;
 
     cudaStream_t cuda_stream;
 
     rdma_conn_info_t remote_info;
     rdma_conn_info_t local_info;
 
-    struct ibv_cq *cq;
-    struct ibv_qp *qp;
+    struct ibv_cq *cq = NULL;
+    struct ibv_qp *qp = NULL;
     bool rdma_connected = false;
     int gidx;  // gid index
 
@@ -105,6 +105,7 @@ Client::~Client() {
     if (qp) {
         ibv_destroy_qp(qp);
         qp = NULL;
+        INFO("QP destroyed");
     }
 }
 typedef struct Client client_t;
@@ -291,7 +292,7 @@ int do_rdma_exchange(client_t *client) {
     int ret;
     // RDMA setup if not already done
     if (!client->qp) {
-        client->cq = ibv_create_cq(ib_ctx, 1025, NULL, NULL, 0);
+        client->cq = ibv_create_cq(ib_ctx, MAX_WR * 2, NULL, NULL, 0);
         if (!client->cq) {
             ERROR("Failed to create CQ");
             return SYSTEM_ERROR;
@@ -302,8 +303,8 @@ int do_rdma_exchange(client_t *client) {
         qp_init_attr.send_cq = client->cq;
         qp_init_attr.recv_cq = client->cq;
         qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
-        qp_init_attr.cap.max_send_wr = 1024;
-        qp_init_attr.cap.max_recv_wr = 1024;
+        qp_init_attr.cap.max_send_wr = MAX_WR;
+        qp_init_attr.cap.max_recv_wr = MAX_WR;
         qp_init_attr.cap.max_send_sge = 1;
         qp_init_attr.cap.max_recv_sge = 1;
 
@@ -439,7 +440,7 @@ int do_sync_stream(client_t *client) {
 
 // TODO: refactor this function to use RDMA_WRITE_IMM.
 int do_rdma_read(client_t *client) {
-    INFO("do rdma read keys: {}", client->remote_meta_req.keys.size());
+    INFO("do rdma read #keys: {}", client->remote_meta_req.keys.size());
     auto start = std::chrono::high_resolution_clock::now();
 
     int error_code = TASK_ACCEPTED;
@@ -454,7 +455,9 @@ int do_rdma_read(client_t *client) {
             goto RETURN;
         }
         PTR ptr = kv_map[key];
-
+        DEBUG("rkey: {}, local_addr: {}, size : {}", mm->get_rkey(ptr.pool_idx),
+             (uintptr_t)ptr.ptr, ptr.size);
+        print_vector<float>((float*)ptr.ptr, 8);
         resp.blocks.push_back({.rkey = mm->get_rkey(ptr.pool_idx),
                                .remote_addr = (uintptr_t)ptr.ptr});
     }
@@ -502,6 +505,7 @@ int do_rdma_write(client_t *client) {
         h_dst = mm->allocate(client->remote_meta_req.block_size, &pool_idx);
         // FIXME: only one h_dst is sent
         if (h_dst == NULL) {
+            ERROR("Failed to allocate host memory");
             error_code = SYSTEM_ERROR;
             goto RETURN;
         }
@@ -509,8 +513,12 @@ int do_rdma_write(client_t *client) {
         kv_map[key] = {.ptr = h_dst,
                        .size = client->remote_meta_req.block_size,
                        .pool_idx = pool_idx};
-        INFO("rkey: {}, local_addr: {}, size : {}", mm->get_rkey(pool_idx),
+        DEBUG("rkey: {}, local_addr: {}, size : {}", mm->get_rkey(pool_idx),
              (uintptr_t)h_dst, client->remote_meta_req.block_size);
+
+        //set first element to 12345
+        float *h_dst_float = (float *)h_dst;
+        h_dst_float[0] = 12345;
 
         resp.blocks.push_back(
             {.rkey = mm->get_rkey(pool_idx), .remote_addr = (uintptr_t)h_dst});

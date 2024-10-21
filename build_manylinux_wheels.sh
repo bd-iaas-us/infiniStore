@@ -6,6 +6,7 @@ PYTHON_VERSIONS=(
 rm -rf build/ dist/ wheelhouse/
 for PYTHON in "${PYTHON_VERSIONS[@]}"; do
     make -C src clean
+    rm -rf infinistore/*.so
     make -C src manylinux PYTHON=${PYTHON} -j8
     if [ $? -ne 0 ]; then
         exit 1

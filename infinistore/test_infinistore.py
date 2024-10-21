@@ -119,3 +119,66 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
     conn.sync()
     # import pdb; pdb.set_trace()
     assert torch.equal(src_tensor.cpu(), dst.cpu())
+
+
+@pytest.mark.parametrize("limited_bar1", [(True, 100 << 20), (False, 10 << 20)])
+def test_read_write_bottom_cache(server, limited_bar1):
+    config = infinistore.ClientConfig(
+        host_addr="127.0.0.1",
+        service_port=22345,
+        dev_name="mlx5_0",
+        connection_type=infinistore.TYPE_RDMA,
+    )
+    conn = infinistore.InfinityConnection(config)
+    conn.connect()
+    # force the limit, for GPU T4, limited_bar1 must be True
+    conn.conn.limited_bar1 = limited_bar1[0]
+
+    # allocate a 4(float32) * 100 tensor on GPU, the size is 400MB
+    size = limited_bar1[1]
+
+    src = torch.randn(size, device="cuda", dtype=torch.float32)
+    key = generate_random_string(20)
+
+    # write the bottom cache
+    conn.write_cache(src, [(key, size - 512)], 512)
+
+    conn.sync()
+
+    # read the bottom cache
+    dst = torch.zeros(512, device="cuda", dtype=torch.float32)
+    conn.read_cache(dst, [(key, 0)], 512)
+    conn.sync()
+    assert torch.equal(src[-512:], dst)
+
+
+@pytest.mark.parametrize("limited_bar1", [(True, 100 << 20), (False, 10 << 20)])
+def test_read_write_interleave_cache(server, limited_bar1):
+    config = infinistore.ClientConfig(
+        host_addr="127.0.0.1",
+        service_port=22345,
+        dev_name="mlx5_0",
+        connection_type=infinistore.TYPE_RDMA,
+    )
+    conn = infinistore.InfinityConnection(config)
+    conn.connect()
+    # force the limit, for GPU T4, limited_bar1 must be True
+    conn.conn.limited_bar1 = limited_bar1[0]
+    # allocate a 4(float32) * 100 tensor on GPU, the size is 400MB
+    size = limited_bar1[1]
+
+    src = torch.randn(size, device="cuda", dtype=torch.float32)
+    key1 = generate_random_string(5)
+    key2 = generate_random_string(5)
+
+    conn.write_cache(src, [(key1, 0), (key2, size - 1024)], 1024)
+    conn.sync()
+
+    dst = torch.zeros(1024, device="cuda", dtype=torch.float32)
+    conn.read_cache(dst, [(key1, 0)], 1024)
+    conn.sync()
+    assert torch.equal(src[0:1024], dst)
+
+    conn.read_cache(dst, [(key2, 0)], 1024)
+    conn.sync()
+    assert torch.equal(src[-1024:], dst)

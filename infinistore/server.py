@@ -1,5 +1,7 @@
 from .lib import register_server, check_supported, ServerConfig, Logger
 import sys
+from ._infinistore import get_kvmap_len
+
 import asyncio
 import uvloop
 from fastapi import FastAPI
@@ -14,9 +16,9 @@ logging.disable(logging.INFO)
 app = FastAPI()
 
 
-# @app.get("/kvmapSize")
-# async def read_status():
-#     return infinistore._infinistore.get_kvmap_len()
+@app.get("/kvmapSize")
+async def read_status():
+    return get_kvmap_len()
 
 
 def check_p2p_access():
@@ -42,35 +44,37 @@ def parse_args():
         type=str,
     )
     parser.add_argument(
-        "--manage_port",
+        "--manage-port",
         required=False,
         type=int,
         default=18080,
         help="port for control plane, default 18080",
     )
     parser.add_argument(
-        "--service_port",
+        "--service-port",
         required=False,
         type=int,
         default=22345,
         help="port for data plane, default 22345",
     )
+
     parser.add_argument(
-        "--log_level",
+        "--log-level",
         required=False,
         default="info",
         help="log level, default warning",
         type=str,
     )
+
     parser.add_argument(
-        "--prealloc_size",
+        "--prealloc-size",
         required=False,
         type=int,
         default=16,
         help="prealloc mem pool size, default 16GB, unit: GB",
     )
     parser.add_argument(
-        "--dev_name",
+        "--dev-name",
         required=False,
         default="",
         help="Use IB device <dev> (default first device found)",

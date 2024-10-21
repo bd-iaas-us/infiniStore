@@ -5,7 +5,8 @@ from .lib import (
     ServerConfig,
     TYPE_RDMA,
     TYPE_LOCAL_GPU,
-    Logger
+    Logger,
+    check_supported,
 )
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "ServerConfig",
     "TYPE_RDMA",
     "TYPE_LOCAL_GPU",
-    "Logger"
+    "Logger",
+    "check_supported",
 ]
