@@ -6,6 +6,7 @@
 #include <tuple>
 #include <iostream>
 #include "config.h"
+#include "log.h"
 
 namespace py = pybind11;
 extern int register_server(unsigned long loop_ptr, server_config_t config);
@@ -62,4 +63,7 @@ PYBIND11_MODULE(_infinistore, m) {
     m.def("get_kvmap_len", &get_kvmap_len, "get kv map size");
     m.def("register_server", &register_server, "register the server");
 
+    // //both side
+    m.def("printing", &printing, "print log");
+    m.def("set_log_level", &set_log_level, "set log level");
 }

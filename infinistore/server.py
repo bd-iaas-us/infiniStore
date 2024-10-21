@@ -1,4 +1,5 @@
-from .lib import register_server, check_supported, ServerConfig
+from .lib import register_server, check_supported, ServerConfig, Logger
+import sys
 from ._infinistore import get_kvmap_len
 
 import asyncio
@@ -7,6 +8,10 @@ from fastapi import FastAPI
 import uvicorn
 import torch
 import argparse
+
+import logging
+
+logging.disable(logging.INFO)
 
 app = FastAPI()
 
@@ -56,7 +61,7 @@ def parse_args():
     parser.add_argument(
         "--log-level",
         required=False,
-        default="warning",
+        default="info",
         help="log level, default warning",
         type=str,
     )
@@ -87,10 +92,15 @@ def main():
         prealloc_size=args.prealloc_size,
         dev_name=args.dev_name,
     )
-    print(f"Server config: {config}")
     config.verify()
     check_p2p_access()
     check_supported()
+
+    Logger.set_log_level(config.log_level)
+    Logger.info(config)
+    # print error
+    # Logger.error("test error", sys._getframe(1).f_lineno, __file__)
+
     loop = uvloop.new_event_loop()
     asyncio.set_event_loop(loop)
     # 16 GB pre allocated
@@ -98,11 +108,7 @@ def main():
     register_server(loop, config)
 
     http_config = uvicorn.Config(
-        app,
-        host="0.0.0.0",
-        port=config.manage_port,
-        loop="uvloop",
-        # log_level=config.log_level,
+        app, host="0.0.0.0", port=config.manage_port, loop="uvloop"
     )
 
     server = uvicorn.Server(http_config)

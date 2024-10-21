@@ -117,7 +117,7 @@ int init_rdma_resources(connection_t *conn, const char *dev_name) {
     }
 
     if (!conn->ib_ctx) {
-        INFO("Can't find or failed to open the specified device, try to open the default device");
+        INFO("Can't find or failed to open the specified device, try to open the default device {}", (char*)ibv_get_device_name(dev_list[0]));
         conn->ib_ctx = ibv_open_device(dev_list[0]);
         if (!conn->ib_ctx) {
             ERROR("Failed to open the default device");
