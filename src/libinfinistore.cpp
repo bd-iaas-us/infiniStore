@@ -348,7 +348,7 @@ void cq_handler(connection_t *conn) {
                 if (wc.opcode == IBV_WC_RDMA_READ || wc.opcode == IBV_WC_RDMA_WRITE) {
                     conn->rdma_inflight_count --;
                 } else {
-                    ERROR("Unexpected opcode: {}", wc.opcode);
+                    ERROR("Unexpected opcode: {}", (int)wc.opcode);
                     return;
                 }
                 conn->cv.notify_all();
