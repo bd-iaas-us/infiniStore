@@ -64,6 +64,6 @@ PYBIND11_MODULE(_infinistore, m) {
     m.def("register_server", &register_server, "register the server");
 
     // //both side
-    m.def("printing", &printing, "print log");
+    m.def("log_msg", &log_msg, "log");
     m.def("set_log_level", &set_log_level, "set log level");
 }

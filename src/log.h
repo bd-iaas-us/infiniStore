@@ -15,12 +15,12 @@
 #define INFO(fmt, ...) \
         do { spdlog::get(APP_NAME)->info(fmt, ##__VA_ARGS__); } while (0)
 #define WARN(fmt, ...) \
-        do { spdlog::get(APP_NAME)->warn("[{}:{}] " fmt, __FILE__, __LINE__, ##__VA_ARGS__); } while (0)        
+        do { spdlog::get(APP_NAME)->warn("[{}:{}] " fmt, __FILE__, __LINE__, ##__VA_ARGS__); } while (0)
 
 #define _stringify(_x) #_x
 #define stringify(_x) _stringify(_x)
 
 void set_log_level(std::string level);
-void printing(std::string level, std::string msg);
+void log_msg(std::string level, std::string msg);
 
 #endif // __LOG_H__

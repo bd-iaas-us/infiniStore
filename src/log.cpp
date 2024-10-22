@@ -11,10 +11,10 @@ void set_log_level(std::string level) {
         console->set_level(spdlog::level::debug);
     } else if (level == "warning") {
         console->set_level(spdlog::level::warn);
-    } 
+    }
 }
 
-void printing(std::string level, std::string msg) {
+void log_msg(std::string level, std::string msg) {
     if (level == "info") {
         spdlog::get(APP_NAME)->info(msg);
     } else if (level == "debug") {

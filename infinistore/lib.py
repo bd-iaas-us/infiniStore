@@ -74,7 +74,12 @@ class ClientConfig(_infinistore.ClientConfig):
         self.host_addr = kwargs.get("host_addr", None)
         self.dev_name = kwargs.get("dev_name", "")
         self.service_port = kwargs.get("service_port", None)
-        self.log_level = kwargs.get("log_level", "warning")
+        # get log from system env
+        # if log level is not set in Config and system env is not set either, use warning as default
+        if "INFINISTORE_LOG_LEVEL" in os.environ:
+            self.log_level = os.environ["INFINISTORE_LOG_LEVEL"]
+        else:
+            self.log_level = kwargs.get("log_level", "warning")
 
     def __repr__(self):
         return (
@@ -91,7 +96,8 @@ class ClientConfig(_infinistore.ClientConfig):
         if self.service_port == 0:
             raise Exception("Service port is 0")
         if self.log_level not in ["error", "debug", "info", "warning"]:
-            raise Exception("log level should be error, debug, info or warning")            
+            raise Exception("log level should be error, debug, info or warning")
+
 
 class ServerConfig(_infinistore.ServerConfig):
     def __init__(self, **kwargs):
@@ -116,22 +122,27 @@ class ServerConfig(_infinistore.ServerConfig):
         if self.log_level not in ["error", "debug", "info", "warning"]:
             raise Exception("log level should be error, debug, info or warning")
 
+
 class Logger:
     @staticmethod
     def info(msg):
-        _infinistore.printing("info", str(msg))
+        _infinistore.log_msg("info", str(msg))
+
     @staticmethod
     def debug(msg):
-        _infinistore.printing("debug", str(msg))      
+        _infinistore.log_msg("debug", str(msg))
+
     @staticmethod
-    def error(msg, line_no, file_name):
-        _infinistore.printing("error", "[{}:{}] {}".format(file_name, line_no, msg))
+    def error(msg):
+        _infinistore.log_msg("error", str(msg))
+
     @staticmethod
-    def warn(msg, line_no, file_name):
-        _infinistore.printing("warning", "[{}:{}] {}".format(file_name, line_no, msg))              
+    def warn(msg):
+        _infinistore.log_msg("warning", str(msg))
+
     @staticmethod
     def set_log_level(level):
-        _infinistore.set_log_level(level)  
+        _infinistore.set_log_level(level)
 
 
 def register_server(loop, config: ServerConfig):
