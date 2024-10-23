@@ -23,6 +23,7 @@
 #include "protocol.h"
 #include "utils.h"
 #include "config.h"
+#include <future>
 
 #define BUFFER_SIZE (64 << 10)
 
@@ -38,8 +39,10 @@ uv_tcp_t server;
 // global ibv context
 struct ibv_context *ib_ctx;
 struct ibv_pd *pd;
+struct ibv_comp_channel *comp_channel;
 MM *mm;
 
+std::future<void> f;
 int get_kvmap_len() { return kv_map.size(); }
 
 void print_header(header_t *header) {
@@ -74,16 +77,60 @@ struct Client {
     struct ibv_qp *qp = NULL;
     bool rdma_connected = false;
     int gidx;  // gid index
+    //handle the completion queue of RMDA_WRITE_IMM
+    uv_poll_t poll_handle;
 
     int remain;
 
     Client() = default;
     Client(const Client &) = delete;
     ~Client();
+    void cq_poll_handle(uv_poll_t *handle, int status, int events);
 };
+
+void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
+    //TODO: handle completion
+    ERROR("Poll handle called");
+    if (status < 0) {
+        fprintf(stderr, "Poll error: %s\n", uv_strerror(status));
+        return;
+    }
+    struct ibv_cq* cq;
+    void* cq_context;
+
+    // 获取 CQ 事件，并确认它已被处理
+    if (ibv_get_cq_event(comp_channel, &cq, &cq_context) != 0) {
+        perror("Failed to get CQ event");
+        return;
+    }
+    ibv_ack_cq_events(cq, 1);
+
+    if (ibv_req_notify_cq(cq, 0) != 0) {
+        perror("Failed to request CQ notification");
+        return;
+    }
+    struct ibv_wc wc = {};
+    while (ibv_poll_cq(cq, 1, &wc) > 0) {
+        if (wc.status == IBV_WC_SUCCESS) {
+            if (wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+                uint32_t imm_data = ntohl(wc.imm_data);
+                printf("Received RDMA WRITE WITH IMM, imm_data: %u\n", imm_data);
+            } else {
+                printf("Unexpected opcode: %d\n", wc.opcode);
+            }
+        } else {
+            fprintf(stderr, "CQ error: %s\n", ibv_wc_status_str(wc.status));
+        }
+    }
+}
 
 Client::~Client() {
     DEBUG("free client resources");
+
+    if (poll_handle.data) {
+        uv_poll_stop(&poll_handle);
+    }
+
     if (handle) {
         free(handle);
         handle = NULL;
@@ -283,16 +330,32 @@ int init_rdma_context(const char *dev_name) {
         ERROR("Failed to allocate PD");
         return -1;
     }
+
+    comp_channel = ibv_create_comp_channel(ib_ctx);
+    if (!comp_channel) {
+        ERROR("Failed to create completion channel");
+        return -1;
+    }
     return 0;
 }
 
+void cq_handler(client_t* client) {
+    struct ibv_cq *ev_cq;
+    void *ev_ctx;
+    while (true) {
+        ERROR("START POLLING");
+        int ret = ibv_get_cq_event(comp_channel, &ev_cq, &ev_ctx);
+        ERROR("get cq event");
+    }
+}
 int do_rdma_exchange(client_t *client) {
     INFO("do rdma exchange...");
 
     int ret;
+
     // RDMA setup if not already done
     if (!client->qp) {
-        client->cq = ibv_create_cq(ib_ctx, MAX_WR * 2, NULL, NULL, 0);
+        client->cq = ibv_create_cq(ib_ctx, 10, NULL, comp_channel, 0);
         if (!client->cq) {
             ERROR("Failed to create CQ");
             return SYSTEM_ERROR;
@@ -303,8 +366,8 @@ int do_rdma_exchange(client_t *client) {
         qp_init_attr.send_cq = client->cq;
         qp_init_attr.recv_cq = client->cq;
         qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
-        qp_init_attr.cap.max_send_wr = MAX_WR;
-        qp_init_attr.cap.max_recv_wr = MAX_WR;
+        qp_init_attr.cap.max_send_wr = 10;
+        qp_init_attr.cap.max_recv_wr = 10;
         qp_init_attr.cap.max_send_sge = 1;
         qp_init_attr.cap.max_recv_sge = 1;
 
@@ -356,7 +419,28 @@ int do_rdma_exchange(client_t *client) {
         client->local_info.psn = lrand48() & 0xffffff;
         client->local_info.gid = gid;
 
-        INFO("gid index: {}", client->gidx);
+        if(ibv_req_notify_cq(client->cq, 0)) {
+            ERROR("Failed to request notify for CQ");
+            return -1;
+        }
+
+        int fd = comp_channel->fd;
+        if(fd < 0) {
+            ERROR("Failed to get fd from comp_channel");
+            return -1;
+        }
+
+        uv_poll_init(loop, &client->poll_handle, fd);
+        uv_poll_start(&client->poll_handle, UV_READABLE|UV_WRITABLE, [](uv_poll_t* handle, int status, int events) {
+            client_t* client = static_cast<client_t*>(handle->data);
+            client->cq_poll_handle(handle, status, events);
+        });
+        client->poll_handle.data = client;
+
+        //create a new thread to poll the completion queue
+        //ERROR("start cq handler");
+        //f = std::async(std::launch::async, cq_handler, client);
+
         print_rdma_conn_info(&client->local_info, false);
     }
 

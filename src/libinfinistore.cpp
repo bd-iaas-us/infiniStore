@@ -306,7 +306,7 @@ int perform_rdma_write(connection_t *conn, char * src_buf, size_t src_size,
     sge.length = src_size;
     sge.lkey = mr->get_mr()->lkey;
 
-    struct ibv_send_wr wr = {};
+    struct ibv_send_wr wr = {0};
 
     if (conn->limited_bar1) {
         //we have to pass mr to cq_handler to deregister it
@@ -316,7 +316,8 @@ int perform_rdma_write(connection_t *conn, char * src_buf, size_t src_size,
         //maybe we will use request ctx in the future
         wr.wr_id = (uintptr_t)conn;
     }
-    wr.opcode = IBV_WR_RDMA_WRITE;
+    wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+    wr.imm_data = htonl(100);
     wr.sg_list = &sge;
     wr.num_sge = 1;
     wr.send_flags = IBV_SEND_SIGNALED;
@@ -338,8 +339,10 @@ void cq_handler(connection_t *conn) {
     while (!conn->stop) {
         struct ibv_cq *ev_cq;
         void *ev_ctx;
+        INFO("START POLLING");
         int ret = ibv_get_cq_event(conn->comp_channel, &ev_cq, &ev_ctx);
         if (ret  == 0) {
+            INFO("get cq event");
             ibv_ack_cq_events(ev_cq, 1);
             if (ibv_req_notify_cq(ev_cq, 0)) {
                 ERROR("Failed to request CQ notification");
@@ -356,6 +359,7 @@ void cq_handler(connection_t *conn) {
                     ERROR("Failed status: {}", ibv_wc_status_str(wc.status));
                     return;
                 }
+                INFO("opcode: {}", wc.opcode);
                 if (wc.opcode == IBV_WC_RDMA_READ || wc.opcode == IBV_WC_RDMA_WRITE) {
                     conn->rdma_inflight_count --;
                     if (conn->limited_bar1) {
