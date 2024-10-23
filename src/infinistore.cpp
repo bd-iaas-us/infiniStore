@@ -3,26 +3,27 @@
 #include <assert.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <execinfo.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/param.h>
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
-
-#include <execinfo.h>
-#include <sys/param.h>
 #include <uv.h>
+
 #include <chrono>
 #include <iostream>
 #include <string>
 #include <unordered_map>
+
+#include "config.h"
 #include "ibv_helper.h"
 #include "log.h"
 #include "mempool.h"
 #include "protocol.h"
 #include "utils.h"
-#include "config.h"
 
 #define BUFFER_SIZE (64 << 10)
 
@@ -52,8 +53,8 @@ typedef enum {
 } read_state_t;
 
 struct Client {
-    uv_tcp_t *handle = NULL;      // uv_stream_t
-    read_state_t state;     // state of the client, for parsing the request
+    uv_tcp_t *handle = NULL;    // uv_stream_t
+    read_state_t state;         // state of the client, for parsing the request
     size_t bytes_read = 0;      // bytes read so far, for parsing the request
     size_t expected_bytes = 0;  // expected size of the body
     header_t header;
@@ -177,8 +178,7 @@ int do_read_cache(client_t *client) {
     assert(header != NULL);
     // TODO: check device_id
 
-    CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, meta->ipc_handle,
-                                    cudaIpcMemLazyEnablePeerAccess));
+    CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, meta->ipc_handle, cudaIpcMemLazyEnablePeerAccess));
 
     for (auto &block : meta->blocks) {
         if (kv_map.count(block.key) == 0) {
@@ -194,9 +194,8 @@ int do_read_cache(client_t *client) {
             return KEY_NOT_FOUND;
         }
         // push the host cpu data to local device
-        CHECK_CUDA(cudaMemcpyAsync((char *)d_ptr + block.offset, h_src,
-                                   meta->block_size, cudaMemcpyHostToDevice,
-                                   client->cuda_stream));
+        CHECK_CUDA(cudaMemcpyAsync((char *)d_ptr + block.offset, h_src, meta->block_size,
+                                   cudaMemcpyHostToDevice, client->cuda_stream));
     }
     client->remain++;
     wqueue_data_t *wqueue_data = new wqueue_data_t();
@@ -204,8 +203,7 @@ int do_read_cache(client_t *client) {
     wqueue_data->d_ptr = d_ptr;
     uv_work_t *req = new uv_work_t();
     req->data = (void *)wqueue_data;
-    uv_queue_work(loop, req, wait_for_ipc_close_completion,
-                  after_ipc_close_completion);
+    uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);
 
     return TASK_ACCEPTED;
 }
@@ -215,8 +213,7 @@ int do_write_cache(client_t *client) {
     assert(meta != NULL);
     // allocate host memory
     void *d_ptr;
-    CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, meta->ipc_handle,
-                                    cudaIpcMemLazyEnablePeerAccess));
+    CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, meta->ipc_handle, cudaIpcMemLazyEnablePeerAccess));
 
     for (auto &block : meta->blocks) {
         // pull data from local device to CPU host
@@ -230,11 +227,9 @@ int do_write_cache(client_t *client) {
         }
         // how to deal with memory overflow?
         // pull data from local device to CPU host
-        CHECK_CUDA(cudaMemcpyAsync(h_dst, (char *)d_ptr + block.offset,
-                                   meta->block_size, cudaMemcpyDeviceToHost,
-                                   client->cuda_stream));
-        kv_map[block.key] = {
-            .ptr = h_dst, .size = meta->block_size, .pool_idx = pool_idx};
+        CHECK_CUDA(cudaMemcpyAsync(h_dst, (char *)d_ptr + block.offset, meta->block_size,
+                                   cudaMemcpyDeviceToHost, client->cuda_stream));
+        kv_map[block.key] = {.ptr = h_dst, .size = meta->block_size, .pool_idx = pool_idx};
     }
     client->remain++;
     wqueue_data_t *wqueue_data = new wqueue_data_t();
@@ -242,15 +237,14 @@ int do_write_cache(client_t *client) {
     wqueue_data->d_ptr = d_ptr;
     uv_work_t *req = new uv_work_t();
     req->data = (void *)wqueue_data;
-    uv_queue_work(loop, req, wait_for_ipc_close_completion,
-                  after_ipc_close_completion);
+    uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);
 
     return TASK_ACCEPTED;
 }
 
 int init_rdma_context(const char *dev_name) {
     struct ibv_device **dev_list;
-    struct ibv_device  *ib_dev;
+    struct ibv_device *ib_dev;
     int num_devices;
     dev_list = ibv_get_device_list(&num_devices);
     if (!dev_list) {
@@ -259,7 +253,7 @@ int init_rdma_context(const char *dev_name) {
     }
 
     for (int i = 0; i < num_devices; ++i) {
-        char *dev_name_from_list = (char*)ibv_get_device_name(dev_list[i]);
+        char *dev_name_from_list = (char *)ibv_get_device_name(dev_list[i]);
         if (strcmp(dev_name_from_list, dev_name) == 0) {
             INFO("found device {}", dev_name_from_list);
             ib_dev = dev_list[i];
@@ -269,14 +263,16 @@ int init_rdma_context(const char *dev_name) {
     }
 
     if (!ib_ctx) {
-        WARN("Can't find or failed to open the specified device, try to open the default device {}", (char*)ibv_get_device_name(dev_list[0]));
+        WARN(
+            "Can't find or failed to open the specified device, try to open "
+            "the default device {}",
+            (char *)ibv_get_device_name(dev_list[0]));
         ib_ctx = ibv_open_device(dev_list[0]);
         if (!ib_ctx) {
             ERROR("Failed to open the default device");
             return -1;
         }
     }
-
 
     pd = ibv_alloc_pd(ib_ctx);
     if (!pd) {
@@ -318,11 +314,10 @@ int do_rdma_exchange(client_t *client) {
         attr.qp_state = IBV_QPS_INIT;
         attr.port_num = 1;
         attr.pkey_index = 0;
-        attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE |
-                               IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE;
+        attr.qp_access_flags =
+            IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE;
 
-        int flags = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
-                    IBV_QP_ACCESS_FLAGS;
+        int flags = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
 
         ret = ibv_modify_qp(client->qp, &attr, flags);
         if (ret) {
@@ -361,8 +356,7 @@ int do_rdma_exchange(client_t *client) {
     }
 
     // Send server's RDMA connection info to client
-    uv_buf_t wbuf =
-        uv_buf_init((char *)&client->local_info, sizeof(client->local_info));
+    uv_buf_t wbuf = uv_buf_init((char *)&client->local_info, sizeof(client->local_info));
 
     uv_write_t *write_req = (uv_write_t *)malloc(sizeof(uv_write_t));
     write_req->data = client;
@@ -387,9 +381,8 @@ int do_rdma_exchange(client_t *client) {
     attr.ah_attr.grh.sgid_index = client->gidx;
     attr.ah_attr.grh.hop_limit = 1;
 
-    int flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN |
-                IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC |
-                IBV_QP_MIN_RNR_TIMER;
+    int flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
+                IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
 
     ret = ibv_modify_qp(client->qp, &attr, flags);
     if (ret) {
@@ -406,8 +399,8 @@ int do_rdma_exchange(client_t *client) {
     attr.sq_psn = client->local_info.psn;
     attr.max_rd_atomic = 1;
 
-    flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
-            IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
+    flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN |
+            IBV_QP_MAX_QP_RD_ATOMIC;
 
     ret = ibv_modify_qp(client->qp, &attr, flags);
     if (ret) {
@@ -455,11 +448,11 @@ int do_rdma_read(client_t *client) {
             goto RETURN;
         }
         PTR ptr = kv_map[key];
-        DEBUG("rkey: {}, local_addr: {}, size : {}", mm->get_rkey(ptr.pool_idx),
-             (uintptr_t)ptr.ptr, ptr.size);
-        print_vector<float>((float*)ptr.ptr, 8);
-        resp.blocks.push_back({.rkey = mm->get_rkey(ptr.pool_idx),
-                               .remote_addr = (uintptr_t)ptr.ptr});
+        DEBUG("rkey: {}, local_addr: {}, size : {}", mm->get_rkey(ptr.pool_idx), (uintptr_t)ptr.ptr,
+              ptr.size);
+        print_vector<float>((float *)ptr.ptr, 8);
+        resp.blocks.push_back(
+            {.rkey = mm->get_rkey(ptr.pool_idx), .remote_addr = (uintptr_t)ptr.ptr});
     }
 
     // send the response
@@ -470,29 +463,25 @@ RETURN:
         ERROR("Failed to serialize response");
         return SYSTEM_ERROR;
     }
-    client->send_buffer =
-        (char *)realloc(client->send_buffer, out.size() + RETURN_CODE_SIZE);
+    client->send_buffer = (char *)realloc(client->send_buffer, out.size() + RETURN_CODE_SIZE);
 
     int size = out.size();
     memcpy(client->send_buffer, &size, RETURN_CODE_SIZE);
     memcpy(client->send_buffer + RETURN_CODE_SIZE, out.c_str(), out.size());
-    uv_buf_t wbuf =
-        uv_buf_init(client->send_buffer, out.size() + RETURN_CODE_SIZE);
+    uv_buf_t wbuf = uv_buf_init(client->send_buffer, out.size() + RETURN_CODE_SIZE);
     write_req->data = client;
     uv_write(write_req, (uv_stream_t *)client->handle, &wbuf, 1, on_write);
 
     INFO("send response: size:{}", size);
     reset_client_read_state(client);
-    INFO("do rdma read runtime: {} ms",
-         std::chrono::duration<double, std::milli>(
-             std::chrono::high_resolution_clock::now() - start)
-             .count());
+    INFO("do rdma read runtime: {} ms", std::chrono::duration<double, std::milli>(
+                                            std::chrono::high_resolution_clock::now() - start)
+                                            .count());
     return 0;
 }
 
 int do_rdma_write(client_t *client) {
-    INFO("do rdma write keys: {}, remote_block_size: {}",
-         client->remote_meta_req.keys.size(),
+    INFO("do rdma write keys: {}, remote_block_size: {}", client->remote_meta_req.keys.size(),
          client->remote_meta_req.block_size);
     remote_meta_response resp;
     uv_write_t *write_req = (uv_write_t *)malloc(sizeof(uv_write_t));
@@ -510,18 +499,16 @@ int do_rdma_write(client_t *client) {
             goto RETURN;
         }
         // save to the map
-        kv_map[key] = {.ptr = h_dst,
-                       .size = client->remote_meta_req.block_size,
-                       .pool_idx = pool_idx};
-        DEBUG("rkey: {}, local_addr: {}, size : {}", mm->get_rkey(pool_idx),
-             (uintptr_t)h_dst, client->remote_meta_req.block_size);
+        kv_map[key] = {
+            .ptr = h_dst, .size = client->remote_meta_req.block_size, .pool_idx = pool_idx};
+        DEBUG("rkey: {}, local_addr: {}, size : {}", mm->get_rkey(pool_idx), (uintptr_t)h_dst,
+              client->remote_meta_req.block_size);
 
-        //set first element to 12345
+        // set first element to 12345
         float *h_dst_float = (float *)h_dst;
         h_dst_float[0] = 12345;
 
-        resp.blocks.push_back(
-            {.rkey = mm->get_rkey(pool_idx), .remote_addr = (uintptr_t)h_dst});
+        resp.blocks.push_back({.rkey = mm->get_rkey(pool_idx), .remote_addr = (uintptr_t)h_dst});
     }
 
 RETURN:
@@ -531,14 +518,12 @@ RETURN:
         ERROR("Failed to serialize response");
         return SYSTEM_ERROR;
     }
-    client->send_buffer =
-        (char *)realloc(client->send_buffer, out.size() + RETURN_CODE_SIZE);
+    client->send_buffer = (char *)realloc(client->send_buffer, out.size() + RETURN_CODE_SIZE);
 
     int size = out.size();
     memcpy(client->send_buffer, &size, RETURN_CODE_SIZE);
     memcpy(client->send_buffer + RETURN_CODE_SIZE, out.c_str(), out.size());
-    uv_buf_t wbuf =
-        uv_buf_init(client->send_buffer, out.size() + RETURN_CODE_SIZE);
+    uv_buf_t wbuf = uv_buf_init(client->send_buffer, out.size() + RETURN_CODE_SIZE);
     write_req->data = client;
     uv_write(write_req, (uv_stream_t *)client->handle, &wbuf, 1, on_write);
 
@@ -559,27 +544,33 @@ int handle_request(client_t *client) {
         if (return_code == 0) {
             return 0;
         }
-    } else if (client->header.op == OP_RDMA_READ) {
+    }
+    else if (client->header.op == OP_RDMA_READ) {
         return_code = do_rdma_read(client);
         if (return_code == 0) {
             return 0;
         }
-    } else if (client->header.op == OP_RDMA_EXCHANGE) {
+    }
+    else if (client->header.op == OP_RDMA_EXCHANGE) {
         return_code = do_rdma_exchange(client);
         if (return_code == 0) {
             return 0;
         }
-    } else if (client->header.op == OP_SYNC) {
+    }
+    else if (client->header.op == OP_SYNC) {
         return_code = do_sync_stream(client);
         // do_sync_stream will handle return code by itself
         if (return_code == 0) {
             return 0;
         }
-    } else if (client->header.op == OP_W) {
+    }
+    else if (client->header.op == OP_W) {
         return_code = do_write_cache(client);
-    } else if (client->header.op == OP_R) {
+    }
+    else if (client->header.op == OP_R) {
         return_code = do_read_cache(client);
-    } else {
+    }
+    else {
         return_code = INVALID_REQ;
     }
 
@@ -601,7 +592,8 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
     ssize_t offset = 0;
 
     if (nread < 0) {
-        if (nread != UV_EOF) ERROR("Read error {}", uv_err_name(nread));
+        if (nread != UV_EOF)
+            ERROR("Read error {}", uv_err_name(nread));
         uv_close((uv_handle_t *)stream, on_close);
         goto clean_up;
     }
@@ -609,19 +601,15 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
     while (offset < nread) {
         switch (client->state) {
             case READ_HEADER: {
-                size_t to_copy =
-                    MIN(nread - offset, FIXED_HEADER_SIZE - client->bytes_read);
-                memcpy(((char *)&client->header) + client->bytes_read,
-                       buf->base + offset, to_copy);
+                size_t to_copy = MIN(nread - offset, FIXED_HEADER_SIZE - client->bytes_read);
+                memcpy(((char *)&client->header) + client->bytes_read, buf->base + offset, to_copy);
                 client->bytes_read += to_copy;
                 offset += to_copy;
                 if (client->bytes_read == FIXED_HEADER_SIZE) {
                     print_header(&client->header);
-                    if (client->header.op == OP_R ||
-                        client->header.op == OP_W ||
+                    if (client->header.op == OP_R || client->header.op == OP_W ||
                         client->header.op == OP_RDMA_EXCHANGE ||
-                        client->header.op == OP_RDMA_WRITE ||
-                        client->header.op == OP_RDMA_READ) {
+                        client->header.op == OP_RDMA_WRITE || client->header.op == OP_RDMA_READ) {
                         int ret = veryfy_header(&client->header);
                         if (ret != 0) {
                             ERROR("Invalid header");
@@ -632,10 +620,11 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                         // prepare for reading body
                         client->expected_bytes = client->header.body_size;
                         client->bytes_read = 0;
-                        client->recv_buffer = (char *)realloc(
-                            client->recv_buffer, client->expected_bytes);
+                        client->recv_buffer =
+                            (char *)realloc(client->recv_buffer, client->expected_bytes);
                         client->state = READ_BODY;
-                    } else if (client->header.op == OP_SYNC) {
+                    }
+                    else if (client->header.op == OP_SYNC) {
                         handle_request(client);
                     }
                 }
@@ -645,13 +634,11 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
             case READ_BODY: {
                 assert(client->recv_buffer != NULL);
 
-                DEBUG("reading body, bytes_read: {}, expected_bytes: {}",
-                      client->bytes_read, client->expected_bytes);
-                size_t to_copy = MIN(nread - offset, client->expected_bytes -
-                                                         client->bytes_read);
+                DEBUG("reading body, bytes_read: {}, expected_bytes: {}", client->bytes_read,
+                      client->expected_bytes);
+                size_t to_copy = MIN(nread - offset, client->expected_bytes - client->bytes_read);
 
-                memcpy(client->recv_buffer + client->bytes_read,
-                       buf->base + offset, to_copy);
+                memcpy(client->recv_buffer + client->bytes_read, buf->base + offset, to_copy);
                 client->bytes_read += to_copy;
                 offset += to_copy;
                 if (client->bytes_read == client->expected_bytes) {
@@ -659,8 +646,7 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                     switch (client->header.op) {
                         case OP_R:
                         case OP_W:
-                            if (!deserialize(client->recv_buffer,
-                                             client->expected_bytes,
+                            if (!deserialize(client->recv_buffer, client->expected_bytes,
                                              client->local_meta)) {
                                 printf("failed to deserialize local meta\n");
                                 uv_close((uv_handle_t *)stream, on_close);
@@ -670,15 +656,14 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                             handle_request(client);
                             break;
                         case OP_RDMA_EXCHANGE:
-                            memcpy((void *)(&client->remote_info),
-                                   client->recv_buffer, client->expected_bytes);
+                            memcpy((void *)(&client->remote_info), client->recv_buffer,
+                                   client->expected_bytes);
                             print_rdma_conn_info(&client->remote_info, true);
                             handle_request(client);
                             break;
                         case OP_RDMA_WRITE:
                         case OP_RDMA_READ:
-                            if (!deserialize(client->recv_buffer,
-                                             client->expected_bytes,
+                            if (!deserialize(client->recv_buffer, client->expected_bytes,
                                              client->remote_meta_req)) {
                                 printf("failed to deserialize remote meta\n");
                                 uv_close((uv_handle_t *)stream, on_close);
@@ -716,7 +701,8 @@ void on_new_connection(uv_stream_t *server, int status) {
         client->expected_bytes = FIXED_HEADER_SIZE;
         client->recv_buffer = NULL;
         uv_read_start((uv_stream_t *)client_handle, alloc_buffer, on_read);
-    } else {
+    }
+    else {
         uv_close((uv_handle_t *)client_handle, NULL);
     }
 }
@@ -740,7 +726,8 @@ void signal_handler(int signum) {
             ERROR("{}", strings[i]);
         }
         exit(1);
-    } else {
+    }
+    else {
         INFO("Caught signal {}", signum);
         // TODO: gracefully shutdown
         if (loop) {
@@ -771,7 +758,7 @@ int register_server(unsigned long loop_ptr, server_config_t config) {
     if (init_rdma_context(config.dev_name.c_str()) < 0) {
         return -1;
     }
-    mm = new MM(config.prealloc_size<<30, 32 << 10, pd);
+    mm = new MM(config.prealloc_size << 30, 32 << 10, pd);
 
     INFO("register server done");
 

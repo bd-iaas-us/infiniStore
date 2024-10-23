@@ -33,30 +33,26 @@
 #ifndef IBV_HELPER_H
 #define IBV_HELPER_H
 
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <sys/types.h>
 #include <dirent.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <sys/param.h>
-#include <stdlib.h>
-#include <stdint.h>
+#include <fcntl.h>
 #include <infiniband/verbs.h>
 #include <netinet/in.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/param.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
-
-int ibv_read_sysfs_file(const char *dir, const char *file,
-                        char *buf, size_t size);
+int ibv_read_sysfs_file(const char *dir, const char *file, char *buf, size_t size);
 
 /* GID types as appear in sysfs, no change is expected as of ABI
  * compatibility.
  */
-int ibv_query_gid_type(struct ibv_context *context, uint8_t port_num,
-                unsigned int index, enum ibv_gid_type *type);
-int ibv_find_sgid_type(struct ibv_context *context, uint8_t port_num,
-		enum ibv_gid_type gid_type, int gid_family);
-
+int ibv_query_gid_type(struct ibv_context *context, uint8_t port_num, unsigned int index,
+                       enum ibv_gid_type *type);
+int ibv_find_sgid_type(struct ibv_context *context, uint8_t port_num, enum ibv_gid_type gid_type,
+                       int gid_family);
 
 #endif /* IBV_HELPER_H */

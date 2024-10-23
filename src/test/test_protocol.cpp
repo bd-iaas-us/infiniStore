@@ -1,20 +1,18 @@
 #include <gtest/gtest.h>
-#include "../protocol.h"
+
 #include <cstring>
 
+#include "../protocol.h"
+
 class SerializationTest : public ::testing::Test {
-protected:
+   protected:
     void SetUp() override {
         memset(&meta.ipc_handle, 0, sizeof(cudaIpcMemHandle_t));
         meta.block_size = 2;
-        meta.blocks = {
-            {"block1_key", 12345},
-            {"block2_key", 67890}
-        };
+        meta.blocks = {{"block1_key", 12345}, {"block2_key", 67890}};
         ibv_gid gid;
         gid.global.subnet_prefix = 0x123456789abcdef0;
         gid.global.interface_id = 0x0fedcba987654321;
-
     }
 
     local_meta_t meta;
@@ -25,7 +23,8 @@ TEST_F(SerializationTest, SerializeAndDeserialize) {
     ASSERT_TRUE(serialize(meta, serialized_data)) << "Failed to serialize";
 
     local_meta_t deserialized_meta;
-    ASSERT_TRUE(deserialize(serialized_data.data(), serialized_data.size(), deserialized_meta)) << "Failed to deserialize";
+    ASSERT_TRUE(deserialize(serialized_data.data(), serialized_data.size(), deserialized_meta))
+        << "Failed to deserialize";
 
     EXPECT_EQ(deserialized_meta.block_size, meta.block_size);
     EXPECT_EQ(deserialized_meta.blocks.size(), meta.blocks.size());

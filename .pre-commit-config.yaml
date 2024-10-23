@@ -23,5 +23,5 @@ repos:
     rev: v14.0.0
     hooks:
       - id: clang-format
-        files: \.(cpp|hpp|cc|c|h)$
-        args: [--style=file]
+        files: ^src/.*\.(cpp|hpp|cc|c|h)$
+        args: [--style=file, -i]

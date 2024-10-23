@@ -1,5 +1,6 @@
 
 #include "utils.h"
+
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
@@ -7,16 +8,17 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+
 #include "log.h"
 
 int send_exact(int socket, const void* buffer, size_t length) {
     size_t total_sent = 0;
     while (total_sent < length) {
-        ssize_t bytes_sent = send(socket, (const char*)buffer + total_sent,
-                                  length - total_sent, 0);
+        ssize_t bytes_sent = send(socket, (const char*)buffer + total_sent, length - total_sent, 0);
         if (bytes_sent < 0) {
             return errno;  // Return the error code if send fails
         }
@@ -28,12 +30,13 @@ int send_exact(int socket, const void* buffer, size_t length) {
 int recv_exact(int socket, void* buffer, size_t length) {
     size_t total_received = 0;
     while (total_received < length) {
-        ssize_t bytes_received = recv(socket, (char*)buffer + total_received,
-                                      length - total_received, 0);
+        ssize_t bytes_received =
+            recv(socket, (char*)buffer + total_received, length - total_received, 0);
         // printf("bytes_received: %d\n", bytes_received);
         if (bytes_received < 0) {
             return errno;  // Return the error code if recv fails
-        } else if (bytes_received == 0) {
+        }
+        else if (bytes_received == 0) {
             return ECONNRESET;  // Connection reset by peer
         }
         total_received += bytes_received;
@@ -52,7 +55,8 @@ void print_rdma_conn_info(rdma_conn_info_t* info, bool is_remote) {
     if (is_remote) {
         DEBUG("remote rdma_conn_info: psn: {}, qpn: {}, gid: {}", (uint32_t)info->psn,
               (uint32_t)info->qpn, gid_str);
-    } else {
+    }
+    else {
         DEBUG("local rdma_conn_info: psn: {}, qpn: {}, gid: {}", (uint32_t)info->psn,
               (uint32_t)info->qpn, gid_str);
     }
@@ -67,8 +71,7 @@ void print_ipc_handle(cudaIpcMemHandle_t ipc_handle) {
     DEBUG("ipc_handle content: {}", oss.str().c_str());
 }
 
-void compare_ipc_handle(cudaIpcMemHandle_t ipc_handle1,
-                        cudaIpcMemHandle_t ipc_handle2) {
+void compare_ipc_handle(cudaIpcMemHandle_t ipc_handle1, cudaIpcMemHandle_t ipc_handle2) {
     for (int i = 0; i < sizeof(cudaIpcMemHandle_t); i++) {
         unsigned char d1 = ((unsigned char*)&ipc_handle1)[i];
         unsigned char d2 = ((unsigned char*)&ipc_handle2)[i];

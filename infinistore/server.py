@@ -1,5 +1,4 @@
 from .lib import register_server, check_supported, ServerConfig, Logger
-import sys
 from ._infinistore import get_kvmap_len
 
 import asyncio

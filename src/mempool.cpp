@@ -1,29 +1,31 @@
 #include "mempool.h"
 
+#include <assert.h>
+#include <sys/mman.h>
+
+#include <cstring>
 #include <iostream>
 #include <stdexcept>
-#include <cstring>
-#include "utils.h"
-#include "log.h"
-#include <sys/mman.h>
-#include <assert.h>
 
+#include "log.h"
+#include "utils.h"
 
 MemoryPool::MemoryPool(size_t pool_size, size_t block_size, struct ibv_pd* pd)
     : pool_(nullptr), pool_size_(pool_size), block_size_(block_size), pd_(pd), mr_(nullptr) {
-
     // 计算总的内存块数量
     total_blocks_ = pool_size_ / block_size_;
     assert(pool_size % block_size == 0);
 
-    INFO("Memory pool size: {} bytes, block size: {} bytes, total blocks: {}, it may take a while", pool_size_, block_size_, total_blocks_);
+    INFO(
+        "Memory pool size: {} bytes, block size: {} bytes, total blocks: {}, "
+        "it may take a while",
+        pool_size_, block_size_, total_blocks_);
     CHECK_CUDA(cudaMallocHost(&pool_, pool_size_));
     INFO("Memory pool allocated at {}", pool_);
 
-
-
     // 注册内存区域
-    mr_ = ibv_reg_mr(pd_, pool_, pool_size_, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+    mr_ = ibv_reg_mr(pd_, pool_, pool_size_,
+                     IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
     if (!mr_) {
         ERROR("Failed to register MR");
         exit(EXIT_FAILURE);
@@ -41,10 +43,9 @@ MemoryPool::~MemoryPool() {
 }
 
 void* MemoryPool::allocate(size_t size) {
-
     size_t required_blocks = size / block_size_;
     if (size % block_size_ != 0) {
-        required_blocks += 1; // round up
+        required_blocks += 1;  // round up
     }
 
     if (required_blocks > total_blocks_) {
@@ -60,7 +61,6 @@ void* MemoryPool::allocate(size_t size) {
         }
 
         for (size_t bit_index = 0; bit_index < bit_per_word; ++bit_index) {
-
             size_t start_block = word_index * bit_per_word + bit_index;
 
             if (start_block + required_blocks > total_blocks_) {
@@ -73,7 +73,7 @@ void* MemoryPool::allocate(size_t size) {
                 size_t bit = (start_block + i) % bit_per_word;
                 if (bitmap_[idx] & (1ULL << bit)) {
                     found = false;
-                    bit_index += i; // skip all the blocks we already checked
+                    bit_index += i;  // skip all the blocks we already checked
                     break;
                 }
             }
@@ -93,10 +93,9 @@ void* MemoryPool::allocate(size_t size) {
 }
 
 void MemoryPool::deallocate(void* ptr, size_t size) {
-
     size_t blocks_to_free = size / block_size_;
     if (size % block_size_ != 0) {
-        blocks_to_free += 1; // round up
+        blocks_to_free += 1;  // round up
     }
 
     uintptr_t offset = static_cast<char*>(ptr) - static_cast<char*>(pool_);
@@ -121,14 +120,15 @@ void MemoryPool::deallocate(void* ptr, size_t size) {
         size_t bit = i % 64;
         if (bitmap_[idx] & (1ULL << bit)) {
             bitmap_[idx] &= ~(1ULL << bit);
-        } else {
+        }
+        else {
             ERROR("Double free detected at block index {}", i);
         }
     }
 }
 
-void * MM::allocate(size_t size, int *pool_idx) {
-    //first fit. TODO: binaray search
+void* MM::allocate(size_t size, int* pool_idx) {
+    // first fit. TODO: binaray search
     for (int i = 0; i < mempools_.size(); ++i) {
         void* ptr = mempools_[i]->allocate(size);
         if (ptr) {
