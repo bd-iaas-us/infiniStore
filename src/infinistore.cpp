@@ -32,7 +32,6 @@ struct PTR {
     void *ptr;
     size_t size;
     int pool_idx;
-    bool complete;
     int reader_count;
     int writer_count;
 };
