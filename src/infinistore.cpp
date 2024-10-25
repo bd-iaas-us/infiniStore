@@ -61,6 +61,7 @@ struct Client {
 
     char *recv_buffer = NULL;
     local_meta_t local_meta;
+    delete_meta_request_t delete_meta_req;
     remote_meta_request remote_meta_req;
 
     // TODO: remove send_buffer
@@ -240,6 +241,54 @@ int do_write_cache(client_t *client) {
     uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);
 
     return TASK_ACCEPTED;
+}
+
+int do_delete(client_t *client) {
+    const delete_meta_request_t *meta = &client->delete_meta_req;
+    assert(meta != NULL);
+
+    delete_meta_response_t resp;
+    std::string out;
+    int error_code = TASK_ACCEPTED;
+    for (auto &key : meta->keys) {
+        DEBUG("try to delete key: {}", key);
+        if (kv_map.count(key) == 0) {
+            resp.blocks.push_back({
+                .key = key,
+                .msg = "not exist"
+            });
+            continue;
+        }
+        // need to add the logic that key can't be deleted
+        if(false) {
+            resp.blocks.push_back({
+                .key = key,
+                .msg = "can't delete"
+            });
+            continue;            
+        }
+        mm->deallocate(kv_map[key].ptr, kv_map[key].size, kv_map[key].pool_idx);
+        kv_map.erase(key);
+    }
+
+    resp.error_code = error_code;
+    if (!serialize(resp, out)) {
+        ERROR("Failed to serialize response");
+        return SYSTEM_ERROR;
+    }
+    
+    uv_write_t *write_req = (uv_write_t *)malloc(sizeof(uv_write_t));
+    int size = out.size();
+    client->send_buffer = (char *)realloc(client->send_buffer, size + RETURN_CODE_SIZE);
+
+    memcpy(client->send_buffer, &size, RETURN_CODE_SIZE);
+    memcpy(client->send_buffer + RETURN_CODE_SIZE, out.c_str(), size);
+    uv_buf_t wbuf = uv_buf_init(client->send_buffer, size + RETURN_CODE_SIZE);
+    write_req->data = client;
+    uv_write(write_req, (uv_stream_t *)client->handle, &wbuf, 1, on_write);
+
+    reset_client_read_state(client);
+    return 0;
 }
 
 int init_rdma_context(const char *dev_name) {
@@ -570,6 +619,12 @@ int handle_request(client_t *client) {
     else if (client->header.op == OP_R) {
         return_code = do_read_cache(client);
     }
+    else if (client->header.op == OP_P) {
+        return_code = do_delete(client);
+        if (return_code == 0) {
+            return 0;
+        }        
+    }    
     else {
         return_code = INVALID_REQ;
     }
@@ -607,7 +662,7 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                 offset += to_copy;
                 if (client->bytes_read == FIXED_HEADER_SIZE) {
                     print_header(&client->header);
-                    if (client->header.op == OP_R || client->header.op == OP_W ||
+                    if (client->header.op == OP_R || client->header.op == OP_W || client->header.op == OP_P ||
                         client->header.op == OP_RDMA_EXCHANGE ||
                         client->header.op == OP_RDMA_WRITE || client->header.op == OP_RDMA_READ) {
                         int ret = veryfy_header(&client->header);
@@ -653,6 +708,15 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                                 goto clean_up;
                             }
                             print_ipc_handle(client->local_meta.ipc_handle);
+                            handle_request(client);
+                            break;
+                        case OP_P:
+                            if (!deserialize(client->recv_buffer, client->expected_bytes,
+                                             client->delete_meta_req)) {
+                                printf("failed to deserialize delete meta\n");
+                                uv_close((uv_handle_t *)stream, on_close);
+                                goto clean_up;
+                            }        
                             handle_request(client);
                             break;
                         case OP_RDMA_EXCHANGE:

@@ -25,6 +25,7 @@ Error code:
 
 #define OP_R 'R'
 #define OP_W 'W'
+#define OP_P 'P'
 #define OP_SYNC 'S'
 #define OP_RDMA_EXCHANGE 'E'
 #define OP_RDMA_WRITE 'D'
@@ -94,6 +95,23 @@ typedef struct {
 
 typedef struct {
     std::vector<std::string> keys;
+    MSGPACK_DEFINE(keys)
+} delete_meta_request_t;
+
+typedef struct {
+    std::string key;
+    std::string msg;
+    MSGPACK_DEFINE(key, msg)
+} delete_block_resp_t;
+
+typedef struct {
+    std::vector<delete_block_resp_t> blocks;
+    int error_code;
+    MSGPACK_DEFINE(blocks, error_code)
+} delete_meta_response_t;
+
+typedef struct {
+    std::vector<std::string> keys;
     int block_size;
     MSGPACK_DEFINE(keys, block_size)
 } remote_meta_request;  // rdma read/write request
@@ -145,6 +163,10 @@ template bool deserialize<local_meta_t>(const char* data, size_t size, local_met
 template bool serialize<remote_meta_request>(const remote_meta_request& data, std::string& out);
 template bool deserialize<remote_meta_response>(const char* data, size_t size,
                                                 remote_meta_response& out);
+template bool serialize<delete_meta_request_t>(const delete_meta_request_t& data, std::string& out);
+template bool deserialize<delete_meta_request_t>(const char* data, size_t size, delete_meta_request_t& out);  
+template bool serialize<delete_meta_response_t>(const delete_meta_response_t& data, std::string& out);
+template bool deserialize<delete_meta_response_t>(const char* data, size_t size, delete_meta_response_t& out);                                                
 
 #define FIXED_HEADER_SIZE sizeof(header_t)
 
