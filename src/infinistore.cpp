@@ -24,16 +24,10 @@
 #include "utils.h"
 #include "config.h"
 #include <future>
+#include <deque>
 
 #define BUFFER_SIZE (64 << 10)
 
-struct PTR {
-    void *ptr;
-    size_t size;
-    int pool_idx;
-};
-
-std::unordered_map<std::string, PTR> kv_map;
 uv_loop_t *loop;
 uv_tcp_t server;
 // global ibv context
@@ -41,6 +35,23 @@ struct ibv_context *ib_ctx;
 struct ibv_pd *pd;
 struct ibv_comp_channel *comp_channel;
 MM *mm;
+
+
+class PTR: public IntrusivePtrTarget {
+public:
+    void *ptr;
+    size_t size;
+    int pool_idx;
+    bool completed = false;
+    PTR(void *ptr, size_t size, int pool_idx, bool completed = false): ptr(ptr), size(size), pool_idx(pool_idx), completed(completed) {}
+    ~PTR() {
+        if (ptr) {
+            DEBUG("deallocate ptr: {}, size: {}, pool_idx: {}", ptr, size, pool_idx);
+            mm->deallocate(ptr, size, pool_idx);
+        }
+    }
+};
+std::unordered_map<std::string, boost::intrusive_ptr<PTR>> kv_map;
 
 std::future<void> f;
 int get_kvmap_len() { return kv_map.size(); }
@@ -76,11 +87,16 @@ struct Client {
     struct ibv_cq *cq = NULL;
     struct ibv_qp *qp = NULL;
     bool rdma_connected = false;
-    int gidx;  // gid index
+    int gidx = 0;  // gid index
     //handle the completion queue of RMDA_WRITE_IMM
     uv_poll_t poll_handle;
 
-    int remain;
+    std::deque<std::vector<boost::intrusive_ptr<PTR>>> inflight_rdma_writes;
+    //TODO: cuda writes
+    //std::deque<std::vector<boost::intrusive_ptr<PTR>>> inflight_cuda_writes;
+
+    //how many cudaMemcpyAsync are still running
+    int remain = 0;
 
     Client() = default;
     Client(const Client &) = delete;
@@ -90,15 +106,13 @@ struct Client {
 
 void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
     //TODO: handle completion
-    ERROR("Poll handle called");
     if (status < 0) {
-        fprintf(stderr, "Poll error: %s\n", uv_strerror(status));
+        ERROR("Poll error: {}", uv_strerror(status));
         return;
     }
     struct ibv_cq* cq;
     void* cq_context;
 
-    // 获取 CQ 事件，并确认它已被处理
     if (ibv_get_cq_event(comp_channel, &cq, &cq_context) != 0) {
         perror("Failed to get CQ event");
         return;
@@ -114,12 +128,17 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
         if (wc.status == IBV_WC_SUCCESS) {
             if (wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
                 uint32_t imm_data = ntohl(wc.imm_data);
-                printf("Received RDMA WRITE WITH IMM, imm_data: %u\n", imm_data);
+                DEBUG("Received RDMA WRITE WITH IMM, imm_data: {}", imm_data);
+                //TODO:
+                for (auto &ptr : inflight_rdma_writes.front()) {
+                    ptr->completed = true;
+                }
+                inflight_rdma_writes.pop_front();
             } else {
-                printf("Unexpected opcode: %d\n", wc.opcode);
+                ERROR("Unexpected opcode: {}", wc.opcode);
             }
         } else {
-            fprintf(stderr, "CQ error: %s\n", ibv_wc_status_str(wc.status));
+            ERROR("CQ error: {}", ibv_wc_status_str(wc.status));
         }
     }
 }
@@ -236,7 +255,7 @@ int do_read_cache(client_t *client) {
 
         // key found
         // std::cout << "Key found: " << block.key << std::endl;
-        void *h_src = kv_map[block.key].ptr;
+        void *h_src = kv_map[block.key]->ptr;
         if (h_src == NULL) {
             return KEY_NOT_FOUND;
         }
@@ -280,8 +299,7 @@ int do_write_cache(client_t *client) {
         CHECK_CUDA(cudaMemcpyAsync(h_dst, (char *)d_ptr + block.offset,
                                    meta->block_size, cudaMemcpyDeviceToHost,
                                    client->cuda_stream));
-        kv_map[block.key] = {
-            .ptr = h_dst, .size = meta->block_size, .pool_idx = pool_idx};
+        kv_map[block.key] = boost::intrusive_ptr<PTR>(new PTR(h_dst, meta->block_size, pool_idx));
     }
     client->remain++;
     wqueue_data_t *wqueue_data = new wqueue_data_t();
@@ -339,15 +357,7 @@ int init_rdma_context(const char *dev_name) {
     return 0;
 }
 
-void cq_handler(client_t* client) {
-    struct ibv_cq *ev_cq;
-    void *ev_ctx;
-    while (true) {
-        ERROR("START POLLING");
-        int ret = ibv_get_cq_event(comp_channel, &ev_cq, &ev_ctx);
-        ERROR("get cq event");
-    }
-}
+
 int do_rdma_exchange(client_t *client) {
     INFO("do rdma exchange...");
 
@@ -431,15 +441,12 @@ int do_rdma_exchange(client_t *client) {
         }
 
         uv_poll_init(loop, &client->poll_handle, fd);
+        client->poll_handle.data = client;
+
         uv_poll_start(&client->poll_handle, UV_READABLE|UV_WRITABLE, [](uv_poll_t* handle, int status, int events) {
             client_t* client = static_cast<client_t*>(handle->data);
             client->cq_poll_handle(handle, status, events);
         });
-        client->poll_handle.data = client;
-
-        //create a new thread to poll the completion queue
-        //ERROR("start cq handler");
-        //f = std::async(std::launch::async, cq_handler, client);
 
         print_rdma_conn_info(&client->local_info, false);
     }
@@ -538,12 +545,16 @@ int do_rdma_read(client_t *client) {
             error_code = KEY_NOT_FOUND;
             goto RETURN;
         }
-        PTR ptr = kv_map[key];
-        DEBUG("rkey: {}, local_addr: {}, size : {}", mm->get_rkey(ptr.pool_idx),
-             (uintptr_t)ptr.ptr, ptr.size);
-        print_vector<float>((float*)ptr.ptr, 8);
-        resp.blocks.push_back({.rkey = mm->get_rkey(ptr.pool_idx),
-                               .remote_addr = (uintptr_t)ptr.ptr});
+        auto ptr = kv_map[key];
+        DEBUG("rkey: {}, local_addr: {}, size : {}", mm->get_rkey(ptr->pool_idx),
+             (uintptr_t)ptr->ptr, ptr->size);
+        if (!ptr->completed) {
+            // key not found
+            error_code = KEY_NOT_FOUND;
+            goto RETURN;
+        }
+        resp.blocks.push_back({.rkey = mm->get_rkey(ptr->pool_idx),
+                               .remote_addr = (uintptr_t)ptr->ptr});
     }
 
     // send the response
@@ -583,6 +594,12 @@ int do_rdma_write(client_t *client) {
     std::string out;
     int error_code = TASK_ACCEPTED;
 
+    struct ibv_recv_wr rwr = {0};
+    struct ibv_sge sge = {0};
+    struct ibv_recv_wr *bad_wr = NULL;
+
+
+    std::vector <boost::intrusive_ptr<PTR>> write_ptrs;
     for (std::string &key : client->remote_meta_req.keys) {
         void *h_dst;
         int pool_idx;
@@ -594,20 +611,32 @@ int do_rdma_write(client_t *client) {
             goto RETURN;
         }
         // save to the map
-        kv_map[key] = {.ptr = h_dst,
-                       .size = client->remote_meta_req.block_size,
-                       .pool_idx = pool_idx};
+        kv_map[key] = boost::intrusive_ptr<PTR>(new PTR(h_dst, client->remote_meta_req.block_size, pool_idx));;
+
         DEBUG("rkey: {}, local_addr: {}, size : {}", mm->get_rkey(pool_idx),
              (uintptr_t)h_dst, client->remote_meta_req.block_size);
 
-        //set first element to 12345
-        float *h_dst_float = (float *)h_dst;
-        h_dst_float[0] = 12345;
-
         resp.blocks.push_back(
             {.rkey = mm->get_rkey(pool_idx), .remote_addr = (uintptr_t)h_dst});
+
+        write_ptrs.push_back(kv_map[key]);
     }
 
+    rwr.wr_id = 0;
+    rwr.next = NULL;
+    rwr.sg_list = &sge;
+    rwr.num_sge = 1;
+    if (ibv_post_recv(client->qp, &rwr, &bad_wr)) {
+        ERROR("Failed to post receive, {}");
+        error_code = SYSTEM_ERROR;
+        goto RETURN;
+    }
+    client->inflight_rdma_writes.push_back(write_ptrs);
+    INFO("inflight_rdma_writes size: {}", client->inflight_rdma_writes.size());
+
+
+    //the last RMDA_WRITE is IBV_WR_RDMA_WRITE_WITH_IMM, so this server could
+    //know the completion of the last RDMA_WRITE
 RETURN:
     resp.error_code = error_code;
     INFO("response error code {}", error_code);

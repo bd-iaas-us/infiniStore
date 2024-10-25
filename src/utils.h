@@ -5,6 +5,8 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include "protocol.h"
+#include <boost/intrusive_ptr.hpp>
+#include <atomic>
 
 
 
@@ -35,5 +37,29 @@ void print_rdma_conn_info(rdma_conn_info_t *info, bool is_remote);
 
 template <typename T>
 void print_vector(T* ptr, size_t size);
+
+
+class IntrusivePtrTarget {
+public:
+    IntrusivePtrTarget() : ref_count(0) {}
+
+    virtual ~IntrusivePtrTarget() = default;
+
+    IntrusivePtrTarget(const IntrusivePtrTarget&) = delete;
+    IntrusivePtrTarget& operator=(const IntrusivePtrTarget&) = delete;
+
+    friend void intrusive_ptr_add_ref(IntrusivePtrTarget* p) {
+        p->ref_count.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    friend void intrusive_ptr_release(IntrusivePtrTarget* p) {
+        if (p->ref_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            delete p;
+        }
+    }
+
+private:
+    mutable std::atomic<int> ref_count;
+};
 
 #endif // UTILS_H

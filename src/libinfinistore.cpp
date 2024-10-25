@@ -297,7 +297,7 @@ int perform_rdma_read(connection_t *conn, uintptr_t src_buf, size_t src_size,
 
 
 int perform_rdma_write(connection_t *conn, char * src_buf, size_t src_size,
-                       uintptr_t dst_buf, size_t dst_size, uint32_t rkey, IBVMemoryRegion *mr) {
+                       uintptr_t dst_buf, size_t dst_size, uint32_t rkey, IBVMemoryRegion *mr, bool imm) {
 
 
     // Prepare RDMA write operation
@@ -316,8 +316,11 @@ int perform_rdma_write(connection_t *conn, char * src_buf, size_t src_size,
         //maybe we will use request ctx in the future
         wr.wr_id = (uintptr_t)conn;
     }
-    wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-    wr.imm_data = htonl(100);
+    //the last RMDA_WRITE is IBV_WR_RDMA_WRITE_WITH_IMM, so this server could know.
+    wr.opcode =  imm? IBV_WR_RDMA_WRITE_WITH_IMM:IBV_WR_RDMA_WRITE;
+    if (imm) {
+        wr.imm_data = htonl(100);
+    }
     wr.sg_list = &sge;
     wr.num_sge = 1;
     wr.send_flags = IBV_SEND_SIGNALED;
@@ -339,10 +342,9 @@ void cq_handler(connection_t *conn) {
     while (!conn->stop) {
         struct ibv_cq *ev_cq;
         void *ev_ctx;
-        INFO("START POLLING");
+        DEBUG("START POLLING cq event");
         int ret = ibv_get_cq_event(conn->comp_channel, &ev_cq, &ev_ctx);
         if (ret  == 0) {
-            INFO("get cq event");
             ibv_ack_cq_events(ev_cq, 1);
             if (ibv_req_notify_cq(ev_cq, 0)) {
                 ERROR("Failed to request CQ notification");
@@ -359,7 +361,6 @@ void cq_handler(connection_t *conn) {
                     ERROR("Failed status: {}", ibv_wc_status_str(wc.status));
                     return;
                 }
-                INFO("opcode: {}", wc.opcode);
                 if (wc.opcode == IBV_WC_RDMA_READ || wc.opcode == IBV_WC_RDMA_WRITE) {
                     conn->rdma_inflight_count --;
                     if (conn->limited_bar1) {
@@ -678,7 +679,7 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t>& blocks, int block
         }
         int ret;
         if (op == OP_RDMA_WRITE) {
-            ret = perform_rdma_write(conn, (char *)base_ptr + blocks[i].offset, block_size, response.blocks[i].remote_addr, block_size, response.blocks[i].rkey, request_mr);
+            ret = perform_rdma_write(conn, (char *)base_ptr + blocks[i].offset, block_size, response.blocks[i].remote_addr, block_size, response.blocks[i].rkey, request_mr, i == response.blocks.size() - 1);
         } else if (op == OP_RDMA_READ) {
             ret = perform_rdma_read(conn, response.blocks[i].remote_addr, block_size, (char *)base_ptr + blocks[i].offset, block_size, response.blocks[i].rkey, request_mr);
         } else {
