@@ -38,6 +38,7 @@ Error code:
 #define TASK_ACCEPTED 202
 #define INTERNAL_ERROR 500
 #define KEY_NOT_FOUND 404
+#define KEY_CONFLICT 405
 #define RETRY 408
 #define SYSTEM_ERROR 503
 
@@ -164,9 +165,12 @@ template bool serialize<remote_meta_request>(const remote_meta_request& data, st
 template bool deserialize<remote_meta_response>(const char* data, size_t size,
                                                 remote_meta_response& out);
 template bool serialize<delete_meta_request_t>(const delete_meta_request_t& data, std::string& out);
-template bool deserialize<delete_meta_request_t>(const char* data, size_t size, delete_meta_request_t& out);  
-template bool serialize<delete_meta_response_t>(const delete_meta_response_t& data, std::string& out);
-template bool deserialize<delete_meta_response_t>(const char* data, size_t size, delete_meta_response_t& out);                                                
+template bool deserialize<delete_meta_request_t>(const char* data, size_t size,
+                                                 delete_meta_request_t& out);
+template bool serialize<delete_meta_response_t>(const delete_meta_response_t& data,
+                                                std::string& out);
+template bool deserialize<delete_meta_response_t>(const char* data, size_t size,
+                                                  delete_meta_response_t& out);
 
 #define FIXED_HEADER_SIZE sizeof(header_t)
 

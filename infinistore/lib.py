@@ -272,7 +272,7 @@ class InfinityConnection:
             if ret < 0:
                 raise Exception("Failed to setup RDMA connection")
             self.rdma_connected = True
-    
+
     def delete_cache(self, keys: List[str]) -> List[Tuple[str, str]]:
         """
         Deletes the given cache tensor to the specified blocks in memory.
@@ -280,7 +280,7 @@ class InfinityConnection:
         Args:
             keys (List[str]): A list of keys that need to be deleted.
         Return:
-            ret (List[Tuple[str, str]]): A list of tuples which provide the keys that were failed to delete and the error message. 
+            ret (List[Tuple[str, str]]): A list of tuples which provide the keys that were failed to delete and the error message.
             if there is only one tuple in the list and it has "error", then the whole delete was failed.
         """
         ret = _infinistore.delete_cache(self.conn, keys)

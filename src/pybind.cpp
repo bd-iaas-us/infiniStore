@@ -33,7 +33,8 @@ int rw_rdma_wrapper(connection_t *conn, char op,
     return rw_rdma(conn, op, c_blocks, block_size, (void *)ptr, ptr_region_size);
 }
 
-std::vector<std::tuple<std::string, std::string>> delete_cache_wrapper(connection_t *conn, const std::vector<std::string> &keys) {
+std::vector<std::tuple<std::string, std::string>> delete_cache_wrapper(
+    connection_t *conn, const std::vector<std::string> &keys) {
     std::vector<delete_block_resp_t> blocks = delete_cache(conn, keys);
     std::vector<std::tuple<std::string, std::string>> p_blocks;
     for (const auto &block : blocks) {

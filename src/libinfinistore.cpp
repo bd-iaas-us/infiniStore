@@ -735,26 +735,25 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, in
     }
 
     if (return_code != FINISH && return_code != TASK_ACCEPTED) {
+        WARN("rw_local return code: {}", return_code);
         return -1;
     }
     return 0;
 }
 
-std::vector<delete_block_resp_t> delete_cache(connection_t *conn, const std::vector<std::string> &keys) {
+std::vector<delete_block_resp_t> delete_cache(connection_t *conn,
+                                              const std::vector<std::string> &keys) {
     assert(conn != NULL);
 
     delete_meta_response_t response;
-    
+
     delete_meta_request_t meta = {
         .keys = keys,
     };
     std::string serialized_data;
     if (!serialize(meta, serialized_data)) {
         ERROR("Failed to serialize delete meta");
-        response.blocks.push_back({
-            .key = "error",
-            .msg = "Failed to serialize delete meta"
-        });
+        response.blocks.push_back({.key = "error", .msg = "Failed to serialize delete meta"});
         return response.blocks;
     }
 
@@ -767,56 +766,38 @@ std::vector<delete_block_resp_t> delete_cache(connection_t *conn, const std::vec
     // Send header
     if (send_exact(conn->sock, &header, FIXED_HEADER_SIZE) < 0) {
         ERROR("Failed to send header");
-        response.blocks.push_back({
-            .key = "error",
-            .msg = "Failed to send header"
-        });        
+        response.blocks.push_back({.key = "error", .msg = "Failed to send header"});
         return response.blocks;
     }
     // Send body
     if (send_exact(conn->sock, serialized_data.data(), serialized_data.size()) < 0) {
         ERROR("Failed to send body");
-        response.blocks.push_back({
-            .key = "error",
-            .msg = "Failed to send body"
-        });          
+        response.blocks.push_back({.key = "error", .msg = "Failed to send body"});
         return response.blocks;
     }
 
     int return_size;
     if (recv(conn->sock, &return_size, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
         ERROR("Failed to receive return size");
-        response.blocks.push_back({
-            .key = "error",
-            .msg = "Failed to receive return size"
-        });          
+        response.blocks.push_back({.key = "error", .msg = "Failed to receive return size"});
         return response.blocks;
     }
     char response_data[return_size];
     if (recv(conn->sock, &response_data, return_size, MSG_WAITALL) < 0) {
         ERROR("Failed to receive response data");
-        response.blocks.push_back({
-            .key = "error",
-            .msg = "Failed to receive response data"
-        });         
+        response.blocks.push_back({.key = "error", .msg = "Failed to receive response data"});
         return response.blocks;
     }
 
     if (!deserialize(response_data, return_size, response)) {
         ERROR("deserialize failed");
-        response.blocks.push_back({
-            .key = "error",
-            .msg = "deserialize failed"
-        });          
+        response.blocks.push_back({.key = "error", .msg = "deserialize failed"});
         return response.blocks;
     }
 
     if (response.error_code != TASK_ACCEPTED) {
         ERROR("delete cache failed {}", response.error_code);
-        response.blocks.push_back({
-            .key = "error",
-            .msg = "delete cache failed"
-        });          
+        response.blocks.push_back({.key = "error", .msg = "delete cache failed"});
         return response.blocks;
     }
 

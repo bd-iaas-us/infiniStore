@@ -17,6 +17,7 @@
 #include <iostream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "config.h"
 #include "ibv_helper.h"
@@ -31,9 +32,14 @@ struct PTR {
     void *ptr;
     size_t size;
     int pool_idx;
+    bool complete;
+    int reader_count;
+    int writer_count;
 };
 
 std::unordered_map<std::string, PTR> kv_map;
+std::unordered_set<std::string> read_set;
+std::unordered_set<std::string> write_set;
 uv_loop_t *loop;
 uv_tcp_t server;
 // global ibv context
@@ -51,6 +57,11 @@ typedef enum {
     READ_HEADER,
     READ_BODY,
 } read_state_t;
+
+typedef enum {
+    LOCAL_READ,
+    LOCAL_WRITE,
+} op_t;
 
 struct Client {
     uv_tcp_t *handle = NULL;    // uv_stream_t
@@ -115,6 +126,8 @@ typedef struct Client client_t;
 typedef struct {
     client_t *client;
     void *d_ptr;
+    op_t op;
+    std::vector<std::string> keys;
 } wqueue_data_t;
 
 void reset_client_read_state(client_t *client) {
@@ -166,6 +179,25 @@ void wait_for_ipc_close_completion(uv_work_t *req) {
 void after_ipc_close_completion(uv_work_t *req, int status) {
     wqueue_data_t *wqueue_data = (wqueue_data_t *)req->data;
     wqueue_data->client->remain--;
+
+    for (auto &key : wqueue_data->keys) {
+        if (kv_map.count(key) == 0) {
+            continue;
+        }
+        if (wqueue_data->op == LOCAL_READ) {
+            kv_map[key].reader_count--;
+            if (kv_map[key].reader_count == 0) {
+                read_set.erase(key);
+            }
+        }
+        else if (wqueue_data->op == LOCAL_WRITE) {
+            kv_map[key].writer_count--;
+            if (kv_map[key].writer_count == 0) {
+                write_set.erase(key);
+            }
+        }
+    }
+
     INFO("after_ipc_close_completion done");
     delete wqueue_data;
     delete req;
@@ -180,6 +212,19 @@ int do_read_cache(client_t *client) {
     // TODO: check device_id
 
     CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, meta->ipc_handle, cudaIpcMemLazyEnablePeerAccess));
+
+    std::vector<std::string> keys;
+    bool found = false;
+    for (auto &block : meta->blocks) {
+        if (write_set.count(block.key)) {
+            found = true;
+            break;
+        }
+        keys.push_back(block.key);
+    }
+    if (found) {
+        return KEY_CONFLICT;
+    }
 
     for (auto &block : meta->blocks) {
         if (kv_map.count(block.key) == 0) {
@@ -197,11 +242,15 @@ int do_read_cache(client_t *client) {
         // push the host cpu data to local device
         CHECK_CUDA(cudaMemcpyAsync((char *)d_ptr + block.offset, h_src, meta->block_size,
                                    cudaMemcpyHostToDevice, client->cuda_stream));
+        kv_map[block.key].reader_count++;
+        read_set.insert(block.key);
     }
     client->remain++;
     wqueue_data_t *wqueue_data = new wqueue_data_t();
     wqueue_data->client = client;
     wqueue_data->d_ptr = d_ptr;
+    wqueue_data->op = LOCAL_READ;
+    wqueue_data->keys = keys;
     uv_work_t *req = new uv_work_t();
     req->data = (void *)wqueue_data;
     uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);
@@ -215,6 +264,19 @@ int do_write_cache(client_t *client) {
     // allocate host memory
     void *d_ptr;
     CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, meta->ipc_handle, cudaIpcMemLazyEnablePeerAccess));
+
+    std::vector<std::string> keys;
+    bool found = false;
+    for (auto &block : meta->blocks) {
+        if (write_set.count(block.key) || read_set.count(block.key)) {
+            found = true;
+            break;
+        }
+        keys.push_back(block.key);
+    }
+    if (found) {
+        return KEY_CONFLICT;
+    }
 
     for (auto &block : meta->blocks) {
         // pull data from local device to CPU host
@@ -231,11 +293,16 @@ int do_write_cache(client_t *client) {
         CHECK_CUDA(cudaMemcpyAsync(h_dst, (char *)d_ptr + block.offset, meta->block_size,
                                    cudaMemcpyDeviceToHost, client->cuda_stream));
         kv_map[block.key] = {.ptr = h_dst, .size = meta->block_size, .pool_idx = pool_idx};
+
+        kv_map[block.key].writer_count++;
+        write_set.insert(block.key);
     }
     client->remain++;
     wqueue_data_t *wqueue_data = new wqueue_data_t();
     wqueue_data->client = client;
     wqueue_data->d_ptr = d_ptr;
+    wqueue_data->op = LOCAL_WRITE;
+    wqueue_data->keys = keys;
     uv_work_t *req = new uv_work_t();
     req->data = (void *)wqueue_data;
     uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);
@@ -249,34 +316,26 @@ int do_delete(client_t *client) {
 
     delete_meta_response_t resp;
     std::string out;
-    int error_code = TASK_ACCEPTED;
     for (auto &key : meta->keys) {
         DEBUG("try to delete key: {}", key);
         if (kv_map.count(key) == 0) {
-            resp.blocks.push_back({
-                .key = key,
-                .msg = "not exist"
-            });
+            resp.blocks.push_back({.key = key, .msg = "not exist"});
             continue;
         }
-        // need to add the logic that key can't be deleted
-        if(false) {
-            resp.blocks.push_back({
-                .key = key,
-                .msg = "can't delete"
-            });
-            continue;            
+        if (kv_map[key].reader_count > 0 || kv_map[key].writer_count > 0) {
+            resp.blocks.push_back({.key = key, .msg = "key conflict"});
+            continue;
         }
         mm->deallocate(kv_map[key].ptr, kv_map[key].size, kv_map[key].pool_idx);
         kv_map.erase(key);
     }
 
-    resp.error_code = error_code;
+    resp.error_code = TASK_ACCEPTED;
     if (!serialize(resp, out)) {
         ERROR("Failed to serialize response");
         return SYSTEM_ERROR;
     }
-    
+
     uv_write_t *write_req = (uv_write_t *)malloc(sizeof(uv_write_t));
     int size = out.size();
     client->send_buffer = (char *)realloc(client->send_buffer, size + RETURN_CODE_SIZE);
@@ -623,8 +682,8 @@ int handle_request(client_t *client) {
         return_code = do_delete(client);
         if (return_code == 0) {
             return 0;
-        }        
-    }    
+        }
+    }
     else {
         return_code = INVALID_REQ;
     }
@@ -662,8 +721,8 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                 offset += to_copy;
                 if (client->bytes_read == FIXED_HEADER_SIZE) {
                     print_header(&client->header);
-                    if (client->header.op == OP_R || client->header.op == OP_W || client->header.op == OP_P ||
-                        client->header.op == OP_RDMA_EXCHANGE ||
+                    if (client->header.op == OP_R || client->header.op == OP_W ||
+                        client->header.op == OP_P || client->header.op == OP_RDMA_EXCHANGE ||
                         client->header.op == OP_RDMA_WRITE || client->header.op == OP_RDMA_READ) {
                         int ret = veryfy_header(&client->header);
                         if (ret != 0) {
@@ -716,7 +775,7 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                                 printf("failed to deserialize delete meta\n");
                                 uv_close((uv_handle_t *)stream, on_close);
                                 goto clean_up;
-                            }        
+                            }
                             handle_request(client);
                             break;
                         case OP_RDMA_EXCHANGE:
