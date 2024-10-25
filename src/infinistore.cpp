@@ -440,7 +440,7 @@ int do_rdma_read(client_t *client) {
     remote_meta_response resp;
     uv_write_t *write_req = (uv_write_t *)malloc(sizeof(uv_write_t));
     std::string out;
-
+    resp.blocks.reserve(client->remote_meta_req.keys.size());
     for (const auto &key : client->remote_meta_req.keys) {
         if (kv_map.find(key) == kv_map.end()) {
             // key not found
@@ -488,6 +488,7 @@ int do_rdma_write(client_t *client) {
     std::string out;
     int error_code = TASK_ACCEPTED;
 
+    resp.blocks.reserve(client->remote_meta_req.keys.size());
     for (std::string &key : client->remote_meta_req.keys) {
         void *h_dst;
         int pool_idx;
