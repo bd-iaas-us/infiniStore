@@ -397,7 +397,7 @@ class InfinityConnection:
     def check_exist(self, key: str):
         ret = _infinistore.check_exist(self.conn, key)
         if ret < 0:
-            raise Exception(f"Failed to check if this key exists")
+            raise Exception("Failed to check if this key exists")
         return True if ret == 0 else False
 
     def get_match_last_index(self, keys: List[str]):
