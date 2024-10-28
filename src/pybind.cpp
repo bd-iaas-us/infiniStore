@@ -54,7 +54,8 @@ PYBIND11_MODULE(_infinistore, m) {
     m.def("setup_rdma", &setup_rdma, "setup rdma connection");
     m.def("sync_rdma", &sync_rdma, "sync the remote server");
     m.def("check_exist", &check_exist, "check if the key exists in the store");
-    m.def("get_match_last_index", &get_match_last_index, "get the last index of a key list which is in the store");
+    m.def("get_match_last_index", &get_match_last_index,
+          "get the last index of a key list which is in the store");
 
     // server side
     py::class_<server_config_t>(m, "ServerConfig")

@@ -520,11 +520,7 @@ int sync_local(connection_t *conn) {
 int check_exist(connection_t *conn, std::string key) {
     assert(conn != NULL);
     header_t header;
-    header = {
-        .magic = MAGIC,
-        .op = OP_CHECK_EXIST,
-        .body_size = key.size()
-    };
+    header = {.magic = MAGIC, .op = OP_CHECK_EXIST, .body_size = key.size()};
     if (send_exact(conn->sock, &header, FIXED_HEADER_SIZE) < 0) {
         ERROR("Failed to send header");
         return -1;
