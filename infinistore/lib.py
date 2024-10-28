@@ -393,3 +393,15 @@ class InfinityConnection:
             raise Exception("Tensor must be on CUDA device")
         if cache.is_contiguous() is False:
             raise Exception("Tensor must be contiguous")
+
+    def check_exist(self, key: str):
+        ret = _infinistore.check_exist(self.conn, key)
+        if ret < 0:
+            raise Exception("Failed to check if this key exists")
+        return True if ret == 0 else False
+
+    def get_match_last_index(self, keys: List[str]):
+        ret = _infinistore.get_match_last_index(self.conn, keys)
+        if ret < 0:
+            raise Exception("can't find a match")
+        return ret

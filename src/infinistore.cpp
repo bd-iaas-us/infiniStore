@@ -71,6 +71,9 @@ struct Client {
     rdma_conn_info_t remote_info;
     rdma_conn_info_t local_info;
 
+    std::string key_to_check;
+    keys_t keys_meta;
+
     struct ibv_cq *cq = NULL;
     struct ibv_qp *qp = NULL;
     bool rdma_connected = false;
@@ -127,6 +130,9 @@ void reset_client_read_state(client_t *client) {
     client->local_meta.blocks.clear();
     client->local_meta.block_size = 0;
     memset(&(client->local_meta.ipc_handle), 0, sizeof(cudaIpcMemHandle_t));
+
+    client->key_to_check.clear();
+    client->keys_meta.keys.clear();
 }
 
 void on_close(uv_handle_t *handle) {
@@ -436,6 +442,30 @@ int do_sync_stream(client_t *client) {
     return 0;
 }
 
+int do_check_key(client_t *client) {
+    int ret = kv_map.count(client->key_to_check) ? 0 : 1;
+    do_send(client, &ret, RETURN_CODE_SIZE);
+    reset_client_read_state(client);
+    return 0;
+}
+
+int do_get_match_last_index(client_t *client) {
+    int left = 0, right = client->keys_meta.keys.size();
+    while (left < right) {
+        int mid = left + (right - left) / 2;
+        if (kv_map.count(client->keys_meta.keys[mid])) {
+            left = mid + 1;
+        }
+        else {
+            right = mid;
+        }
+    }
+    left--;
+    do_send(client, &left, RETURN_CODE_SIZE);
+    reset_client_read_state(client);
+    return 0;
+}
+
 // TODO: refactor this function to use RDMA_WRITE_IMM.
 int do_rdma_read(client_t *client) {
     INFO("do rdma read #keys: {}", client->remote_meta_req.keys.size());
@@ -571,6 +601,18 @@ int handle_request(client_t *client) {
             return 0;
         }
     }
+    else if (client->header.op == OP_CHECK_EXIST) {
+        return_code = do_check_key(client);
+        if (return_code == 0) {
+            return 0;
+        }
+    }
+    else if (client->header.op == OP_GET_MATCH_LAST_IDX) {
+        return_code = do_get_match_last_index(client);
+        if (return_code == 0) {
+            return 0;
+        }
+    }
     else if (client->header.op == OP_W) {
         return_code = do_write_cache(client);
     }
@@ -615,6 +657,8 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                 if (client->bytes_read == FIXED_HEADER_SIZE) {
                     print_header(&client->header);
                     if (client->header.op == OP_R || client->header.op == OP_W ||
+                        client->header.op == OP_CHECK_EXIST ||
+                        client->header.op == OP_GET_MATCH_LAST_IDX ||
                         client->header.op == OP_RDMA_EXCHANGE ||
                         client->header.op == OP_RDMA_WRITE || client->header.op == OP_RDMA_READ) {
                         int ret = veryfy_header(&client->header);
@@ -655,11 +699,26 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                         case OP_W:
                             if (!deserialize(client->recv_buffer, client->expected_bytes,
                                              client->local_meta)) {
-                                printf("failed to deserialize local meta\n");
+                                ERROR("failed to deserialize local meta");
                                 uv_close((uv_handle_t *)stream, on_close);
                                 goto clean_up;
                             }
                             print_ipc_handle(client->local_meta.ipc_handle);
+                            handle_request(client);
+                            break;
+                        case OP_CHECK_EXIST:
+                            client->key_to_check.assign(client->recv_buffer,
+                                                        client->expected_bytes);
+                            handle_request(client);
+                            break;
+                        case OP_GET_MATCH_LAST_IDX:
+                            INFO("OP_GET_MATCH_LAST_IDX");
+                            if (!deserialize(client->recv_buffer, client->expected_bytes,
+                                             client->keys_meta)) {
+                                ERROR("failed to deserialize keys meta");
+                                uv_close((uv_handle_t *)stream, on_close);
+                                goto clean_up;
+                            }
                             handle_request(client);
                             break;
                         case OP_RDMA_EXCHANGE:
@@ -672,7 +731,7 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                         case OP_RDMA_READ:
                             if (!deserialize(client->recv_buffer, client->expected_bytes,
                                              client->remote_meta_req)) {
-                                printf("failed to deserialize remote meta\n");
+                                ERROR("failed to deserialize remote meta");
                                 uv_close((uv_handle_t *)stream, on_close);
                                 goto clean_up;
                             }
