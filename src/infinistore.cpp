@@ -692,7 +692,7 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                         case OP_W:
                             if (!deserialize(client->recv_buffer, client->expected_bytes,
                                              client->local_meta)) {
-                                printf("failed to deserialize local meta\n");
+                                ERROR("failed to deserialize local meta");
                                 uv_close((uv_handle_t *)stream, on_close);
                                 goto clean_up;
                             }
@@ -708,7 +708,7 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                             INFO("OP_GET_MATCH_LAST_IDX");
                             if (!deserialize(client->recv_buffer, client->expected_bytes,
                                              client->keys_meta)) {
-                                printf("failed to deserialize keys meta\n");
+                                ERROR("failed to deserialize keys meta");
                                 uv_close((uv_handle_t *)stream, on_close);
                                 goto clean_up;
                             }
@@ -724,7 +724,7 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                         case OP_RDMA_READ:
                             if (!deserialize(client->recv_buffer, client->expected_bytes,
                                              client->remote_meta_req)) {
-                                printf("failed to deserialize remote meta\n");
+                                ERROR("failed to deserialize remote meta");
                                 uv_close((uv_handle_t *)stream, on_close);
                                 goto clean_up;
                             }

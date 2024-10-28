@@ -403,5 +403,5 @@ class InfinityConnection:
     def get_match_last_index(self, keys: List[str]):
         ret = _infinistore.get_match_last_index(self.conn, keys)
         if ret < 0:
-            Logger.warn("can't find a match")
+            raise Exception("can't find a match")
         return ret
