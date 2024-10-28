@@ -32,6 +32,7 @@ void print_ipc_handle(cudaIpcMemHandle_t ipc_handle);
 void compare_ipc_handle(cudaIpcMemHandle_t ipc_handle1, cudaIpcMemHandle_t ipc_handle2);
 void print_rdma_conn_info(rdma_conn_info_t *info, bool is_remote);
 
+// print vector is super slow. Use it only for debugging
 template <typename T>
 void print_vector(T *ptr, size_t size);
 

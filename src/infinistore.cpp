@@ -209,6 +209,8 @@ int do_read_cache(client_t *client) {
 }
 
 int do_write_cache(client_t *client) {
+    auto start = std::chrono::high_resolution_clock::now();
+
     const local_meta_t *meta = &client->local_meta;
     assert(meta != NULL);
     // allocate host memory
@@ -239,6 +241,9 @@ int do_write_cache(client_t *client) {
     req->data = (void *)wqueue_data;
     uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);
 
+    auto end = std::chrono::high_resolution_clock::now();
+    INFO("do_write_cache time: {} ms",
+         std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
     return TASK_ACCEPTED;
 }
 
@@ -369,7 +374,7 @@ int do_rdma_exchange(client_t *client) {
     attr.path_mtu = IBV_MTU_1024;  // FIXME: hard coded
     attr.dest_qp_num = client->remote_info.qpn;
     attr.rq_psn = client->remote_info.psn;
-    attr.max_dest_rd_atomic = 1;
+    attr.max_dest_rd_atomic = 4;
     attr.min_rnr_timer = 12;
     attr.ah_attr.dlid = 0;  // RoCE v2 is used.
     attr.ah_attr.sl = 0;
@@ -434,27 +439,27 @@ int do_sync_stream(client_t *client) {
 // TODO: refactor this function to use RDMA_WRITE_IMM.
 int do_rdma_read(client_t *client) {
     INFO("do rdma read #keys: {}", client->remote_meta_req.keys.size());
-    auto start = std::chrono::high_resolution_clock::now();
 
+    auto start = std::chrono::high_resolution_clock::now();
     int error_code = TASK_ACCEPTED;
     remote_meta_response resp;
     uv_write_t *write_req = (uv_write_t *)malloc(sizeof(uv_write_t));
     std::string out;
     resp.blocks.reserve(client->remote_meta_req.keys.size());
+
     for (const auto &key : client->remote_meta_req.keys) {
-        if (kv_map.find(key) == kv_map.end()) {
+        auto it = kv_map.find(key);
+        if (it == kv_map.end()) {
             // key not found
             error_code = KEY_NOT_FOUND;
             goto RETURN;
         }
-        PTR ptr = kv_map[key];
+        const PTR &ptr = it->second;
         DEBUG("rkey: {}, local_addr: {}, size : {}", mm->get_rkey(ptr.pool_idx), (uintptr_t)ptr.ptr,
               ptr.size);
-        print_vector<float>((float *)ptr.ptr, 8);
         resp.blocks.push_back(
             {.rkey = mm->get_rkey(ptr.pool_idx), .remote_addr = (uintptr_t)ptr.ptr});
     }
-
     // send the response
 
 RETURN:
@@ -483,6 +488,7 @@ RETURN:
 int do_rdma_write(client_t *client) {
     INFO("do rdma write keys: {}, remote_block_size: {}", client->remote_meta_req.keys.size(),
          client->remote_meta_req.block_size);
+    auto start = std::chrono::high_resolution_clock::now();
     remote_meta_response resp;
     uv_write_t *write_req = (uv_write_t *)malloc(sizeof(uv_write_t));
     std::string out;
@@ -499,15 +505,12 @@ int do_rdma_write(client_t *client) {
             error_code = SYSTEM_ERROR;
             goto RETURN;
         }
+        auto ptr =
+            PTR{.ptr = h_dst, .size = client->remote_meta_req.block_size, .pool_idx = pool_idx};
         // save to the map
-        kv_map[key] = {
-            .ptr = h_dst, .size = client->remote_meta_req.block_size, .pool_idx = pool_idx};
+        kv_map[key] = ptr;
         DEBUG("rkey: {}, local_addr: {}, size : {}", mm->get_rkey(pool_idx), (uintptr_t)h_dst,
               client->remote_meta_req.block_size);
-
-        // set first element to 12345
-        float *h_dst_float = (float *)h_dst;
-        h_dst_float[0] = 12345;
 
         resp.blocks.push_back({.rkey = mm->get_rkey(pool_idx), .remote_addr = (uintptr_t)h_dst});
     }
@@ -528,6 +531,9 @@ RETURN:
     write_req->data = client;
     uv_write(write_req, (uv_stream_t *)client->handle, &wbuf, 1, on_write);
 
+    auto end = std::chrono::high_resolution_clock::now();
+    INFO("do rdma write runtime: {} ms",
+         std::chrono::duration<double, std::milli>(end - start).count());
     DEBUG("send response: size:{}", size);
     reset_client_read_state(client);
     return 0;

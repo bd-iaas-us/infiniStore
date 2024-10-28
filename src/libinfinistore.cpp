@@ -338,28 +338,33 @@ void cq_handler(connection_t *conn) {
                 ERROR("Failed to request CQ notification");
                 return;
             }
-            struct ibv_wc wc = {};
-            while (ibv_poll_cq(conn->cq, 1, &wc) == 1) {
-                if (wc.status != IBV_WC_SUCCESS) {
-                    // only fake wr will use IBV_WC_SEND
-                    // we use it to wake up cq thread and exit
-                    if (wc.opcode == IBV_WC_SEND) {
+
+            struct ibv_wc wc[10] = {};
+            int num_completions;
+
+            while ((num_completions = ibv_poll_cq(conn->cq, 10, wc)) && num_completions > 0) {
+                for (int i = 0; i < num_completions; i++) {
+                    if (wc[i].status != IBV_WC_SUCCESS) {
+                        // only fake wr will use IBV_WC_SEND
+                        // we use it to wake up cq thread and exit
+                        if (wc[i].opcode == IBV_WC_SEND) {
+                            return;
+                        }
+                        ERROR("Failed status: {}", ibv_wc_status_str(wc[i].status));
                         return;
                     }
-                    ERROR("Failed status: {}", ibv_wc_status_str(wc.status));
-                    return;
-                }
-                if (wc.opcode == IBV_WC_RDMA_READ || wc.opcode == IBV_WC_RDMA_WRITE) {
-                    conn->rdma_inflight_count--;
-                    if (conn->limited_bar1) {
-                        IBVMemoryRegion *mr = (IBVMemoryRegion *)wc.wr_id;
-                        DEBUG("deregister mr: {}, PTR", (void *)mr);
-                        conn->rdma_inflight_mr_size -= mr->release();
+                    if (wc[i].opcode == IBV_WC_RDMA_READ || wc[i].opcode == IBV_WC_RDMA_WRITE) {
+                        conn->rdma_inflight_count--;
+                        if (conn->limited_bar1) {
+                            IBVMemoryRegion *mr = (IBVMemoryRegion *)wc[i].wr_id;
+                            DEBUG("deregister mr: {}, PTR", (void *)mr);
+                            conn->rdma_inflight_mr_size -= mr->release();
+                        }
                     }
-                }
-                else {
-                    ERROR("Unexpected opcode: {}", (int)wc.opcode);
-                    return;
+                    else {
+                        ERROR("Unexpected opcode: {}", (int)wc[i].opcode);
+                        return;
+                    }
                 }
                 conn->cv.notify_all();
             }
@@ -445,7 +450,7 @@ int modify_qp_to_rtr(connection_t *conn) {
     attr.path_mtu = IBV_MTU_1024;
     attr.dest_qp_num = remote_info->qpn;
     attr.rq_psn = remote_info->psn;
-    attr.max_dest_rd_atomic = 1;
+    attr.max_dest_rd_atomic = 4;
     attr.min_rnr_timer = 12;
     attr.ah_attr.dlid = 0;
     attr.ah_attr.sl = 0;
