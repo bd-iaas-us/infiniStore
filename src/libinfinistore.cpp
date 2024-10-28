@@ -542,9 +542,44 @@ int check_exist(connection_t *conn, std::string key) {
     return return_code;
 }
 
-int get_match_last_index(connection_t *conn, std::vector<std::string>) {
+int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
     INFO("get_match_last_index");
-    return 0;
+    assert(conn != NULL);
+
+    keys_t meta = {
+        .keys = keys,
+    };
+
+    std::string serialized_data;
+    if (!serialize(meta, serialized_data)) {
+        ERROR("Failed to serialize local meta");
+        return -1;
+    }
+
+    header_t header = {
+        .magic = MAGIC,
+        .op = OP_GET_MATCH_LAST_IDX,
+        .body_size = static_cast<unsigned int>(serialized_data.size()),
+    };
+
+    // Send header
+    if (send_exact(conn->sock, &header, FIXED_HEADER_SIZE) < 0) {
+        ERROR("Failed to send header");
+        return -1;
+    }
+    // Send body
+    if (send_exact(conn->sock, serialized_data.data(), serialized_data.size()) < 0) {
+        ERROR("Failed to send body");
+        return -1;
+    }
+
+    int return_code = 0;
+    if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
+        ERROR("Failed to receive return code");
+        return -1;
+    }
+
+    return return_code;
 }
 
 int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block_size,

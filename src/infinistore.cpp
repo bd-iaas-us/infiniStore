@@ -72,6 +72,7 @@ struct Client {
     rdma_conn_info_t local_info;
 
     std::string key_to_check;
+    keys_t keys_meta;
 
     struct ibv_cq *cq = NULL;
     struct ibv_qp *qp = NULL;
@@ -131,6 +132,7 @@ void reset_client_read_state(client_t *client) {
     memset(&(client->local_meta.ipc_handle), 0, sizeof(cudaIpcMemHandle_t));
 
     client->key_to_check.clear();
+    client->keys_meta.keys.clear();
 }
 
 void on_close(uv_handle_t *handle) {
@@ -442,6 +444,18 @@ int do_check_key(client_t *client) {
     return 0;
 }
 
+int do_get_match_last_index(client_t *client) {
+    int i= -1;
+    for (i = client->keys_meta.keys.size() - 1; i >= 0 ; i--) {
+        if (kv_map.count(client->keys_meta.keys[i])) {
+            break;
+        }
+    }
+    do_send(client, &i, RETURN_CODE_SIZE);
+    reset_client_read_state(client);
+    return 0;
+}
+
 // TODO: refactor this function to use RDMA_WRITE_IMM.
 int do_rdma_read(client_t *client) {
     INFO("do rdma read #keys: {}", client->remote_meta_req.keys.size());
@@ -581,6 +595,12 @@ int handle_request(client_t *client) {
             return 0;
         }
     }    
+    else if (client->header.op == OP_GET_MATCH_LAST_IDX) {
+        return_code = do_get_match_last_index(client);
+        if (return_code == 0) {
+            return 0;
+        }
+    }        
     else if (client->header.op == OP_W) {
         return_code = do_write_cache(client);
     }
@@ -624,7 +644,8 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                 offset += to_copy;
                 if (client->bytes_read == FIXED_HEADER_SIZE) {
                     print_header(&client->header);
-                    if (client->header.op == OP_R || client->header.op == OP_W || client->header.op == OP_CHECK_EXIST ||
+                    if (client->header.op == OP_R || client->header.op == OP_W || 
+                        client->header.op == OP_CHECK_EXIST || client->header.op == OP_GET_MATCH_LAST_IDX ||
                         client->header.op == OP_RDMA_EXCHANGE ||
                         client->header.op == OP_RDMA_WRITE || client->header.op == OP_RDMA_READ) {
                         int ret = veryfy_header(&client->header);
@@ -676,6 +697,16 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                             client->key_to_check.assign(client->recv_buffer, client->expected_bytes);
                             handle_request(client);
                             break;
+                        case OP_GET_MATCH_LAST_IDX:
+                            INFO("OP_GET_MATCH_LAST_IDX");
+                            if (!deserialize(client->recv_buffer, client->expected_bytes,
+                                             client->keys_meta)) {
+                                printf("failed to deserialize keys meta\n");
+                                uv_close((uv_handle_t *)stream, on_close);
+                                goto clean_up;
+                            }                            
+                            handle_request(client);
+                            break;                            
                         case OP_RDMA_EXCHANGE:
                             memcpy((void *)(&client->remote_info), client->recv_buffer,
                                    client->expected_bytes);

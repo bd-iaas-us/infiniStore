@@ -30,6 +30,7 @@ Error code:
 #define OP_RDMA_WRITE 'D'
 #define OP_RDMA_READ 'A'
 #define OP_CHECK_EXIST 'C'
+#define OP_GET_MATCH_LAST_IDX 'M'
 #define OP_SIZE 1
 
 // error code: int
@@ -54,6 +55,11 @@ typedef struct {
     unsigned long offset;
     MSGPACK_DEFINE(key, offset)
 } block_t;
+
+typedef struct {
+    std::vector<std::string> keys;
+    MSGPACK_DEFINE(keys)
+} keys_t;
 
 // implement pack for ipcHandler
 namespace msgpack {
@@ -141,6 +147,8 @@ bool deserialize(const char* data, size_t size, T& out) {
     }
 }
 
+template bool serialize<keys_t>(const keys_t& data, std::string& out);
+template bool deserialize<keys_t>(const char* data, size_t size, keys_t& out);
 template bool serialize<local_meta_t>(const local_meta_t& data, std::string& out);
 template bool deserialize<local_meta_t>(const char* data, size_t size, local_meta_t& out);
 template bool serialize<remote_meta_request>(const remote_meta_request& data, std::string& out);
