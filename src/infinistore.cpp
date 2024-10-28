@@ -445,13 +445,18 @@ int do_check_key(client_t *client) {
 }
 
 int do_get_match_last_index(client_t *client) {
-    int i = -1;
-    for (i = client->keys_meta.keys.size() - 1; i >= 0; i--) {
-        if (kv_map.count(client->keys_meta.keys[i])) {
-            break;
+    int left = 0, right = client->keys_meta.keys.size();
+    while (left < right) {
+        int mid = left + (right - left) / 2;
+        if (kv_map.count(client->keys_meta.keys[mid])) {
+            left = mid + 1;
+        }
+        else {
+            right = mid;
         }
     }
-    do_send(client, &i, RETURN_CODE_SIZE);
+    left--;
+    do_send(client, &left, RETURN_CODE_SIZE);
     reset_client_read_state(client);
     return 0;
 }
