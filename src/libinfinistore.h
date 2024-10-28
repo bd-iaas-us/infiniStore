@@ -103,5 +103,6 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
             size_t ptr_region_size);
 
 int sync_rdma(connection_t *conn);
+int check_exist(connection_t *conn, std::string key);
 
 #endif  // LIBINFINISTORE_H

@@ -517,6 +517,36 @@ int sync_local(connection_t *conn) {
     return return_code;
 }
 
+int check_exist(connection_t *conn, std::string key) {
+    assert(conn != NULL);
+    header_t header;
+    header = {
+        .magic = MAGIC,
+        .op = OP_CHECK_EXIST,
+        .body_size = key.size()
+    };
+    if (send_exact(conn->sock, &header, FIXED_HEADER_SIZE) < 0) {
+        ERROR("Failed to send header");
+        return -1;
+    }
+    if (send_exact(conn->sock, key.c_str(), key.size()) < 0) {
+        ERROR("Failed to send body");
+        return -1;
+    }
+
+    int return_code = 0;
+    if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
+        ERROR("Failed to receive return code");
+        return -1;
+    }
+    return return_code;
+}
+
+int get_match_last_index(connection_t *conn, std::vector<std::string>) {
+    INFO("get_match_last_index");
+    return 0;
+}
+
 int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block_size,
             void *base_ptr, size_t ptr_region_size) {
     assert(conn != NULL);

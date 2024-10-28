@@ -29,6 +29,7 @@ Error code:
 #define OP_RDMA_EXCHANGE 'E'
 #define OP_RDMA_WRITE 'D'
 #define OP_RDMA_READ 'A'
+#define OP_CHECK_EXIST 'C'
 #define OP_SIZE 1
 
 // error code: int

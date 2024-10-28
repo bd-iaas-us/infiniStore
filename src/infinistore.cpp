@@ -71,6 +71,8 @@ struct Client {
     rdma_conn_info_t remote_info;
     rdma_conn_info_t local_info;
 
+    std::string key_to_check;
+
     struct ibv_cq *cq = NULL;
     struct ibv_qp *qp = NULL;
     bool rdma_connected = false;
@@ -127,6 +129,8 @@ void reset_client_read_state(client_t *client) {
     client->local_meta.blocks.clear();
     client->local_meta.block_size = 0;
     memset(&(client->local_meta.ipc_handle), 0, sizeof(cudaIpcMemHandle_t));
+
+    client->key_to_check.clear();
 }
 
 void on_close(uv_handle_t *handle) {
@@ -431,6 +435,13 @@ int do_sync_stream(client_t *client) {
     return 0;
 }
 
+int do_check_key(client_t *client) {
+    int ret = kv_map.count(client->key_to_check) ? 0 : 1;
+    do_send(client, &ret, RETURN_CODE_SIZE);
+    reset_client_read_state(client);
+    return 0;
+}
+
 // TODO: refactor this function to use RDMA_WRITE_IMM.
 int do_rdma_read(client_t *client) {
     INFO("do rdma read #keys: {}", client->remote_meta_req.keys.size());
@@ -564,6 +575,12 @@ int handle_request(client_t *client) {
             return 0;
         }
     }
+    else if (client->header.op == OP_CHECK_EXIST) {
+        return_code = do_check_key(client);
+        if (return_code == 0) {
+            return 0;
+        }
+    }    
     else if (client->header.op == OP_W) {
         return_code = do_write_cache(client);
     }
@@ -607,7 +624,7 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                 offset += to_copy;
                 if (client->bytes_read == FIXED_HEADER_SIZE) {
                     print_header(&client->header);
-                    if (client->header.op == OP_R || client->header.op == OP_W ||
+                    if (client->header.op == OP_R || client->header.op == OP_W || client->header.op == OP_CHECK_EXIST ||
                         client->header.op == OP_RDMA_EXCHANGE ||
                         client->header.op == OP_RDMA_WRITE || client->header.op == OP_RDMA_READ) {
                         int ret = veryfy_header(&client->header);
@@ -653,6 +670,10 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                                 goto clean_up;
                             }
                             print_ipc_handle(client->local_meta.ipc_handle);
+                            handle_request(client);
+                            break;
+                        case OP_CHECK_EXIST:
+                            client->key_to_check.assign(client->recv_buffer, client->expected_bytes);
                             handle_request(client);
                             break;
                         case OP_RDMA_EXCHANGE:
