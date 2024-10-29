@@ -253,79 +253,6 @@ IBVMemoryRegion *search_mr_from_ptr(std::map<uintptr_t, IBVMemoryRegion *> &mrs,
     return NULL;
 }
 
-int perform_rdma_read(connection_t *conn, uintptr_t src_buf, size_t src_size, char *dst_buf,
-                      size_t dst_size, uint32_t rkey, IBVMemoryRegion *mr) {
-    // Prepare RDMA read operation
-    struct ibv_sge sge = {};
-    sge.addr = (uintptr_t)dst_buf;
-    sge.length = dst_size;
-
-    sge.lkey = mr->get_mr()->lkey;
-
-    struct ibv_send_wr wr = {};
-    if (conn->limited_bar1) {
-        wr.wr_id = (uint64_t)mr;
-        mr->add_ref();
-    }
-    else {
-        wr.wr_id = (uintptr_t)conn;
-    }
-    wr.opcode = IBV_WR_RDMA_READ;
-    wr.sg_list = &sge;
-    wr.num_sge = 1;
-    wr.send_flags = IBV_SEND_SIGNALED;
-    wr.wr.rdma.remote_addr = src_buf;  // Obtain from server
-    wr.wr.rdma.rkey = rkey;            // Obtain from server
-
-    struct ibv_send_wr *bad_wr = NULL;
-    int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
-    if (ret) {
-        ERROR("Failed to post RDMA read");
-        return -1;
-    }
-
-    conn->rdma_inflight_count++;
-    DEBUG("RDMA read completed successfully");
-    // RDMA read successful
-    return 0;
-}
-
-int perform_rdma_write(connection_t *conn, char *src_buf, size_t src_size, uintptr_t dst_buf,
-                       size_t dst_size, uint32_t rkey, IBVMemoryRegion *mr) {
-    // Prepare RDMA write operation
-    struct ibv_sge sge = {};
-    sge.addr = (uintptr_t)src_buf;
-    sge.length = src_size;
-    sge.lkey = mr->get_mr()->lkey;
-
-    struct ibv_send_wr wr = {};
-
-    if (conn->limited_bar1) {
-        // we have to pass mr to cq_handler to deregister it
-        wr.wr_id = (uint64_t)mr;
-        mr->add_ref();
-    }
-    else {
-        // maybe we will use request ctx in the future
-        wr.wr_id = (uintptr_t)conn;
-    }
-    wr.opcode = IBV_WR_RDMA_WRITE;
-    wr.sg_list = &sge;
-    wr.num_sge = 1;
-    wr.send_flags = IBV_SEND_SIGNALED;
-    wr.wr.rdma.remote_addr = dst_buf;  // Obtain from server
-    wr.wr.rdma.rkey = rkey;            // Obtain from server
-
-    struct ibv_send_wr *bad_wr = NULL;
-    int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
-    if (ret) {
-        ERROR("Failed to post RDMA write :{}", strerror(ret));
-        return -1;
-    }
-    conn->rdma_inflight_count++;
-    return 0;
-}
-
 void cq_handler(connection_t *conn) {
     assert(conn->comp_channel != NULL);
     while (!conn->stop) {
@@ -539,7 +466,6 @@ int check_exist(connection_t *conn, std::string key) {
 }
 
 int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
-    INFO("get_match_last_index");
     assert(conn != NULL);
 
     keys_t meta = {
@@ -714,11 +640,10 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
     conn->cv.wait(lock,
                   [&conn, &blocks] { return conn->rdma_inflight_count + blocks.size() <= MAX_WR; });
 
-    for (int i = 0; i < response.blocks.size(); i++) {
-        DEBUG("remote response: addr: {}, rkey: {}", response.blocks[i].remote_addr,
-              response.blocks[i].rkey);
-
-        // request_mr could be temperary mr or registered mr
+    int cnt = response.blocks.size();
+    struct ibv_send_wr wr[cnt], *bad_wr = nullptr;
+    struct ibv_sge sge[cnt];
+    for (int i = 0; i < cnt; i++) {
         IBVMemoryRegion *request_mr = NULL;
         if (conn->limited_bar1) {
             request_mr = search_mr_from_ptr(local_mr, (char *)base_ptr + blocks[i].offset);
@@ -726,26 +651,37 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
         else {
             request_mr = search_mr_from_ptr(conn->local_mr, (char *)base_ptr + blocks[i].offset);
         }
-        int ret;
-        if (op == OP_RDMA_WRITE) {
-            ret = perform_rdma_write(conn, (char *)base_ptr + blocks[i].offset, block_size,
-                                     response.blocks[i].remote_addr, block_size,
-                                     response.blocks[i].rkey, request_mr);
-        }
-        else if (op == OP_RDMA_READ) {
-            ret = perform_rdma_read(conn, response.blocks[i].remote_addr, block_size,
-                                    (char *)base_ptr + blocks[i].offset, block_size,
-                                    response.blocks[i].rkey, request_mr);
+
+        sge[i].addr = (uintptr_t)((char *)base_ptr + blocks[i].offset);
+        sge[i].length = block_size;
+        sge[i].lkey = request_mr->get_mr()->lkey;
+
+        if (conn->limited_bar1) {
+            // we have to pass mr to cq_handler to deregister it
+            wr[i].wr_id = (uint64_t)request_mr;
+            request_mr->add_ref();
         }
         else {
-            ERROR("Invalid operation");
-            return -1;
+            // maybe we will use request ctx in the future
+            wr[i].wr_id = (uintptr_t)conn;
         }
-        if (ret < 0) {
-            ERROR("Failed to perform RDMA operation");
-            return -1;
-        }
+
+        wr[i].opcode = op == OP_RDMA_READ ? IBV_WR_RDMA_READ : IBV_WR_RDMA_WRITE;
+        wr[i].sg_list = &sge[i];
+        wr[i].num_sge = 1;
+        wr[i].send_flags = IBV_SEND_SIGNALED;
+        wr[i].wr.rdma.remote_addr = response.blocks[i].remote_addr;  // Obtain from server
+        wr[i].wr.rdma.rkey = response.blocks[i].rkey;
+        wr[i].next = i < cnt - 1 ? &wr[i + 1] : nullptr;
     }
+
+    int ret = ibv_post_send(conn->qp, wr, &bad_wr);
+    if (ret) {
+        ERROR("Failed to perform RDMA operation");
+        return -1;
+    }
+
+    conn->rdma_inflight_count += cnt;
 
     return 0;
 }

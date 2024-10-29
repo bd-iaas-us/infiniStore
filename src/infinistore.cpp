@@ -705,7 +705,6 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                             handle_request(client);
                             break;
                         case OP_GET_MATCH_LAST_IDX:
-                            INFO("OP_GET_MATCH_LAST_IDX");
                             if (!deserialize(client->recv_buffer, client->expected_bytes,
                                              client->keys_meta)) {
                                 ERROR("failed to deserialize keys meta");
