@@ -500,8 +500,23 @@ int exchange_conn_info(connection_t *conn) {
         .op = OP_RDMA_EXCHANGE,
         .body_size = sizeof(rdma_conn_info_t),
     };
-    send_exact(conn->sock, &header, FIXED_HEADER_SIZE);
-    send_exact(conn->sock, &conn->local_info, sizeof(rdma_conn_info_t));
+
+    struct iovec iov[2];
+    struct msghdr msg;
+
+    iov[0].iov_base = &header;
+    iov[0].iov_len = FIXED_HEADER_SIZE;
+    iov[1].iov_base = &conn->local_info;
+    iov[1].iov_len = sizeof(rdma_conn_info_t);
+
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 2;
+
+    if (sendmsg(conn->sock, &msg, 0) < 0) {
+        ERROR("Failed to send local connection information");
+        return -1;
+    }
 
     int return_code = -1;
     if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
@@ -554,12 +569,20 @@ int check_exist(connection_t *conn, std::string key) {
     assert(conn != NULL);
     header_t header;
     header = {.magic = MAGIC, .op = OP_CHECK_EXIST, .body_size = key.size()};
-    if (send_exact(conn->sock, &header, FIXED_HEADER_SIZE) < 0) {
-        ERROR("Failed to send header");
-        return -1;
-    }
-    if (send_exact(conn->sock, key.c_str(), key.size()) < 0) {
-        ERROR("Failed to send body");
+
+    struct iovec iov[2];
+    struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+
+    iov[0].iov_base = &header;
+    iov[0].iov_len = FIXED_HEADER_SIZE;
+    iov[1].iov_base = const_cast<void *>(static_cast<const void *>(key.data()));
+    iov[1].iov_len = key.size();
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 2;
+
+    if (sendmsg(conn->sock, &msg, 0) < 0) {
+        ERROR("Failed to send header and body");
         return -1;
     }
 
@@ -601,14 +624,19 @@ int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
         .body_size = static_cast<unsigned int>(serialized_data.size()),
     };
 
-    // Send header
-    if (send_exact(conn->sock, &header, FIXED_HEADER_SIZE) < 0) {
-        ERROR("Failed to send header");
-        return -1;
-    }
-    // Send body
-    if (send_exact(conn->sock, serialized_data.data(), serialized_data.size()) < 0) {
-        ERROR("Failed to send body");
+    struct iovec iov[2];
+    struct msghdr msg;
+    iov[0].iov_base = &header;
+    iov[0].iov_len = FIXED_HEADER_SIZE;
+    iov[1].iov_base = const_cast<void *>(static_cast<const void *>(serialized_data.data()));
+    iov[1].iov_len = serialized_data.size();
+
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 2;
+
+    if (sendmsg(conn->sock, &msg, 0) < 0) {
+        ERROR("Failed to send header and body");
         return -1;
     }
 
@@ -725,14 +753,19 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
         .body_size = static_cast<unsigned int>(serialized_data.size()),
     };
 
-    // Send header
-    if (send_exact(conn->sock, &header, FIXED_HEADER_SIZE) < 0) {
-        ERROR("Failed to send header");
-        return -1;
-    }
-    // Send body
-    if (send_exact(conn->sock, serialized_data.data(), serialized_data.size()) < 0) {
-        ERROR("Failed to send body");
+    struct iovec iov[2];
+    struct msghdr msg;
+    iov[0].iov_base = &header;
+    iov[0].iov_len = FIXED_HEADER_SIZE;
+    iov[1].iov_base = const_cast<void *>(static_cast<const void *>(serialized_data.data()));
+    iov[1].iov_len = serialized_data.size();
+
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 2;
+
+    if (sendmsg(conn->sock, &msg, 0) < 0) {
+        ERROR("Failed to send header and body");
         return -1;
     }
 
@@ -838,14 +871,20 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, in
         .body_size = static_cast<unsigned int>(serialized_data.size()),
     };
 
-    // Send header
-    if (send_exact(conn->sock, &header, FIXED_HEADER_SIZE) < 0) {
-        ERROR("Failed to send header");
-        return -1;
-    }
-    // Send body
-    if (send_exact(conn->sock, serialized_data.data(), serialized_data.size()) < 0) {
-        ERROR("Failed to send body");
+    struct iovec iov[2];
+    struct msghdr msg;
+
+    iov[0].iov_base = &header;
+    iov[0].iov_len = FIXED_HEADER_SIZE;
+    iov[1].iov_base = const_cast<void *>(static_cast<const void *>(serialized_data.data()));
+    iov[1].iov_len = serialized_data.size();
+
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 2;
+
+    if (sendmsg(conn->sock, &msg, 0) < 0) {
+        ERROR("Failed to send header and body");
         return -1;
     }
 
