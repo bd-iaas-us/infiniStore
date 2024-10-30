@@ -16,6 +16,8 @@ def run(conn):
         src_tensor = torch.tensor(src, device="cuda:0", dtype=torch.float32)
     now = time.time()
     conn.write_cache(src_tensor, [("key1", 0), ("key2", 1024), ("key3", 2048)], 1024)
+    # conn.write_cache(src_tensor, [("key1", 0)], 1024)
+
     conn.sync()
     print(f"write elapse time is {time.time() - now}")
 
