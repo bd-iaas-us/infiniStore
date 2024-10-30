@@ -388,7 +388,6 @@ int setup_rdma(connection_t *conn, client_config_t config) {
 
     // Exchange RDMA connection information with the server
     if (exchange_conn_info(conn)) {
-        ERROR("Failed to exchange connection information");
         delete conn;
         return -1;
     }
@@ -504,7 +503,22 @@ int exchange_conn_info(connection_t *conn) {
     send_exact(conn->sock, &header, FIXED_HEADER_SIZE);
     send_exact(conn->sock, &conn->local_info, sizeof(rdma_conn_info_t));
 
-    recv(conn->sock, &conn->remote_info, sizeof(rdma_conn_info_t), MSG_WAITALL);
+    int return_code = -1;
+    if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
+        ERROR("Failed to receive return code");
+        return -1;
+    }
+
+    if (return_code != FINISH) {
+        ERROR("Failed to exchange connection information, return code: {}", return_code);
+        return -1;
+    }
+
+    if (recv(conn->sock, &conn->remote_info, sizeof(rdma_conn_info_t), MSG_WAITALL) !=
+        sizeof(rdma_conn_info_t)) {
+        ERROR("Failed to receive remote connection information");
+        return -1;
+    }
     return 0;
 }
 
@@ -518,8 +532,22 @@ int sync_local(connection_t *conn) {
     send_exact(conn->sock, &header, FIXED_HEADER_SIZE);
 
     int return_code = -1;
-    recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL);
-    return return_code;
+    if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
+        ERROR("Failed to receive return code");
+        return -1;
+    }
+    if (return_code != FINISH) {
+        ERROR("Failed to sync local");
+        return -1;
+    }
+
+    int inflight_syncs = 0;
+    if (recv(conn->sock, &inflight_syncs, sizeof(int), MSG_WAITALL) != sizeof(int)) {
+        ERROR("Failed to receive inflight mr size");
+        return -1;
+    }
+
+    return inflight_syncs;
 }
 
 int check_exist(connection_t *conn, std::string key) {
@@ -540,7 +568,17 @@ int check_exist(connection_t *conn, std::string key) {
         ERROR("Failed to receive return code");
         return -1;
     }
-    return return_code;
+    if (return_code != FINISH) {
+        ERROR("Failed to check exist");
+        return -1;
+    }
+
+    int exist = 0;
+    if (recv(conn->sock, &exist, sizeof(int), MSG_WAITALL) != sizeof(int)) {
+        ERROR("Failed to receive exist");
+        return -1;
+    }
+    return exist;
 }
 
 int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
@@ -579,8 +617,18 @@ int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
         ERROR("Failed to receive return code");
         return -1;
     }
+    if (return_code != FINISH) {
+        ERROR("Failed to get match last index");
+        return -1;
+    }
 
-    return return_code;
+    int last_index = -1;
+    if (recv(conn->sock, &last_index, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
+        ERROR("Failed to receive return code");
+        return -1;
+    }
+
+    return last_index;
 }
 
 int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block_size,
@@ -687,6 +735,18 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
         ERROR("Failed to send body");
         return -1;
     }
+
+    int return_code = -1;
+    if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
+        ERROR("Failed to receive header");
+        return -1;
+    }
+
+    if (return_code != TASK_ACCEPTED) {
+        ERROR("Remote operation failed {}", return_code);
+        return -1;
+    }
+
     remote_meta_response response;
     int return_size;
     if (recv(conn->sock, &return_size, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
@@ -701,11 +761,6 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
 
     if (!deserialize(response_data, return_size, response)) {
         ERROR("deserialize failed");
-        return -1;
-    }
-
-    if (response.error_code != TASK_ACCEPTED) {
-        ERROR("Remote operation failed {}", response.error_code);
         return -1;
     }
 

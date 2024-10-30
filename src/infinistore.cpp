@@ -105,7 +105,7 @@ Client::~Client() {
 }
 typedef struct Client client_t;
 
-void do_send(client_t *client, void *buf, size_t size);
+void send_resp(client_t *client, int return_code, void *buf, size_t size);
 
 typedef struct {
     client_t *client;
@@ -176,14 +176,16 @@ int read_cache(client_t *client, local_meta_t &meta) {
         if (kv_map.count(block.key) == 0) {
             std::cout << "Key not found: " << block.key << std::endl;
             CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
-            return KEY_NOT_FOUND;
+            send_resp(client, KEY_NOT_FOUND, NULL, 0);
+            return 0;
         }
 
         // key found
         // std::cout << "Key found: " << block.key << std::endl;
         void *h_src = kv_map[block.key].ptr;
         if (h_src == NULL) {
-            return KEY_NOT_FOUND;
+            send_resp(client, KEY_NOT_FOUND, NULL, 0);
+            return 0;
         }
         // push the host cpu data to local device
         CHECK_CUDA(cudaMemcpyAsync((char *)d_ptr + block.offset, h_src, meta.block_size,
@@ -197,8 +199,7 @@ int read_cache(client_t *client, local_meta_t &meta) {
     req->data = (void *)wqueue_data;
     uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);
 
-    int return_code = TASK_ACCEPTED;
-    do_send(client, &return_code, RETURN_CODE_SIZE);
+    send_resp(client, TASK_ACCEPTED, NULL, 0);
     reset_client_read_state(client);
     return 0;
 }
@@ -233,7 +234,7 @@ int write_cache(client_t *client, local_meta_t &meta) {
     uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);
 
     int return_code = TASK_ACCEPTED;
-    do_send(client, &return_code, RETURN_CODE_SIZE);
+    send_resp(client, TASK_ACCEPTED, NULL, 0);
 
     reset_client_read_state(client);
     return 0;
@@ -283,80 +284,80 @@ int rdma_exchange(client_t *client) {
     INFO("do rdma exchange...");
 
     int ret;
-    // RDMA setup if not already done
-    if (!client->qp) {
-        client->cq = ibv_create_cq(ib_ctx, MAX_WR * 2, NULL, NULL, 0);
-        if (!client->cq) {
-            ERROR("Failed to create CQ");
-            return SYSTEM_ERROR;
-        }
 
-        // Create Queue Pair
-        struct ibv_qp_init_attr qp_init_attr = {};
-        qp_init_attr.send_cq = client->cq;
-        qp_init_attr.recv_cq = client->cq;
-        qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
-        qp_init_attr.cap.max_send_wr = MAX_WR;
-        qp_init_attr.cap.max_recv_wr = MAX_WR;
-        qp_init_attr.cap.max_send_sge = 1;
-        qp_init_attr.cap.max_recv_sge = 1;
-
-        client->qp = ibv_create_qp(pd, &qp_init_attr);
-        if (!client->qp) {
-            ERROR("Failed to create QP");
-            return SYSTEM_ERROR;
-        }
-        // Modify QP to INIT state
-        struct ibv_qp_attr attr = {};
-        attr.qp_state = IBV_QPS_INIT;
-        attr.port_num = 1;
-        attr.pkey_index = 0;
-        attr.qp_access_flags =
-            IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE;
-
-        int flags = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
-
-        ret = ibv_modify_qp(client->qp, &attr, flags);
-        if (ret) {
-            ERROR("Failed to modify QP to INIT");
-            return SYSTEM_ERROR;
-        }
-
-        // Get local connection information
-        struct ibv_port_attr port_attr;
-        if (ibv_query_port(ib_ctx, 1, &port_attr)) {
-            ERROR("Failed to query port");
-            return SYSTEM_ERROR;
-        }
-
-        int gidx = ibv_find_sgid_type(ib_ctx, 1, IBV_GID_TYPE_ROCE_V2, AF_INET);
-        if (gidx < 0) {
-            ERROR("Failed to find GID");
-            return -1;
-        }
-
-        client->gidx = gidx;
-
-        union ibv_gid gid;
-        // get gid
-        if (ibv_query_gid(ib_ctx, 1, gidx, &gid)) {
-            ERROR("Failed to get GID");
-            return -1;
-        }
-
-        client->local_info.qpn = client->qp->qp_num;
-        client->local_info.psn = lrand48() & 0xffffff;
-        client->local_info.gid = gid;
-
-        INFO("gid index: {}", client->gidx);
-        print_rdma_conn_info(&client->local_info, false);
+    if (client->rdma_connected == true) {
+        ERROR("RDMA already connected");
+        return SYSTEM_ERROR;
     }
 
-    // Send server's RDMA connection info to client
+    // RDMA setup if not already done
+    client->cq = ibv_create_cq(ib_ctx, MAX_WR * 2, NULL, NULL, 0);
+    if (!client->cq) {
+        ERROR("Failed to create CQ");
+        return SYSTEM_ERROR;
+    }
 
-    do_send(client, &client->local_info, sizeof(client->local_info));
-    // Modify QP to RTR state
+    // Create Queue Pair
+    struct ibv_qp_init_attr qp_init_attr = {};
+    qp_init_attr.send_cq = client->cq;
+    qp_init_attr.recv_cq = client->cq;
+    qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
+    qp_init_attr.cap.max_send_wr = MAX_WR;
+    qp_init_attr.cap.max_recv_wr = MAX_WR;
+    qp_init_attr.cap.max_send_sge = 1;
+    qp_init_attr.cap.max_recv_sge = 1;
+
+    client->qp = ibv_create_qp(pd, &qp_init_attr);
+    if (!client->qp) {
+        ERROR("Failed to create QP");
+        return SYSTEM_ERROR;
+    }
+    // Modify QP to INIT state
     struct ibv_qp_attr attr = {};
+    attr.qp_state = IBV_QPS_INIT;
+    attr.port_num = 1;
+    attr.pkey_index = 0;
+    attr.qp_access_flags =
+        IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE;
+
+    int flags = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
+
+    ret = ibv_modify_qp(client->qp, &attr, flags);
+    if (ret) {
+        ERROR("Failed to modify QP to INIT");
+        return SYSTEM_ERROR;
+    }
+
+    // Get local connection information
+    struct ibv_port_attr port_attr;
+    if (ibv_query_port(ib_ctx, 1, &port_attr)) {
+        ERROR("Failed to query port");
+        return SYSTEM_ERROR;
+    }
+
+    int gidx = ibv_find_sgid_type(ib_ctx, 1, IBV_GID_TYPE_ROCE_V2, AF_INET);
+    if (gidx < 0) {
+        ERROR("Failed to find GID");
+        return -1;
+    }
+
+    client->gidx = gidx;
+
+    union ibv_gid gid;
+    // get gid
+    if (ibv_query_gid(ib_ctx, 1, gidx, &gid)) {
+        ERROR("Failed to get GID");
+        return -1;
+    }
+
+    client->local_info.qpn = client->qp->qp_num;
+    client->local_info.psn = lrand48() & 0xffffff;
+    client->local_info.gid = gid;
+
+    INFO("gid index: {}", client->gidx);
+    print_rdma_conn_info(&client->local_info, false);
+
+    // Modify QP to RTR state
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTR;
     attr.path_mtu = IBV_MTU_1024;  // FIXME: hard coded
@@ -374,8 +375,8 @@ int rdma_exchange(client_t *client) {
     attr.ah_attr.grh.sgid_index = client->gidx;
     attr.ah_attr.grh.hop_limit = 1;
 
-    int flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
-                IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
+    flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
+            IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
 
     ret = ibv_modify_qp(client->qp, &attr, flags);
     if (ret) {
@@ -403,21 +404,30 @@ int rdma_exchange(client_t *client) {
     INFO("RDMA exchange done");
     client->rdma_connected = true;
 
+    // Send server's RDMA connection info to client
+    send_resp(client, FINISH, &client->local_info, sizeof(client->local_info));
     reset_client_read_state(client);
     return 0;
 }
 
-void do_send(client_t *client, void *buf, size_t size) {
+// send_resp send fixed size response to client.
+void send_resp(client_t *client, int return_code, void *buf, size_t size) {
+    if (size > 0) {
+        assert(buf != NULL);
+    }
     uv_write_t *write_req = (uv_write_t *)malloc(sizeof(uv_write_t));
-    client->send_buffer = (char *)realloc(client->send_buffer, size);
-    memcpy(client->send_buffer, buf, size);
+
+    client->send_buffer = (char *)realloc(client->send_buffer, size + RETURN_CODE_SIZE);
+
+    memcpy(client->send_buffer, &return_code, RETURN_CODE_SIZE);
+    memcpy(client->send_buffer + RETURN_CODE_SIZE, buf, size);
     write_req->data = client;
-    uv_buf_t wbuf = uv_buf_init(client->send_buffer, size);
+    uv_buf_t wbuf = uv_buf_init(client->send_buffer, size + RETURN_CODE_SIZE);
     uv_write(write_req, (uv_stream_t *)client->handle, &wbuf, 1, on_write);
 }
 
 int sync_stream(client_t *client) {
-    do_send(client, &client->remain, RETURN_CODE_SIZE);
+    send_resp(client, FINISH, &client->remain, sizeof(client->remain));
     // Reset client state
     reset_client_read_state(client);
     return 0;
@@ -425,7 +435,7 @@ int sync_stream(client_t *client) {
 
 int check_key(client_t *client, std::string &key_to_check) {
     int ret = kv_map.count(key_to_check) ? 0 : 1;
-    do_send(client, &ret, RETURN_CODE_SIZE);
+    send_resp(client, FINISH, &ret, sizeof(ret));
     reset_client_read_state(client);
     return 0;
 }
@@ -442,7 +452,7 @@ int get_match_last_index(client_t *client, keys_t &keys_meta) {
         }
     }
     left--;
-    do_send(client, &left, RETURN_CODE_SIZE);
+    send_resp(client, FINISH, &left, sizeof(left));
     reset_client_read_state(client);
     return 0;
 }
@@ -471,21 +481,22 @@ int rdma_read(client_t *client, remote_meta_request &remote_meta_req) {
     }
     // send the response
 
-    resp.error_code = error_code;
     if (!serialize(resp, out)) {
         ERROR("Failed to serialize response");
         return SYSTEM_ERROR;
     }
-    client->send_buffer = (char *)realloc(client->send_buffer, out.size() + RETURN_CODE_SIZE);
 
     int size = out.size();
-    memcpy(client->send_buffer, &size, RETURN_CODE_SIZE);
-    memcpy(client->send_buffer + RETURN_CODE_SIZE, out.c_str(), out.size());
-    uv_buf_t wbuf = uv_buf_init(client->send_buffer, out.size() + RETURN_CODE_SIZE);
+    client->send_buffer =
+        (char *)realloc(client->send_buffer, out.size() + RETURN_CODE_SIZE + sizeof(size));
+
+    memcpy(client->send_buffer, &error_code, RETURN_CODE_SIZE);
+    memcpy(client->send_buffer + RETURN_CODE_SIZE, &size, sizeof(size));
+    memcpy(client->send_buffer + +RETURN_CODE_SIZE + sizeof(size), out.c_str(), out.size());
+    uv_buf_t wbuf = uv_buf_init(client->send_buffer, out.size() + RETURN_CODE_SIZE + sizeof(size));
     write_req->data = client;
     uv_write(write_req, (uv_stream_t *)client->handle, &wbuf, 1, on_write);
 
-    INFO("send response: size:{}", size);
     reset_client_read_state(client);
     return 0;
 }
@@ -517,22 +528,22 @@ int rdma_write(client_t *client, remote_meta_request &remote_meta_req) {
         resp.blocks.push_back({.rkey = mm->get_rkey(pool_idx), .remote_addr = (uintptr_t)h_dst});
     }
 
-    resp.error_code = error_code;
-    INFO("response code {}", error_code);
-
     if (!serialize(resp, out)) {
         ERROR("Failed to serialize response");
-        return SYSTEM_ERROR;
+        return -1;
     }
-    client->send_buffer = (char *)realloc(client->send_buffer, out.size() + RETURN_CODE_SIZE);
 
     int size = out.size();
-    memcpy(client->send_buffer, &size, RETURN_CODE_SIZE);
-    memcpy(client->send_buffer + RETURN_CODE_SIZE, out.c_str(), out.size());
-    uv_buf_t wbuf = uv_buf_init(client->send_buffer, out.size() + RETURN_CODE_SIZE);
+    client->send_buffer =
+        (char *)realloc(client->send_buffer, out.size() + sizeof(error_code) + sizeof(size));
+
+    memcpy(client->send_buffer, &error_code, RETURN_CODE_SIZE);
+    memcpy(client->send_buffer + RETURN_CODE_SIZE, &size, sizeof(size));
+    memcpy(client->send_buffer + +RETURN_CODE_SIZE + sizeof(size), out.c_str(), out.size());
+    uv_buf_t wbuf = uv_buf_init(client->send_buffer, out.size() + RETURN_CODE_SIZE + sizeof(size));
     write_req->data = client;
     uv_write(write_req, (uv_stream_t *)client->handle, &wbuf, 1, on_write);
-    DEBUG("send response: size:{}", size);
+
     reset_client_read_state(client);
     return 0;
 }
@@ -543,6 +554,8 @@ int rdma_write(client_t *client, remote_meta_request &remote_meta_req) {
 void handle_request(uv_stream_t *stream, client_t *client) {
     auto start = std::chrono::high_resolution_clock::now();
     int error_code = 0;
+    int op = client->header.op;
+    // if error_code is not 0, close the connection
     switch (client->header.op) {
         case OP_RDMA_WRITE: {
             remote_meta_request remote_meta_req;
@@ -611,17 +624,19 @@ void handle_request(uv_stream_t *stream, client_t *client) {
             break;
         }
         default:
+            ERROR("Invalid request");
             error_code = INVALID_REQ;
             break;
     }
 
     if (error_code != 0) {
-        uv_close((uv_handle_t *)stream, on_close);
+        send_resp(client, error_code, NULL, 0);
+        reset_client_read_state(client);
     }
 
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> elapsed = end - start;
-    INFO("handle request {} runtime: {} ms", client->header.op, elapsed.count());
+    INFO("handle request {} runtime: {} ms", op_name(op), elapsed.count());
 }
 
 void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
@@ -643,8 +658,8 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                 client->bytes_read += to_copy;
                 offset += to_copy;
                 if (client->bytes_read == FIXED_HEADER_SIZE) {
-                    INFO("HEADER: op: {}, body_size :{}", client->header.op,
-                         (unsigned int)client->header.body_size);
+                    DEBUG("HEADER: op: {}, body_size :{}", client->header.op,
+                          (unsigned int)client->header.body_size);
                     if (client->header.op == OP_R || client->header.op == OP_W ||
                         client->header.op == OP_CHECK_EXIST ||
                         client->header.op == OP_GET_MATCH_LAST_IDX ||
