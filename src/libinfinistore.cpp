@@ -650,7 +650,7 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
     struct ibv_send_wr wr[cnt], *bad_wr = nullptr;
     struct ibv_sge sge[cnt];
     // CQ event generated every cqe_rate WRs
-    int cqe_rate = 1, cq_num = 0;
+    int cqe_rate = 10, cq_num = 0;
     for (int i = 0; i < cnt; i++) {
         IBVMemoryRegion *request_mr = NULL;
         if (conn->limited_bar1) {
@@ -677,7 +677,7 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
         wr[i].opcode = op == OP_RDMA_READ ? IBV_WR_RDMA_READ : IBV_WR_RDMA_WRITE;
         wr[i].sg_list = &sge[i];
         wr[i].num_sge = 1;
-        // wr[i].send_flags = IBV_SEND_SIGNALED;
+        wr[i].send_flags = 0;
         wr[i].wr.rdma.remote_addr = response.blocks[i].remote_addr;  // Obtain from server
         wr[i].wr.rdma.rkey = response.blocks[i].rkey;
         wr[i].next = i < cnt - 1 ? &wr[i + 1] : nullptr;
@@ -686,7 +686,6 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
             cq_num++;
         }
     }
-    // wr[cnt-1].send_flags = IBV_SEND_SIGNALED;
 
     int ret = ibv_post_send(conn->qp, wr, &bad_wr);
     if (ret == EINVAL) {
@@ -701,7 +700,7 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
         ERROR("Invalid value provided in qp");
         return -1;
     }
-    else {
+    else if (ret != 0) {
         ERROR("Failed to perform RDMA operation, ret#: {}", ret);
         return -1;        
     }
