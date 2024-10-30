@@ -173,6 +173,7 @@ int init_rdma_resources(connection_t *conn, const char *dev_name) {
     qp_init_attr.send_cq = conn->cq;
     qp_init_attr.recv_cq = conn->cq;
     qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
+    qp_init_attr.sq_sig_all = 0;
     qp_init_attr.cap.max_send_wr = MAX_WR;
     qp_init_attr.cap.max_recv_wr = MAX_WR;
     qp_init_attr.cap.max_send_sge = 1;
@@ -471,7 +472,6 @@ int check_exist(connection_t *conn, std::string key) {
 }
 
 int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
-    INFO("get_match_last_index");
     assert(conn != NULL);
 
     keys_t meta = {
@@ -649,6 +649,8 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
     int cnt = response.blocks.size();
     struct ibv_send_wr wr[cnt], *bad_wr = nullptr;
     struct ibv_sge sge[cnt];
+    // CQ event generated every cqe_rate WRs
+    int cqe_rate = 1, cq_num = 0;
     for (int i = 0; i < cnt; i++) {
         IBVMemoryRegion *request_mr = NULL;
         if (conn->limited_bar1) {
@@ -675,19 +677,36 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
         wr[i].opcode = op == OP_RDMA_READ ? IBV_WR_RDMA_READ : IBV_WR_RDMA_WRITE;
         wr[i].sg_list = &sge[i];
         wr[i].num_sge = 1;
-        wr[i].send_flags = IBV_SEND_SIGNALED;
+        // wr[i].send_flags = IBV_SEND_SIGNALED;
         wr[i].wr.rdma.remote_addr = response.blocks[i].remote_addr;  // Obtain from server
         wr[i].wr.rdma.rkey = response.blocks[i].rkey;
         wr[i].next = i < cnt - 1 ? &wr[i + 1] : nullptr;
+        if (i % cqe_rate == 0 || i == cnt - 1) {
+            wr[i].send_flags = IBV_SEND_SIGNALED;
+            cq_num++;
+        }
     }
+    // wr[cnt-1].send_flags = IBV_SEND_SIGNALED;
 
     int ret = ibv_post_send(conn->qp, wr, &bad_wr);
-    if (ret) {
-        ERROR("Failed to perform RDMA operation");
+    if (ret == EINVAL) {
+        ERROR("Invalid value provided in wr");
         return -1;
     }
+    else if (ret == ENOMEM) {
+        ERROR("Send Queue is full or not enough resources to complete this operation");
+        return -1;
+    }
+    else if (ret == EFAULT) {
+        ERROR("Invalid value provided in qp");
+        return -1;
+    }
+    else {
+        ERROR("Failed to perform RDMA operation, ret#: {}", ret);
+        return -1;        
+    }
 
-    conn->rdma_inflight_count += cnt;
+    conn->rdma_inflight_count+=cq_num;
 
     return 0;
 }
