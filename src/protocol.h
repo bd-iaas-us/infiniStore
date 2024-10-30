@@ -10,12 +10,43 @@
 #include <vector>
 
 /*
+Protocol:
+
+REQUEST:
++-------------------+
+| MAGIC(4 bytes)    |
++-------------------+
+| OP(1 byte)        |
++-------------------+
+
+and then
+
++-------------------+
+|Fixed Size Payload |
++-------------------+
+OR
++---------------------+
+|Variable Size Payload|
++---------------------+
+
+
+
+RESPONSE:
 
 Error code:
 +--------------------+
 | ERROR_CODE(4 bytes)|
 +--------------------+
 
+and then
+
++-------------------+
+|Fixed Size Payload |
++-------------------+
+OR
++---------------------+
+|Variable Size Payload|
++---------------------+
 */
 
 #define MAX_WR 8192
@@ -32,6 +63,9 @@ Error code:
 #define OP_CHECK_EXIST 'C'
 #define OP_GET_MATCH_LAST_IDX 'M'
 #define OP_SIZE 1
+// please add op name in protocol.cpp
+
+std::string op_name(char op);
 
 // error code: int
 #define INVALID_REQ 400
@@ -113,8 +147,7 @@ typedef struct {
 
 typedef struct {
     std::vector<remote_block_t> blocks;
-    int error_code;
-    MSGPACK_DEFINE(blocks, error_code)
+    MSGPACK_DEFINE(blocks)
 } remote_meta_response;  // rdma read/write response
 
 // only RoCEv2 is supported for now.

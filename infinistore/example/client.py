@@ -38,7 +38,7 @@ if __name__ == "__main__":
     config = ClientConfig(
         host_addr="127.0.0.1",
         service_port=22345,
-        log_level="warning",
+        log_level="debug",
         connection_type=infinistore.TYPE_RDMA,
     )
     rdma_conn = InfinityConnection(config)
