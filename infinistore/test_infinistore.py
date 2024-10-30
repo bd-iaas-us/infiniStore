@@ -182,3 +182,33 @@ def test_read_write_interleave_cache(server, limited_bar1):
     conn.read_cache(dst, [(key2, 0)], 1024)
     conn.sync()
     assert torch.equal(src[-1024:], dst)
+
+
+def test_key_check(server):
+    config = infinistore.ClientConfig(
+        host_addr="127.0.0.1",
+        service_port=22345,
+        dev_name="mlx5_0",
+        connection_type=infinistore.TYPE_RDMA,
+    )
+    conn = infinistore.InfinityConnection(config)
+    conn.connect()
+    key = generate_random_string(5)
+    src = torch.randn(4096, device="cuda", dtype=torch.float32)
+    conn.write_cache(src, [(key, 0)], 4096)
+    conn.sync()
+    assert conn.check_exist(key)
+
+
+def test_get_match_last_index(server):
+    config = infinistore.ClientConfig(
+        host_addr="127.0.0.1",
+        service_port=22345,
+        dev_name="mlx5_0",
+        connection_type=infinistore.TYPE_RDMA,
+    )
+    conn = infinistore.InfinityConnection(config)
+    conn.connect()
+    src = torch.randn(4096, device="cuda", dtype=torch.float32)
+    conn.write_cache(src, [("key1", 0), ("key2", 1024), ("key3", 2048)], 1024)
+    assert conn.get_match_last_index(["A", "B", "C", "key1", "D", "E"]) == 3
