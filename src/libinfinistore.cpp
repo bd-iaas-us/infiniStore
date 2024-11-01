@@ -227,6 +227,12 @@ int modify_qp_to_init(struct ibv_qp *qp) {
 int sync_rdma(connection_t *conn) {
     std::unique_lock<std::mutex> lock(conn->mutex);
     conn->cv.wait(lock, [&conn] { return conn->rdma_inflight_count == 0; });
+    if (conn->limited_bar1 == false) {
+        for (auto it = conn->local_mr.begin(); it != conn->local_mr.end(); it++) {
+            it->second->release();
+        }
+        conn->local_mr.clear();
+    }
     return 0;
 }
 
