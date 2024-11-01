@@ -817,7 +817,7 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
             request_mr = search_mr_from_ptr(local_mr, (char *)base_ptr + blocks[i].offset);
         }
         else {
-            request_mr = search_mr_from_ptr(conn->local_mr, (char *)base_ptr + blocks[i].offset);
+            request_mr = search_mr_from_ptr(conn->local_mr, base_ptr);
         }
         int ret;
         if (op == OP_RDMA_WRITE) {
