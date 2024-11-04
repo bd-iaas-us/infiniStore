@@ -261,7 +261,7 @@ int init_rdma_context(const char *dev_name) {
     }
 
     if (!ib_ctx) {
-        WARN(
+        INFO(
             "Can't find or failed to open the specified device, try to open "
             "the default device {}",
             (char *)ibv_get_device_name(dev_list[0]));

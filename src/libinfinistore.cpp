@@ -115,7 +115,7 @@ int init_rdma_resources(connection_t *conn, const char *dev_name) {
     }
 
     if (!conn->ib_ctx) {
-        WARN(
+        INFO(
             "Can't find or failed to open the specified device, try to open "
             "the default device {}",
             (char *)ibv_get_device_name(dev_list[0]));
@@ -202,7 +202,6 @@ int init_rdma_resources(connection_t *conn, const char *dev_name) {
     conn->local_info.gid = gid;
     DEBUG("gid index: {}", gidx);
     print_rdma_conn_info(&conn->local_info, false);
-    print_rdma_conn_info(&conn->remote_info, true);
     return 0;
 }
 
@@ -363,7 +362,6 @@ void cq_handler(connection_t *conn) {
                         conn->rdma_inflight_count--;
                         if (conn->limited_bar1) {
                             IBVMemoryRegion *mr = (IBVMemoryRegion *)wc[i].wr_id;
-                            DEBUG("deregister mr: {}, PTR", (void *)mr);
                             conn->rdma_inflight_mr_size -= mr->release();
                         }
                     }
@@ -397,6 +395,8 @@ int setup_rdma(connection_t *conn, client_config_t config) {
         delete conn;
         return -1;
     }
+
+    print_rdma_conn_info(&conn->remote_info, true);
 
     // Modify QP to RTR state
     if (modify_qp_to_rtr(conn)) {

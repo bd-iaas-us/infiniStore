@@ -240,6 +240,7 @@ class InfinityConnection:
         self.rdma_connected = False
         self.config = config
 
+        Logger.set_log_level(config.log_level)
         mem_cap = _get_bar1_memory_cap()
 
         avail_bar1 = mem_cap["bar1_free"] - mem_cap["bar1_used"]
