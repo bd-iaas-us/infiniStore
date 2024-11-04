@@ -70,7 +70,7 @@ std::string human_readable_gid(rdma_conn_info_t* info) {
     else {
         // Convert the GID to a standard IPv6 address string
         for (int i = 0; i < 16; ++i) {
-            gid_str += fmt::format("{:02x}", info->gid.raw[i]);
+            gid_str += fmt::format("{:02x}", static_cast<uint8_t>(info->gid.raw[i]));
             if (i % 2 == 1 && i != 15) {
                 gid_str += ":";
             }

@@ -136,7 +136,10 @@ typedef struct {
 typedef struct {
     std::vector<std::string> keys;
     int block_size;
-    MSGPACK_DEFINE(keys, block_size)
+    uint16_t rkey;
+    std::vector<uintptr_t> remote_addrs;
+    bool is_write;
+    MSGPACK_DEFINE(keys, block_size, rkey, remote_addrs, is_write)
 } remote_meta_request;  // rdma read/write request
 
 typedef struct {
@@ -163,6 +166,23 @@ bool serialize(const T& data, std::string& out) {
         msgpack::sbuffer sbuf;
         msgpack::pack(sbuf, data);
         out.assign(sbuf.data(), sbuf.size());
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+template <typename T>
+bool serialize_to_fixed(const T& data, char* buffer, size_t buffer_size, size_t& packed_size) {
+    try {
+        msgpack::sbuffer sbuffer;
+        msgpack::packer<msgpack::sbuffer> packer(sbuffer);
+        packer.pack(data);
+        packed_size = sbuffer.size();
+        if (packed_size > buffer_size) {
+            return false;
+        }
+        std::memcpy(buffer, sbuffer.data(), packed_size);
         return true;
     } catch (const std::exception&) {
         return false;

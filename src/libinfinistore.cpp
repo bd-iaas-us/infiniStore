@@ -36,7 +36,7 @@ Connection::~Connection() {
 
         struct ibv_send_wr send_wr;
         memset(&send_wr, 0, sizeof(send_wr));
-        send_wr.wr_id = (uintptr_t)this;
+        send_wr.wr_id = 0;
         send_wr.sg_list = &sge;
         send_wr.num_sge = 1;
         send_wr.opcode = IBV_WR_SEND;
@@ -226,12 +226,6 @@ int modify_qp_to_init(struct ibv_qp *qp) {
 int sync_rdma(connection_t *conn) {
     std::unique_lock<std::mutex> lock(conn->mutex);
     conn->cv.wait(lock, [&conn] { return conn->rdma_inflight_count == 0; });
-    if (conn->limited_bar1 == false) {
-        for (auto it = conn->local_mr.begin(); it != conn->local_mr.end(); it++) {
-            it->second->release();
-        }
-        conn->local_mr.clear();
-    }
     return 0;
 }
 
@@ -352,18 +346,18 @@ void cq_handler(connection_t *conn) {
                     if (wc[i].status != IBV_WC_SUCCESS) {
                         // only fake wr will use IBV_WC_SEND
                         // we use it to wake up cq thread and exit
-                        if (wc[i].opcode == IBV_WC_SEND) {
+                        if (wc[i].opcode == IBV_WC_SEND && wc[i].wr_id == 0) {
+                            INFO("close...");
                             return;
                         }
                         ERROR("Failed status: {}", ibv_wc_status_str(wc[i].status));
                         return;
                     }
-                    if (wc[i].opcode == IBV_WC_RDMA_READ || wc[i].opcode == IBV_WC_RDMA_WRITE) {
+                    if (wc[i].opcode == IBV_WC_SEND) {
                         conn->rdma_inflight_count--;
-                        if (conn->limited_bar1) {
-                            IBVMemoryRegion *mr = (IBVMemoryRegion *)wc[i].wr_id;
-                            conn->rdma_inflight_mr_size -= mr->release();
-                        }
+                        IBVMemoryRegion *mr = (IBVMemoryRegion *)wc[i].wr_id;
+                        mr->release();
+                        INFO("Send completed successfully {}, ", (uintptr_t)wc[i].wr_id);
                     }
                     else {
                         ERROR("Unexpected opcode: {}", (int)wc[i].opcode);
@@ -407,6 +401,14 @@ int setup_rdma(connection_t *conn, client_config_t config) {
 
     if (modify_qp_to_rts(conn)) {
         ERROR("Failed to modify QP to RTS");
+        delete conn;
+        return -1;
+    }
+
+    conn->send_buffer = (void *)malloc(64 << 10);
+    conn->send_mr = ibv_reg_mr(conn->pd, conn->send_buffer, 64 << 10, IBV_ACCESS_LOCAL_WRITE);
+    if (!conn->send_mr) {
+        ERROR("Failed to register send MR");
         delete conn;
         return -1;
     }
@@ -671,180 +673,58 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
     assert(op == OP_RDMA_READ || op == OP_RDMA_WRITE);
     assert(base_ptr != NULL);
 
-    std::vector<std::pair<uintptr_t, uintptr_t>> mr_blocks;
-
-    // if limited_bar1, we use temperary mrs
-    std::map<uintptr_t, IBVMemoryRegion *> local_mr;
-
-    if (conn->limited_bar1) {
-        // compare already registered blocks with incoming blocks
-
-        if (conn->rdma_inflight_mr_size + blocks.size() * block_size >
-            conn->bar1_mem_in_mib * 1024 * 1024) {
-            ERROR(
-                "Not enough BAR1 memory rdma_inflight_mr_size {} + incoming "
-                "size {} > bar1 size {}",
-                conn->rdma_inflight_mr_size.load(), blocks.size() * block_size,
-                conn->bar1_mem_in_mib * 1024 * 1024);
-            return -1;
-        }
-
-        std::pair<unsigned long, unsigned long> cur_block = {0, 0};
-        size_t cur_end = -1;
-        // sort blocks by offset
-        // TODO:usualy blocks is already sorted, we can optimize this.
-        std::sort(blocks.begin(), blocks.end(),
-                  [](const block_t &a, const block_t &b) { return a.offset < b.offset; });
-
-        for (auto &block : blocks) {
-            if (block.offset == cur_end) {
-                cur_block.second += block_size;
-            }
-            else {
-                if (cur_block.second != 0) {
-                    mr_blocks.push_back(cur_block);
-                }
-                cur_block.first = block.offset;
-                cur_block.second = block.offset + block_size;
-                DEBUG("cur_block: {}, {}", cur_block.first, cur_block.second);
-            }
-            cur_end = cur_block.second;
-        }
-        if (cur_block.second != 0) {
-            mr_blocks.push_back(cur_block);
-        }
-
-        DEBUG("mr_blocks size: {}, blocks size: {}", mr_blocks.size(), blocks.size());
-
-        // register mr for each block, and save it to temperary local_mr
-        for (auto &mr_block : mr_blocks) {
-            void *ptr = base_ptr + mr_block.first;
-            IBVMemoryRegion *mr =
-                new IBVMemoryRegion(conn->pd, ptr, mr_block.second - mr_block.first);
-            local_mr[(uintptr_t)ptr] = mr;
-            conn->rdma_inflight_mr_size += mr->get_mr()->length;
-        }
-    }
-    else {
-        // A10G or V100 has enough bar1 memory, so we can register the whole
-        // memory region
-        if (conn->local_mr.find((uintptr_t)base_ptr) == conn->local_mr.end()) {
-            IBVMemoryRegion *mr = new IBVMemoryRegion(conn->pd, base_ptr, ptr_region_size);
-            conn->local_mr[(uintptr_t)base_ptr] = mr;
-            mr->add_ref();
-        }
-        else {
-            // ptr has been registered
-        }
-    }
-
     std::vector<std::string> keys;
+    std::vector<uintptr_t> remote_addrs;
     for (auto &block : blocks) {
         keys.push_back(block.key);
+        remote_addrs.push_back((uintptr_t)(base_ptr + block.offset));
+    }
+
+    // register memory region
+    IBVMemoryRegion *mr = new IBVMemoryRegion(conn->pd, base_ptr, ptr_region_size);
+    if (!mr) {
+        ERROR("Failed to register memory region");
+        return -1;
     }
     remote_meta_request request = {
         .keys = keys,
         .block_size = block_size,
+        .rkey = mr->get_mr()->lkey,
+        .remote_addrs = remote_addrs,
+        .is_write = (op == OP_RDMA_WRITE),
     };
-
-    std::string serialized_data;
-    if (!serialize(request, serialized_data)) {
-        ERROR("Failed to serialize remote meta request");
-        return -1;
-    }
-
-    header_t header = {
-        .magic = MAGIC,
-        .op = op,
-        .body_size = static_cast<unsigned int>(serialized_data.size()),
-    };
-
-    struct iovec iov[2];
-    struct msghdr msg;
-    iov[0].iov_base = &header;
-    iov[0].iov_len = FIXED_HEADER_SIZE;
-    iov[1].iov_base = const_cast<void *>(static_cast<const void *>(serialized_data.data()));
-    iov[1].iov_len = serialized_data.size();
-
-    memset(&msg, 0, sizeof(msg));
-    msg.msg_iov = iov;
-    msg.msg_iovlen = 2;
-
-    if (sendmsg(conn->sock, &msg, 0) < 0) {
-        ERROR("Failed to send header and body");
-        return -1;
-    }
-
-    int return_code = -1;
-    if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
-        ERROR("Failed to receive header");
-        return -1;
-    }
-
-    if (return_code != TASK_ACCEPTED) {
-        ERROR("Remote operation failed {}", return_code);
-        return -1;
-    }
-
-    remote_meta_response response;
-    int return_size;
-    if (recv(conn->sock, &return_size, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
-        ERROR("Failed to receive return size");
-        return -1;
-    }
-    char response_data[return_size];
-    if (recv(conn->sock, &response_data, return_size, MSG_WAITALL) < 0) {
-        ERROR("Failed to receive response data");
-        return -1;
-    }
-
-    if (!deserialize(response_data, return_size, response)) {
-        ERROR("deserialize failed");
-        return -1;
-    }
-
-    if (response.blocks.size() != blocks.size()) {
-        ERROR("Invalid response");
-        return -1;
-    }
+    size_t size = 0;
+    serialize_to_fixed(request, (char *)conn->send_buffer, 64 << 10, size);
+    INFO("serialized size: {}", size);
 
     // if incoming blocks plus current inflight blocks exceed MAX_WR, wait
     std::unique_lock<std::mutex> lock(conn->mutex);
     conn->cv.wait(lock,
                   [&conn, &blocks] { return conn->rdma_inflight_count + blocks.size() <= MAX_WR; });
 
-    for (int i = 0; i < response.blocks.size(); i++) {
-        DEBUG("remote response: addr: {}, rkey: {}", response.blocks[i].remote_addr,
-              response.blocks[i].rkey);
+    // send RDMA request
+    struct ibv_sge sge = {0};
+    sge.addr = (uintptr_t)conn->send_buffer;
+    sge.length = size;
+    sge.lkey = conn->send_mr->lkey;
 
-        // request_mr could be temperary mr or registered mr
-        IBVMemoryRegion *request_mr = NULL;
-        if (conn->limited_bar1) {
-            request_mr = search_mr_from_ptr(local_mr, (char *)base_ptr + blocks[i].offset);
-        }
-        else {
-            request_mr = search_mr_from_ptr(conn->local_mr, base_ptr);
-        }
-        int ret;
-        if (op == OP_RDMA_WRITE) {
-            ret = perform_rdma_write(conn, (char *)base_ptr + blocks[i].offset, block_size,
-                                     response.blocks[i].remote_addr, block_size,
-                                     response.blocks[i].rkey, request_mr);
-        }
-        else if (op == OP_RDMA_READ) {
-            ret = perform_rdma_read(conn, response.blocks[i].remote_addr, block_size,
-                                    (char *)base_ptr + blocks[i].offset, block_size,
-                                    response.blocks[i].rkey, request_mr);
-        }
-        else {
-            ERROR("Invalid operation");
-            return -1;
-        }
-        if (ret < 0) {
-            ERROR("Failed to perform RDMA operation");
-            return -1;
-        }
+    struct ibv_send_wr wr = {0};
+    struct ibv_send_wr *bad_wr = NULL;
+    struct ibv_wc wc;
+    // FIXME:
+    wr.wr_id = (uintptr_t)mr;
+    mr->add_ref();
+    wr.opcode = IBV_WR_SEND;
+    wr.sg_list = &sge;
+    wr.num_sge = 1;
+    wr.send_flags = IBV_SEND_SIGNALED;
+
+    int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
+    if (ret) {
+        ERROR("Failed to post RDMA send :{}", strerror(ret));
+        return -1;
     }
+    conn->rdma_inflight_count++;
 
     return 0;
 }

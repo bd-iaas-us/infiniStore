@@ -39,6 +39,7 @@ uv_tcp_t server;
 // global ibv context
 struct ibv_context *ib_ctx;
 struct ibv_pd *pd;
+struct ibv_comp_channel *comp_channel;
 MM *mm;
 
 int get_kvmap_len() { return kv_map.size(); }
@@ -56,6 +57,7 @@ struct Client {
     header_t header;
 
     char *recv_buffer = NULL;
+    struct ibv_mr *recv_mr = NULL;
 
     // TODO: remove send_buffer
     char *send_buffer = NULL;
@@ -72,13 +74,77 @@ struct Client {
 
     int remain;
 
+    uv_poll_t poll_handle;
+
     Client() = default;
     Client(const Client &) = delete;
+    void cq_poll_handle(uv_poll_t *handle, int status, int events);
+    int rdma_write(remote_meta_request &remote_meta_req);
+    int rdma_read(remote_meta_request &remote_meta_req);
+
     ~Client();
 };
 
+void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
+    INFO("Polling CQ");
+
+    // TODO: handle completion
+    if (status < 0) {
+        ERROR("Poll error: {}", uv_strerror(status));
+        return;
+    }
+    struct ibv_cq *cq;
+    void *cq_context;
+
+    if (ibv_get_cq_event(comp_channel, &cq, &cq_context) != 0) {
+        perror("Failed to get CQ event");
+        return;
+    }
+    ibv_ack_cq_events(cq, 1);
+
+    if (ibv_req_notify_cq(cq, 0) != 0) {
+        perror("Failed to request CQ notification");
+        return;
+    }
+    struct ibv_wc wc = {0};
+    while (ibv_poll_cq(cq, 1, &wc) > 0) {
+        if (wc.status == IBV_WC_SUCCESS) {
+            if (wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+                // TODO
+            }
+            else if (wc.opcode == IBV_WC_RECV) {
+                INFO("RDMA Send completed successfully, recved {}", wc.byte_len);
+                remote_meta_request request;
+                if (!deserialize(recv_buffer, wc.byte_len, request)) {
+                    ERROR("Failed to deserialize remote meta request");
+                    return;
+                }
+                INFO("Received remote meta request, #keys: {}", request.keys.size());
+                if (request.is_write) {
+                    INFO("RDMA write request, {}", request.keys[0]);
+                    // rdma_write(this, request);
+                }
+                else {
+                    // rdma_read(this, request);
+                }
+            }
+            else {
+                ERROR("Unexpected opcode: {}", wc.opcode);
+            }
+        }
+        else {
+            ERROR("CQ error: {}", ibv_wc_status_str(wc.status));
+        }
+    }
+}
+
 Client::~Client() {
     DEBUG("free client resources");
+
+    if (poll_handle.data) {
+        uv_poll_stop(&poll_handle);
+    }
+
     if (handle) {
         free(handle);
         handle = NULL;
@@ -103,8 +169,18 @@ Client::~Client() {
         INFO("QP destroyed");
     }
 }
-typedef struct Client client_t;
 
+int Client::rdma_read(remote_meta_request &remote_meta_req) {
+    INFO("do rdma read...");
+    return 0;
+}
+
+int Client::rdma_write(remote_meta_request &remote_meta_req) {
+    INFO("do rdma write...");
+    return 0;
+}
+
+typedef struct Client client_t;
 void send_resp(client_t *client, int return_code, void *buf, size_t size);
 
 typedef struct {
@@ -119,7 +195,7 @@ void reset_client_read_state(client_t *client) {
     memset(&client->header, 0, sizeof(header_t));
 
     // keep the recv_buffer as it is
-    memset(client->recv_buffer, 0, client->expected_bytes);
+    // memset(client->recv_buffer, 0, client->expected_bytes);
 }
 
 void on_close(uv_handle_t *handle) {
@@ -277,6 +353,12 @@ int init_rdma_context(const char *dev_name) {
         ERROR("Failed to allocate PD");
         return -1;
     }
+
+    comp_channel = ibv_create_comp_channel(ib_ctx);
+    if (!comp_channel) {
+        ERROR("Failed to create completion channel");
+        return -1;
+    }
     return 0;
 }
 
@@ -290,8 +372,9 @@ int rdma_exchange(client_t *client) {
         return SYSTEM_ERROR;
     }
 
+    assert(comp_channel != NULL);
     // RDMA setup if not already done
-    client->cq = ibv_create_cq(ib_ctx, MAX_WR * 2, NULL, NULL, 0);
+    client->cq = ibv_create_cq(ib_ctx, MAX_WR * 2, NULL, comp_channel, 1);
     if (!client->cq) {
         ERROR("Failed to create CQ");
         return SYSTEM_ERROR;
@@ -403,10 +486,50 @@ int rdma_exchange(client_t *client) {
     }
     INFO("RDMA exchange done");
     client->rdma_connected = true;
-
-    // Send server's RDMA connection info to client
     send_resp(client, FINISH, &client->local_info, sizeof(client->local_info));
     reset_client_read_state(client);
+
+    client->recv_buffer = (char *)realloc(client->recv_buffer, BUFFER_SIZE);
+    client->recv_mr = ibv_reg_mr(pd, client->recv_buffer, BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
+    if (!client->recv_mr) {
+        ERROR("Failed to register MR");
+        return SYSTEM_ERROR;
+    }
+
+    // ready to receive RDMA_SEND
+    struct ibv_sge sge = {0};
+    struct ibv_recv_wr rwr = {0};
+
+    struct ibv_recv_wr *bad_wr = NULL;
+
+    sge.addr = (uintptr_t)client->recv_buffer;
+    sge.length = BUFFER_SIZE;
+    sge.lkey = client->recv_mr->lkey;
+
+    rwr.wr_id = (uint64_t)client->recv_buffer;
+    rwr.next = NULL;
+    rwr.sg_list = &sge;
+    rwr.num_sge = 1;
+
+    if (ibv_post_recv(client->qp, &rwr, &bad_wr)) {
+        ERROR("Failed to post receive, {}");
+        return SYSTEM_ERROR;
+    }
+
+    if (ibv_req_notify_cq(client->cq, 0)) {
+        ERROR("Failed to request notify for CQ");
+        return -1;
+    }
+
+    uv_poll_init(loop, &client->poll_handle, comp_channel->fd);
+    client->poll_handle.data = client;
+    uv_poll_start(&client->poll_handle, UV_READABLE | UV_WRITABLE,
+                  [](uv_poll_t *handle, int status, int events) {
+                      client_t *client = static_cast<client_t *>(handle->data);
+                      client->cq_poll_handle(handle, status, events);
+                  });
+
+    // Send server's RDMA connection info to client
     return 0;
 }
 
@@ -501,52 +624,7 @@ int rdma_read(client_t *client, remote_meta_request &remote_meta_req) {
     return 0;
 }
 
-int rdma_write(client_t *client, remote_meta_request &remote_meta_req) {
-    INFO("do rdma write keys: {}, remote_block_size: {}", remote_meta_req.keys.size(),
-         remote_meta_req.block_size);
-    remote_meta_response resp;
-    uv_write_t *write_req = (uv_write_t *)malloc(sizeof(uv_write_t));
-    std::string out;
-    int error_code = TASK_ACCEPTED;
-
-    resp.blocks.reserve(remote_meta_req.keys.size());
-    for (std::string &key : remote_meta_req.keys) {
-        void *h_dst;
-        int pool_idx;
-        h_dst = mm->allocate(remote_meta_req.block_size, &pool_idx);
-        // FIXME: only one h_dst is sent
-        if (h_dst == NULL) {
-            ERROR("Failed to allocate host memory");
-            return SYSTEM_ERROR;
-        }
-        auto ptr = PTR{.ptr = h_dst, .size = remote_meta_req.block_size, .pool_idx = pool_idx};
-        // save to the map
-        kv_map[key] = ptr;
-        DEBUG("rkey: {}, local_addr: {}, size : {}", mm->get_rkey(pool_idx), (uintptr_t)h_dst,
-              remote_meta_req.block_size);
-
-        resp.blocks.push_back({.rkey = mm->get_rkey(pool_idx), .remote_addr = (uintptr_t)h_dst});
-    }
-
-    if (!serialize(resp, out)) {
-        ERROR("Failed to serialize response");
-        return -1;
-    }
-
-    int size = out.size();
-    client->send_buffer =
-        (char *)realloc(client->send_buffer, out.size() + sizeof(error_code) + sizeof(size));
-
-    memcpy(client->send_buffer, &error_code, RETURN_CODE_SIZE);
-    memcpy(client->send_buffer + RETURN_CODE_SIZE, &size, sizeof(size));
-    memcpy(client->send_buffer + +RETURN_CODE_SIZE + sizeof(size), out.c_str(), out.size());
-    uv_buf_t wbuf = uv_buf_init(client->send_buffer, out.size() + RETURN_CODE_SIZE + sizeof(size));
-    write_req->data = client;
-    uv_write(write_req, (uv_stream_t *)client->handle, &wbuf, 1, on_write);
-
-    reset_client_read_state(client);
-    return 0;
-}
+int rdma_write(client_t *client, remote_meta_request &remote_meta_req) {}
 
 // return value of handle_request:
 // if ret is less than 0, it is an system error, outer code will close the
@@ -557,26 +635,6 @@ void handle_request(uv_stream_t *stream, client_t *client) {
     int op = client->header.op;
     // if error_code is not 0, close the connection
     switch (client->header.op) {
-        case OP_RDMA_WRITE: {
-            remote_meta_request remote_meta_req;
-            if (!deserialize(client->recv_buffer, client->expected_bytes, remote_meta_req)) {
-                ERROR("Failed to deserialize remote meta");
-                error_code = SYSTEM_ERROR;
-                break;
-            }
-            error_code = rdma_write(client, remote_meta_req);
-            break;
-        }
-        case OP_RDMA_READ: {
-            remote_meta_request remote_meta_req;
-            if (!deserialize(client->recv_buffer, client->expected_bytes, remote_meta_req)) {
-                ERROR("Failed to deserialize remote meta");
-                error_code = SYSTEM_ERROR;
-                break;
-            }
-            error_code = rdma_read(client, remote_meta_req);
-            break;
-        }
         case OP_R: {
             local_meta_t local_meta;
 

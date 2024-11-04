@@ -69,6 +69,9 @@ struct Connection {
 
     std::map<uintptr_t, IBVMemoryRegion *> local_mr;
 
+    void *send_buffer = NULL;
+    struct ibv_mr *send_mr = NULL;
+
     struct ibv_comp_channel *comp_channel = NULL;
     std::future<void> cq_future;  // cq thread
     std::atomic<int> rdma_inflight_count{0};
