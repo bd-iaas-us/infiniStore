@@ -75,10 +75,24 @@ def parse_args():
     parser.add_argument(
         "--dev-name",
         required=False,
-        default="",
+        default="mlx5_1",
         help="Use IB device <dev> (default first device found)",
         type=str,
     )
+    parser.add_argument(
+        "--ib-port",
+        required=False,
+        type=int,
+        default=1,
+        help="use port <port> of IB device (default 1)",
+    )
+    parser.add_argument(
+        "--link-type",
+        required=False,
+        default="Ethernet",
+        help="IB or Ethernet, default Ethernet",
+        type=str,
+    )    
     return parser.parse_args()
 
 
@@ -90,6 +104,8 @@ def main():
         log_level=args.log_level,
         prealloc_size=args.prealloc_size,
         dev_name=args.dev_name,
+        ib_port=args.ib_port,
+        link_type=args.link_type,
     )
     config.verify()
     check_p2p_access()

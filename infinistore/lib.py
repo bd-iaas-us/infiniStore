@@ -73,6 +73,8 @@ class ClientConfig(_infinistore.ClientConfig):
         self.connection_type = kwargs.get("connection_type", None)
         self.host_addr = kwargs.get("host_addr", None)
         self.dev_name = kwargs.get("dev_name", "")
+        self.ib_port = kwargs.get("ib_port", 0)
+        self.link_type = kwargs.get("link_type", "")        
         self.service_port = kwargs.get("service_port", None)
         # get log from system env
         # if log level is not set in Config and system env is not set either, use warning as default
@@ -97,6 +99,10 @@ class ClientConfig(_infinistore.ClientConfig):
             raise Exception("Service port is 0")
         if self.log_level not in ["error", "debug", "info", "warning"]:
             raise Exception("log level should be error, debug, info or warning")
+        if self.ib_port < 1:
+            raise Exception("ib port of device should be greater than 0")
+        if self.link_type not in ["IB", "Ethernet"]:
+            raise Exception("link type should be IB or Ethernet")            
 
 
 class ServerConfig(_infinistore.ServerConfig):
@@ -106,6 +112,8 @@ class ServerConfig(_infinistore.ServerConfig):
         self.service_port = kwargs.get("service_port", 0)
         self.log_level = kwargs.get("log_level", "warning")
         self.dev_name = kwargs.get("dev_name", "")
+        self.ib_port = kwargs.get("ib_port", 0)
+        self.link_type = kwargs.get("link_type", "")
         self.prealloc_size = kwargs.get("prealloc_size", 16)
 
     def __repr__(self):
@@ -121,6 +129,10 @@ class ServerConfig(_infinistore.ServerConfig):
             raise Exception("Manage port is 0")
         if self.log_level not in ["error", "debug", "info", "warning"]:
             raise Exception("log level should be error, debug, info or warning")
+        if self.ib_port < 1:
+            raise Exception("ib port of device should be greater than 0")
+        if self.link_type not in ["IB", "Ethernet"]:
+            raise Exception("link type should be IB or Ethernet")
 
 
 class Logger:

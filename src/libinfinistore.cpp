@@ -81,7 +81,7 @@ Connection::~Connection() {
     }
 }
 
-int modify_qp_to_init(struct ibv_qp *qp);
+int modify_qp_to_init(connection_t *conn);
 int modify_qp_to_rts(connection_t *conn);
 int modify_qp_to_rtr(connection_t *conn);
 int exchange_conn_info(connection_t *conn);
@@ -92,7 +92,7 @@ int exchange_conn_info(connection_t *conn);
 #include <iostream>
 #include <stdexcept>
 
-int init_rdma_resources(connection_t *conn, const char *dev_name) {
+int init_rdma_resources(connection_t *conn, client_config_t config) {
     // Get list of RDMA devices
     struct ibv_device **dev_list;
     struct ibv_device *ib_dev;
@@ -106,7 +106,7 @@ int init_rdma_resources(connection_t *conn, const char *dev_name) {
 
     for (int i = 0; i < num_devices; ++i) {
         char *dev_name_from_list = (char *)ibv_get_device_name(dev_list[i]);
-        if (strcmp(dev_name_from_list, dev_name) == 0) {
+        if (strcmp(dev_name_from_list, config.dev_name.c_str()) == 0) {
             INFO("found device {}", dev_name_from_list);
             ib_dev = dev_list[i];
             conn->ib_ctx = ibv_open_device(ib_dev);
@@ -127,16 +127,36 @@ int init_rdma_resources(connection_t *conn, const char *dev_name) {
     }
     ibv_free_device_list(dev_list);
 
-    int gidx = ibv_find_sgid_type(conn->ib_ctx, 1, IBV_GID_TYPE_ROCE_V2, AF_INET);
-    if (gidx < 0) {
-        ERROR("Failed to find GID");
+    struct ibv_port_attr port_attr;
+    conn->ib_port = config.ib_port;
+	if (ibv_query_port(conn->ib_ctx, conn->ib_port, &port_attr)) {
+        ERROR("Unable to query port {} attributes\n", conn->ib_port);
+		return -1;
+	}    
+
+    int gidx = 0;
+    if ((port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND && config.link_type == "Ethernet") || 
+        (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET && config.link_type == "IB")) {
+        ERROR("port link layer and config link type don't match");
         return -1;
+    }    
+    if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
+        gidx = -1;
+    } 
+    else {
+        gidx = ibv_find_sgid_type(conn->ib_ctx, 1, IBV_GID_TYPE_ROCE_V2, AF_INET);
+        if (gidx < 0) {
+            ERROR("Failed to find GID");
+            return -1;
+        }
     }
+    conn->lid = port_attr.lid;
+
     conn->gidx = gidx;
 
     union ibv_gid gid;
     // get gid
-    if (ibv_query_gid(conn->ib_ctx, 1, gidx, &gid)) {
+    if (conn->gidx != -1 && ibv_query_gid(conn->ib_ctx, 1, gidx, &gid)) {
         ERROR("Failed to get GID");
         return -1;
     }
@@ -185,38 +205,42 @@ int init_rdma_resources(connection_t *conn, const char *dev_name) {
     }
 
     // Modify QP to INIT state
-    if (modify_qp_to_init(conn->qp)) {
+    if (modify_qp_to_init(conn)) {
         ERROR("Failed to modify QP to INIT, {}", strerror(errno));
         return -1;
     }
 
-    // Get local connection information
-    struct ibv_port_attr port_attr;
-    if (ibv_query_port(conn->ib_ctx, 1, &port_attr)) {
-        ERROR("Failed to query port, {}", strerror(errno));
-        return -1;
-    }
+    // // Get local connection information
+    // struct ibv_port_attr port_attr;
+    // if (ibv_query_port(conn->ib_ctx, 1, &port_attr)) {
+    //     ERROR("Failed to query port, {}", strerror(errno));
+    //     return -1;
+    // }
 
     conn->local_info.qpn = conn->qp->qp_num;
     conn->local_info.psn = lrand48() & 0xffffff;
-    conn->local_info.gid = gid;
-    DEBUG("gid index: {}", gidx);
+    if (conn->gidx != -1) {
+        conn->local_info.gid = gid;
+        DEBUG("gid index: {}", gidx);
+    }
+    conn->local_info.lid = conn->lid;
+
     print_rdma_conn_info(&conn->local_info, false);
     print_rdma_conn_info(&conn->remote_info, true);
     return 0;
 }
 
-int modify_qp_to_init(struct ibv_qp *qp) {
+int modify_qp_to_init(connection_t *conn) {
     struct ibv_qp_attr attr = {};
     attr.qp_state = IBV_QPS_INIT;
-    attr.port_num = 1;
+    attr.port_num = conn->ib_port;
     attr.pkey_index = 0;
     attr.qp_access_flags =
         IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE;
 
     int flags = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
 
-    int ret = ibv_modify_qp(qp, &attr, flags);
+    int ret = ibv_modify_qp(conn->qp, &attr, flags);
     if (ret) {
         ERROR("Failed to modify QP to INIT");
         return ret;
@@ -386,7 +410,7 @@ void cq_handler(connection_t *conn) {
 }
 
 int setup_rdma(connection_t *conn, client_config_t config) {
-    if (init_rdma_resources(conn, config.dev_name.c_str()) < 0) {
+    if (init_rdma_resources(conn, config) < 0) {
         ERROR("Failed to initialize RDMA resources");
         delete conn;
         return -1;
@@ -460,13 +484,19 @@ int modify_qp_to_rtr(connection_t *conn) {
     attr.ah_attr.dlid = 0;
     attr.ah_attr.sl = 0;
     attr.ah_attr.src_path_bits = 0;
-    attr.ah_attr.port_num = 1;
+    attr.ah_attr.port_num = conn->ib_port;
 
-    // RoCE v2
-    attr.ah_attr.is_global = 1;
-    attr.ah_attr.grh.dgid = remote_info->gid;
-    attr.ah_attr.grh.sgid_index = conn->gidx;  // local gid
-    attr.ah_attr.grh.hop_limit = 1;
+    if (conn->gidx == -1) {
+        // IB
+        attr.ah_attr.dlid = remote_info->lid;
+        attr.ah_attr.is_global = 0;
+    } else {
+        // RoCE v2
+        attr.ah_attr.is_global = 1;
+        attr.ah_attr.grh.dgid = remote_info->gid;
+        attr.ah_attr.grh.sgid_index = conn->gidx;  // local gid
+        attr.ah_attr.grh.hop_limit = 1;
+    }
 
     int flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
                 IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;

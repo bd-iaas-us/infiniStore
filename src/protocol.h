@@ -155,6 +155,7 @@ typedef struct __attribute__((packed)) rdma_conn_info_t {
     uint32_t qpn;
     uint32_t psn;
     union ibv_gid gid;
+    uint16_t lid;
 } rdma_conn_info_t;
 
 template <typename T>

@@ -41,6 +41,10 @@ struct ibv_context *ib_ctx;
 struct ibv_pd *pd;
 MM *mm;
 
+int gidx = 0;
+int lid = -1;
+uint8_t ib_port = -1;
+
 int get_kvmap_len() { return kv_map.size(); }
 
 typedef enum {
@@ -240,7 +244,7 @@ int write_cache(client_t *client, local_meta_t &meta) {
     return 0;
 }
 
-int init_rdma_context(const char *dev_name) {
+int init_rdma_context(server_config_t config) {
     struct ibv_device **dev_list;
     struct ibv_device *ib_dev;
     int num_devices;
@@ -252,7 +256,7 @@ int init_rdma_context(const char *dev_name) {
 
     for (int i = 0; i < num_devices; ++i) {
         char *dev_name_from_list = (char *)ibv_get_device_name(dev_list[i]);
-        if (strcmp(dev_name_from_list, dev_name) == 0) {
+        if (strcmp(dev_name_from_list, config.dev_name.c_str()) == 0) {
             INFO("found device {}", dev_name_from_list);
             ib_dev = dev_list[i];
             ib_ctx = ibv_open_device(ib_dev);
@@ -271,6 +275,30 @@ int init_rdma_context(const char *dev_name) {
             return -1;
         }
     }
+
+    struct ibv_port_attr port_attr;
+    ib_port = config.ib_port;
+	if (ibv_query_port(ib_ctx, ib_port, &port_attr)) {
+        ERROR("Unable to query port {} attributes\n", ib_port);
+		return -1;
+	}    
+    if ((port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND && config.link_type == "Ethernet") || 
+        (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET && config.link_type == "IB")) {
+        ERROR("port link layer and config link type don't match");
+        return -1;
+    }
+    if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
+        gidx = -1;
+    }    
+    else {
+        gidx = ibv_find_sgid_type(ib_ctx, 1, IBV_GID_TYPE_ROCE_V2, AF_INET);
+        if (gidx < 0) {
+            ERROR("Failed to find GID");
+            return -1;
+        }
+    }    
+
+    lid = port_attr.lid;
 
     pd = ibv_alloc_pd(ib_ctx);
     if (!pd) {
@@ -315,7 +343,7 @@ int rdma_exchange(client_t *client) {
     // Modify QP to INIT state
     struct ibv_qp_attr attr = {};
     attr.qp_state = IBV_QPS_INIT;
-    attr.port_num = 1;
+    attr.port_num = ib_port;
     attr.pkey_index = 0;
     attr.qp_access_flags =
         IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE;
@@ -328,24 +356,18 @@ int rdma_exchange(client_t *client) {
         return SYSTEM_ERROR;
     }
 
-    // Get local connection information
-    struct ibv_port_attr port_attr;
-    if (ibv_query_port(ib_ctx, 1, &port_attr)) {
-        ERROR("Failed to query port");
-        return SYSTEM_ERROR;
-    }
-
-    int gidx = ibv_find_sgid_type(ib_ctx, 1, IBV_GID_TYPE_ROCE_V2, AF_INET);
-    if (gidx < 0) {
-        ERROR("Failed to find GID");
-        return -1;
-    }
+    // // Get local connection information
+    // struct ibv_port_attr port_attr;
+    // if (ibv_query_port(ib_ctx, 1, &port_attr)) {
+    //     ERROR("Failed to query port");
+    //     return SYSTEM_ERROR;
+    // }
 
     client->gidx = gidx;
 
     union ibv_gid gid;
     // get gid
-    if (ibv_query_gid(ib_ctx, 1, gidx, &gid)) {
+    if (gidx != -1 && ibv_query_gid(ib_ctx, 1, gidx, &gid)) {
         ERROR("Failed to get GID");
         return -1;
     }
@@ -353,6 +375,7 @@ int rdma_exchange(client_t *client) {
     client->local_info.qpn = client->qp->qp_num;
     client->local_info.psn = lrand48() & 0xffffff;
     client->local_info.gid = gid;
+    client->local_info.lid = lid;
 
     INFO("gid index: {}", client->gidx);
     print_rdma_conn_info(&client->local_info, false);
@@ -368,12 +391,19 @@ int rdma_exchange(client_t *client) {
     attr.ah_attr.dlid = 0;  // RoCE v2 is used.
     attr.ah_attr.sl = 0;
     attr.ah_attr.src_path_bits = 0;
-    attr.ah_attr.port_num = 1;
-    // RoCE v2
-    attr.ah_attr.is_global = 1;
-    attr.ah_attr.grh.dgid = client->remote_info.gid;
-    attr.ah_attr.grh.sgid_index = client->gidx;
-    attr.ah_attr.grh.hop_limit = 1;
+    attr.ah_attr.port_num = ib_port;
+
+    if (gidx == -1) {
+        // IB
+        attr.ah_attr.dlid = client->remote_info.lid;
+        attr.ah_attr.is_global = 0;
+    } else {
+        // RoCE v2
+        attr.ah_attr.is_global = 1;
+        attr.ah_attr.grh.dgid = client->remote_info.gid;
+        attr.ah_attr.grh.sgid_index = client->gidx;
+        attr.ah_attr.grh.hop_limit = 1;
+    }
 
     flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
             IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
@@ -779,7 +809,7 @@ int register_server(unsigned long loop_ptr, server_config_t config) {
         return -1;
     }
 
-    if (init_rdma_context(config.dev_name.c_str()) < 0) {
+    if (init_rdma_context(config) < 0) {
         return -1;
     }
     mm = new MM(config.prealloc_size << 30, 32 << 10, pd);
