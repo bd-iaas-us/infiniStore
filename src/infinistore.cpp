@@ -356,13 +356,6 @@ int rdma_exchange(client_t *client) {
         return SYSTEM_ERROR;
     }
 
-    // // Get local connection information
-    // struct ibv_port_attr port_attr;
-    // if (ibv_query_port(ib_ctx, 1, &port_attr)) {
-    //     ERROR("Failed to query port");
-    //     return SYSTEM_ERROR;
-    // }
-
     client->gidx = gidx;
 
     union ibv_gid gid;
