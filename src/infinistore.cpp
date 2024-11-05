@@ -291,7 +291,7 @@ int init_rdma_context(server_config_t config) {
         gidx = -1;
     }
     else {
-        gidx = ibv_find_sgid_type(ib_ctx, 1, IBV_GID_TYPE_ROCE_V2, AF_INET);
+        gidx = ibv_find_sgid_type(ib_ctx, ib_port, IBV_GID_TYPE_ROCE_V2, AF_INET);
         if (gidx < 0) {
             ERROR("Failed to find GID");
             return -1;

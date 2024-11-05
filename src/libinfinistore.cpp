@@ -144,7 +144,7 @@ int init_rdma_resources(connection_t *conn, client_config_t config) {
         gidx = -1;
     }
     else {
-        gidx = ibv_find_sgid_type(conn->ib_ctx, 1, IBV_GID_TYPE_ROCE_V2, AF_INET);
+        gidx = ibv_find_sgid_type(conn->ib_ctx, conn->ib_port, IBV_GID_TYPE_ROCE_V2, AF_INET);
         if (gidx < 0) {
             ERROR("Failed to find GID");
             return -1;
