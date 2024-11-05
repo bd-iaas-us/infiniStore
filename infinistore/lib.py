@@ -74,7 +74,7 @@ class ClientConfig(_infinistore.ClientConfig):
         self.host_addr = kwargs.get("host_addr", None)
         self.dev_name = kwargs.get("dev_name", "")
         self.ib_port = kwargs.get("ib_port", 0)
-        self.link_type = kwargs.get("link_type", "")        
+        self.link_type = kwargs.get("link_type", "")
         self.service_port = kwargs.get("service_port", None)
         # get log from system env
         # if log level is not set in Config and system env is not set either, use warning as default
@@ -102,7 +102,7 @@ class ClientConfig(_infinistore.ClientConfig):
         if self.ib_port < 1:
             raise Exception("ib port of device should be greater than 0")
         if self.link_type not in ["IB", "Ethernet"]:
-            raise Exception("link type should be IB or Ethernet")            
+            raise Exception("link type should be IB or Ethernet")
 
 
 class ServerConfig(_infinistore.ServerConfig):

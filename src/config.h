@@ -18,7 +18,7 @@ typedef struct ClientConfig {
     std::string dev_name;
     std::string host_addr;
     int ib_port;
-    std::string link_type;    
+    std::string link_type;
 } client_config_t;
 
 #endif

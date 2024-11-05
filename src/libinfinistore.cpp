@@ -129,20 +129,20 @@ int init_rdma_resources(connection_t *conn, client_config_t config) {
 
     struct ibv_port_attr port_attr;
     conn->ib_port = config.ib_port;
-	if (ibv_query_port(conn->ib_ctx, conn->ib_port, &port_attr)) {
+    if (ibv_query_port(conn->ib_ctx, conn->ib_port, &port_attr)) {
         ERROR("Unable to query port {} attributes\n", conn->ib_port);
-		return -1;
-	}    
+        return -1;
+    }
 
     int gidx = 0;
-    if ((port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND && config.link_type == "Ethernet") || 
+    if ((port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND && config.link_type == "Ethernet") ||
         (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET && config.link_type == "IB")) {
         ERROR("port link layer and config link type don't match");
         return -1;
-    }    
+    }
     if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
         gidx = -1;
-    } 
+    }
     else {
         gidx = ibv_find_sgid_type(conn->ib_ctx, 1, IBV_GID_TYPE_ROCE_V2, AF_INET);
         if (gidx < 0) {
@@ -490,7 +490,8 @@ int modify_qp_to_rtr(connection_t *conn) {
         // IB
         attr.ah_attr.dlid = remote_info->lid;
         attr.ah_attr.is_global = 0;
-    } else {
+    }
+    else {
         // RoCE v2
         attr.ah_attr.is_global = 1;
         attr.ah_attr.grh.dgid = remote_info->gid;

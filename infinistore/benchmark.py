@@ -85,7 +85,7 @@ def parse_args():
         default="Ethernet",
         help="IB or Ethernet, default Ethernet",
         type=str,
-    )       
+    )
     return parser.parse_args()
 
 
@@ -97,7 +97,11 @@ def generate_random_string(length):
 
 def run(args):
     config = infinistore.ClientConfig(
-        host_addr=args.server, service_port=args.service_port, dev_name=args.dev_name, ib_port = args.ib_port, link_type = args.link_type
+        host_addr=args.server,
+        service_port=args.service_port,
+        dev_name=args.dev_name,
+        ib_port=args.ib_port,
+        link_type=args.link_type,
     )
 
     config.connection_type = (

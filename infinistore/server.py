@@ -92,7 +92,7 @@ def parse_args():
         default="Ethernet",
         help="IB or Ethernet, default Ethernet",
         type=str,
-    )    
+    )
     return parser.parse_args()
 
 
