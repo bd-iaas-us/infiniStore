@@ -40,6 +40,9 @@ if __name__ == "__main__":
         service_port=22345,
         log_level="debug",
         connection_type=infinistore.TYPE_RDMA,
+        ib_port=1,
+        link_type="IB",
+        dev_name="mlx5_1",
     )
     rdma_conn = InfinityConnection(config)
     rdma_conn.connect()

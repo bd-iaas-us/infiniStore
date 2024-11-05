@@ -210,13 +210,6 @@ int init_rdma_resources(connection_t *conn, client_config_t config) {
         return -1;
     }
 
-    // // Get local connection information
-    // struct ibv_port_attr port_attr;
-    // if (ibv_query_port(conn->ib_ctx, 1, &port_attr)) {
-    //     ERROR("Failed to query port, {}", strerror(errno));
-    //     return -1;
-    // }
-
     conn->local_info.qpn = conn->qp->qp_num;
     conn->local_info.psn = lrand48() & 0xffffff;
     if (conn->gidx != -1) {
