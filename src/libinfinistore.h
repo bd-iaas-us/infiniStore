@@ -63,6 +63,8 @@ struct Connection {
     struct ibv_cq *cq = NULL;
     struct ibv_qp *qp = NULL;
     int gidx = -1;
+    int lid = -1;
+    uint8_t ib_port = -1;
 
     rdma_conn_info_t local_info;
     rdma_conn_info_t remote_info;
