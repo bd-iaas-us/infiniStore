@@ -4,67 +4,10 @@ import os
 from typing import List, Tuple
 import subprocess
 import time
-import re
-
 
 # connection type: default is RDMA
 TYPE_LOCAL_GPU = "LOCAL_GPU"
 TYPE_RDMA = "RDMA"
-
-
-def _get_bar1_memory_cap():
-    result = subprocess.run(
-        ["nvidia-smi", "-q", "-i", "0"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise Exception("Error running nvidia-smi")
-
-    pattern = re.compile(
-        r"\s*BAR1 Memory Usage\s*\n"
-        r"\s*Total\s*:\s*(\d+)\s*MiB\s*\n"
-        r"\s*Used\s*:\s*(\d+)\s*MiB\s*\n"
-        r"\s*Free\s*:\s*(\d+)\s*MiB",
-        re.MULTILINE,
-    )
-
-    mem_cap = {}
-
-    match = pattern.search(result.stdout)
-
-    if match:
-        total = int(match.group(1))
-        used = int(match.group(2))
-        free = int(match.group(3))
-
-        mem_cap = {"bar1_total": total, "bar1_used": used, "bar1_free": free}
-    else:
-        raise Exception("No match found to get bar1 memory usage")
-
-    pattern = re.compile(
-        r"\s*FB Memory Usage\s*\n"
-        r"\s*Total\s*:\s*(\d+)\s*MiB\s*\n"
-        r"\s*Reserved\s*:\s*(\d+)\s*MiB\s*\n"
-        r"\s*Used\s*:\s*(\d+)\s*MiB\s*\n"
-        r"\s*Free\s*:\s*(\d+)\s*MiB",
-        re.MULTILINE,
-    )
-    match = pattern.search(result.stdout)
-    if match:
-        mem_cap.update(
-            {
-                "total": int(match.group(1)),
-                "reserved": int(match.group(2)),
-                "used": int(match.group(3)),
-                "free": int(match.group(4)),
-            }
-        )
-    else:
-        raise Exception("No match found to get fb memory usage")
-
-    return mem_cap
 
 
 class ClientConfig(_infinistore.ClientConfig):
@@ -251,18 +194,7 @@ class InfinityConnection:
         self.local_connected = False
         self.rdma_connected = False
         self.config = config
-
         Logger.set_log_level(config.log_level)
-        mem_cap = _get_bar1_memory_cap()
-
-        avail_bar1 = mem_cap["bar1_free"] - mem_cap["bar1_used"]
-        avall_gpu_mem = mem_cap["total"] - mem_cap["reserved"]
-        if avail_bar1 < avall_gpu_mem:
-            # if BAR1 memory is not enough, set a flag.
-            self.conn.limited_bar1 = True
-            self.conn.bar1_mem_in_mib = mem_cap["bar1_free"] - mem_cap["bar1_used"]
-        else:
-            self.conn.limited_bar1 = False
 
     def connect(self):
         """
@@ -417,4 +349,15 @@ class InfinityConnection:
         ret = _infinistore.get_match_last_index(self.conn, keys)
         if ret < 0:
             raise Exception("can't find a match")
+        return ret
+
+    def register_mr(self, cache: torch.Tensor):
+        self._verify(cache)
+        ptr = cache.data_ptr()
+        element_size = cache.element_size()
+        if not self.rdma_connected:
+            raise Exception("this function is only valid for connected rdma")
+        ret = _infinistore.register_mr(self.conn, ptr, cache.numel() * element_size)
+        if ret < 0:
+            raise Exception("register memory region failed")
         return ret

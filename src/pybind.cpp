@@ -33,6 +33,10 @@ int rw_rdma_wrapper(connection_t *conn, char op,
     return rw_rdma(conn, op, c_blocks, block_size, (void *)ptr, ptr_region_size);
 }
 
+int register_mr_wrapper(connection_t *conn, uintptr_t ptr, size_t ptr_region_size) {
+    return register_mr(conn, (void *)ptr, ptr_region_size);
+}
+
 PYBIND11_MODULE(_infinistore, m) {
     // client side
     py::class_<client_config_t>(m, "ClientConfig")
@@ -58,6 +62,7 @@ PYBIND11_MODULE(_infinistore, m) {
     m.def("check_exist", &check_exist, "check if the key exists in the store");
     m.def("get_match_last_index", &get_match_last_index,
           "get the last index of a key list which is in the store");
+    m.def("register_mr", &register_mr_wrapper, "register memory region");
 
     // server side
     py::class_<server_config_t>(m, "ServerConfig")

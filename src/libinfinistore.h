@@ -70,6 +70,7 @@ struct Connection {
     rdma_conn_info_t remote_info;
 
     std::map<uintptr_t, IBVMemoryRegion *> local_mr;
+    std::unordered_map<uintptr_t, struct ibv_mr *> local_mr_mp;
 
     struct ibv_comp_channel *comp_channel = NULL;
     std::future<void> cq_future;  // cq thread
@@ -107,5 +108,6 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
 int sync_rdma(connection_t *conn);
 int check_exist(connection_t *conn, std::string key);
 int get_match_last_index(connection_t *conn, std::vector<std::string>);
+int register_mr(connection_t *conn, void *base_ptr, size_t ptr_region_size);
 
 #endif  // LIBINFINISTORE_H
