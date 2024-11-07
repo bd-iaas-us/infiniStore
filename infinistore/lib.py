@@ -351,7 +351,7 @@ class InfinityConnection:
             raise Exception("can't find a match")
         return ret
 
-    def register_mr(self, cache: torch.Tensor, page_size: int):
+    def register_mr(self, cache: torch.Tensor):
         self._verify(cache)
         ptr = cache.data_ptr()
         element_size = cache.element_size()

@@ -127,8 +127,8 @@ def run(args):
             num_of_blocks * block_size, device=dst_device, dtype=torch.float32
         )
 
-    conn.register_mr(src_tensor, block_size)
-    conn.register_mr(dst_tensor, block_size)
+    conn.register_mr(src_tensor)
+    conn.register_mr(dst_tensor)
 
     blocks = [(keys[i], i * block_size) for i in range(num_of_blocks)]
 
