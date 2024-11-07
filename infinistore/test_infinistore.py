@@ -58,7 +58,7 @@ def test_basic_read_write_cache(server, dtype, new_connection, local):
     # local GPU write is tricky, we need to disable the pytorch allocator's caching
     with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
         src_tensor = torch.tensor(src, device="cuda:0", dtype=dtype)
-
+    conn.register_mr(src_tensor, 4096)
     conn.write_cache(src_tensor, [(key, 0)], 4096)
     conn.sync()
 
@@ -67,6 +67,7 @@ def test_basic_read_write_cache(server, dtype, new_connection, local):
 
     with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
         dst = torch.zeros(4096, device="cuda:0", dtype=dtype)
+    conn.register_mr(dst, 4096)
     conn.read_cache(dst, [(key, 0)], 4096)
     conn.sync()
     assert torch.equal(src_tensor, dst)
@@ -104,7 +105,7 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
 
     with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
         src_tensor = torch.tensor(src, device=src_device, dtype=torch.float32)
-
+    conn.register_mr(src_tensor, block_size)
     blocks = [(keys[i], i * block_size) for i in range(num_of_blocks)]
 
     conn.write_cache(src_tensor, blocks, block_size)
@@ -114,74 +115,78 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
         dst = torch.zeros(
             num_of_blocks * block_size, device=dst_device, dtype=torch.float32
         )
-
+    conn.register_mr(dst, block_size)
     conn.read_cache(dst, blocks, block_size)
     conn.sync()
     # import pdb; pdb.set_trace()
     assert torch.equal(src_tensor.cpu(), dst.cpu())
 
 
-@pytest.mark.parametrize("limited_bar1", [(True, 100 << 20), (False, 10 << 20)])
-def test_read_write_bottom_cache(server, limited_bar1):
-    config = infinistore.ClientConfig(
-        host_addr="127.0.0.1",
-        service_port=22345,
-        dev_name="mlx5_0",
-        connection_type=infinistore.TYPE_RDMA,
-    )
-    conn = infinistore.InfinityConnection(config)
-    conn.connect()
-    # force the limit, for GPU T4, limited_bar1 must be True
-    conn.conn.limited_bar1 = limited_bar1[0]
+# @pytest.mark.parametrize("limited_bar1", [(True, 100 << 20), (False, 10 << 20)])
+# def test_read_write_bottom_cache(server, limited_bar1):
+#     config = infinistore.ClientConfig(
+#         host_addr="127.0.0.1",
+#         service_port=22345,
+#         dev_name="mlx5_0",
+#         connection_type=infinistore.TYPE_RDMA,
+#     )
+#     conn = infinistore.InfinityConnection(config)
+#     conn.connect()
+#     # force the limit, for GPU T4, limited_bar1 must be True
+#     conn.conn.limited_bar1 = limited_bar1[0]
 
-    # allocate a 4(float32) * 100 tensor on GPU, the size is 400MB
-    size = limited_bar1[1]
+#     # allocate a 4(float32) * 100 tensor on GPU, the size is 400MB
+#     size = limited_bar1[1]
 
-    src = torch.randn(size, device="cuda", dtype=torch.float32)
-    key = generate_random_string(20)
+#     src = torch.randn(size, device="cuda", dtype=torch.float32)
+#     conn.register_mr(src, 512)
+#     key = generate_random_string(20)
 
-    # write the bottom cache
-    conn.write_cache(src, [(key, size - 512)], 512)
+#     # write the bottom cache
+#     conn.write_cache(src, [(key, size - 512)], 512)
 
-    conn.sync()
+#     conn.sync()
 
-    # read the bottom cache
-    dst = torch.zeros(512, device="cuda", dtype=torch.float32)
-    conn.read_cache(dst, [(key, 0)], 512)
-    conn.sync()
-    assert torch.equal(src[-512:], dst)
+#     # read the bottom cache
+#     dst = torch.zeros(512, device="cuda", dtype=torch.float32)
+#     conn.register_mr(dst, 512)
+#     conn.read_cache(dst, [(key, 0)], 512)
+#     conn.sync()
+#     assert torch.equal(src[-512:], dst)
 
 
-@pytest.mark.parametrize("limited_bar1", [(True, 100 << 20), (False, 10 << 20)])
-def test_read_write_interleave_cache(server, limited_bar1):
-    config = infinistore.ClientConfig(
-        host_addr="127.0.0.1",
-        service_port=22345,
-        dev_name="mlx5_0",
-        connection_type=infinistore.TYPE_RDMA,
-    )
-    conn = infinistore.InfinityConnection(config)
-    conn.connect()
-    # force the limit, for GPU T4, limited_bar1 must be True
-    conn.conn.limited_bar1 = limited_bar1[0]
-    # allocate a 4(float32) * 100 tensor on GPU, the size is 400MB
-    size = limited_bar1[1]
+# @pytest.mark.parametrize("limited_bar1", [(True, 100 << 20), (False, 10 << 20)])
+# def test_read_write_interleave_cache(server, limited_bar1):
+#     config = infinistore.ClientConfig(
+#         host_addr="127.0.0.1",
+#         service_port=22345,
+#         dev_name="mlx5_0",
+#         connection_type=infinistore.TYPE_RDMA,
+#     )
+#     conn = infinistore.InfinityConnection(config)
+#     conn.connect()
+#     # force the limit, for GPU T4, limited_bar1 must be True
+#     conn.conn.limited_bar1 = limited_bar1[0]
+#     # allocate a 4(float32) * 100 tensor on GPU, the size is 400MB
+#     size = limited_bar1[1]
 
-    src = torch.randn(size, device="cuda", dtype=torch.float32)
-    key1 = generate_random_string(5)
-    key2 = generate_random_string(5)
+#     src = torch.randn(size, device="cuda", dtype=torch.float32)
+#     conn.register_mr(src, 1024)
+#     key1 = generate_random_string(5)
+#     key2 = generate_random_string(5)
 
-    conn.write_cache(src, [(key1, 0), (key2, size - 1024)], 1024)
-    conn.sync()
+#     conn.write_cache(src, [(key1, 0), (key2, size - 1024)], 1024)
+#     conn.sync()
 
-    dst = torch.zeros(1024, device="cuda", dtype=torch.float32)
-    conn.read_cache(dst, [(key1, 0)], 1024)
-    conn.sync()
-    assert torch.equal(src[0:1024], dst)
+#     dst = torch.zeros(1024, device="cuda", dtype=torch.float32)
+#     conn.register_mr(dst, 1024)
+#     conn.read_cache(dst, [(key1, 0)], 1024)
+#     conn.sync()
+#     assert torch.equal(src[0:1024], dst)
 
-    conn.read_cache(dst, [(key2, 0)], 1024)
-    conn.sync()
-    assert torch.equal(src[-1024:], dst)
+#     conn.read_cache(dst, [(key2, 0)], 1024)
+#     conn.sync()
+#     assert torch.equal(src[-1024:], dst)
 
 
 def test_key_check(server):
@@ -195,6 +200,7 @@ def test_key_check(server):
     conn.connect()
     key = generate_random_string(5)
     src = torch.randn(4096, device="cuda", dtype=torch.float32)
+    conn.register_mr(src, 4096)
     conn.write_cache(src, [(key, 0)], 4096)
     conn.sync()
     assert conn.check_exist(key)
@@ -210,5 +216,6 @@ def test_get_match_last_index(server):
     conn = infinistore.InfinityConnection(config)
     conn.connect()
     src = torch.randn(4096, device="cuda", dtype=torch.float32)
+    conn.register_mr(src, 1024)
     conn.write_cache(src, [("key1", 0), ("key2", 1024), ("key3", 2048)], 1024)
     assert conn.get_match_last_index(["A", "B", "C", "key1", "D", "E"]) == 3

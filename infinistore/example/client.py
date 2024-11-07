@@ -14,6 +14,7 @@ def run(conn):
     src = [i for i in range(4096)]
     with DisableTorchCaching():  # not required if using RDMA
         src_tensor = torch.tensor(src, device="cuda:0", dtype=torch.float32)
+    conn.register_mr(src_tensor, 1024)
     now = time.time()
     conn.write_cache(src_tensor, [("key1", 0), ("key2", 1024), ("key3", 2048)], 1024)
     # conn.write_cache(src_tensor, [("key1", 0)], 1024)
@@ -23,7 +24,7 @@ def run(conn):
 
     with DisableTorchCaching():
         dst_tensor = torch.zeros(4096, device="cuda:2", dtype=torch.float32)
-
+    conn.register_mr(dst_tensor, 1024)
     now = time.time()
     conn.read_cache(dst_tensor, [("key1", 0), ("key2", 1024)], 1024)
     conn.sync()

@@ -56,10 +56,10 @@ Connection::~Connection() {
         close(sock);
     }
 
-    for (auto it = local_mr.begin(); it != local_mr.end(); it++) {
-        it->second->release();
+    for (auto it = local_mr_mp.begin(); it != local_mr_mp.end(); it++) {
+        ibv_dereg_mr(it->second);
     }
-    local_mr.clear();
+    local_mr_mp.clear();
 
     if (qp) {
         struct ibv_qp_attr attr;
@@ -243,12 +243,6 @@ int modify_qp_to_init(connection_t *conn) {
 int sync_rdma(connection_t *conn) {
     std::unique_lock<std::mutex> lock(conn->mutex);
     conn->cv.wait(lock, [&conn] { return conn->rdma_inflight_count == 0; });
-    if (conn->limited_bar1 == false) {
-        for (auto it = conn->local_mr.begin(); it != conn->local_mr.end(); it++) {
-            it->second->release();
-        }
-        conn->local_mr.clear();
-    }
     return 0;
 }
 
@@ -276,22 +270,16 @@ IBVMemoryRegion *search_mr_from_ptr(std::map<uintptr_t, IBVMemoryRegion *> &mrs,
 }
 
 int perform_rdma_read(connection_t *conn, uintptr_t src_buf, size_t src_size, char *dst_buf,
-                      size_t dst_size, uint32_t rkey, IBVMemoryRegion *mr) {
+                      size_t dst_size, uint32_t rkey, struct ibv_mr *mr) {
     // Prepare RDMA read operation
     struct ibv_sge sge = {};
     sge.addr = (uintptr_t)dst_buf;
     sge.length = dst_size;
 
-    sge.lkey = mr->get_mr()->lkey;
+    sge.lkey = mr->lkey;
 
     struct ibv_send_wr wr = {};
-    if (conn->limited_bar1) {
-        wr.wr_id = (uint64_t)mr;
-        mr->add_ref();
-    }
-    else {
-        wr.wr_id = (uintptr_t)conn;
-    }
+    wr.wr_id = (uintptr_t)conn;
     wr.opcode = IBV_WR_RDMA_READ;
     wr.sg_list = &sge;
     wr.num_sge = 1;
@@ -313,24 +301,15 @@ int perform_rdma_read(connection_t *conn, uintptr_t src_buf, size_t src_size, ch
 }
 
 int perform_rdma_write(connection_t *conn, char *src_buf, size_t src_size, uintptr_t dst_buf,
-                       size_t dst_size, uint32_t rkey, IBVMemoryRegion *mr) {
+                       size_t dst_size, uint32_t rkey, struct ibv_mr *mr) {
     // Prepare RDMA write operation
     struct ibv_sge sge = {};
     sge.addr = (uintptr_t)src_buf;
     sge.length = src_size;
-    sge.lkey = mr->get_mr()->lkey;
+    sge.lkey = mr->lkey;
 
     struct ibv_send_wr wr = {};
-
-    if (conn->limited_bar1) {
-        // we have to pass mr to cq_handler to deregister it
-        wr.wr_id = (uint64_t)mr;
-        mr->add_ref();
-    }
-    else {
-        // maybe we will use request ctx in the future
-        wr.wr_id = (uintptr_t)conn;
-    }
+    wr.wr_id = (uintptr_t)conn;
     wr.opcode = IBV_WR_RDMA_WRITE;
     wr.sg_list = &sge;
     wr.num_sge = 1;
@@ -377,10 +356,6 @@ void cq_handler(connection_t *conn) {
                     }
                     if (wc[i].opcode == IBV_WC_RDMA_READ || wc[i].opcode == IBV_WC_RDMA_WRITE) {
                         conn->rdma_inflight_count--;
-                        if (conn->limited_bar1) {
-                            IBVMemoryRegion *mr = (IBVMemoryRegion *)wc[i].wr_id;
-                            conn->rdma_inflight_mr_size -= mr->release();
-                        }
                     }
                     else {
                         ERROR("Unexpected opcode: {}", (int)wc[i].opcode);
@@ -695,71 +670,9 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
     assert(op == OP_RDMA_READ || op == OP_RDMA_WRITE);
     assert(base_ptr != NULL);
 
-    std::vector<std::pair<uintptr_t, uintptr_t>> mr_blocks;
-
-    // if limited_bar1, we use temperary mrs
-    std::map<uintptr_t, IBVMemoryRegion *> local_mr;
-
-    if (conn->limited_bar1) {
-        // compare already registered blocks with incoming blocks
-
-        if (conn->rdma_inflight_mr_size + blocks.size() * block_size >
-            conn->bar1_mem_in_mib * 1024 * 1024) {
-            ERROR(
-                "Not enough BAR1 memory rdma_inflight_mr_size {} + incoming "
-                "size {} > bar1 size {}",
-                conn->rdma_inflight_mr_size.load(), blocks.size() * block_size,
-                conn->bar1_mem_in_mib * 1024 * 1024);
-            return -1;
-        }
-
-        std::pair<unsigned long, unsigned long> cur_block = {0, 0};
-        size_t cur_end = -1;
-        // sort blocks by offset
-        // TODO:usualy blocks is already sorted, we can optimize this.
-        std::sort(blocks.begin(), blocks.end(),
-                  [](const block_t &a, const block_t &b) { return a.offset < b.offset; });
-
-        for (auto &block : blocks) {
-            if (block.offset == cur_end) {
-                cur_block.second += block_size;
-            }
-            else {
-                if (cur_block.second != 0) {
-                    mr_blocks.push_back(cur_block);
-                }
-                cur_block.first = block.offset;
-                cur_block.second = block.offset + block_size;
-                DEBUG("cur_block: {}, {}", cur_block.first, cur_block.second);
-            }
-            cur_end = cur_block.second;
-        }
-        if (cur_block.second != 0) {
-            mr_blocks.push_back(cur_block);
-        }
-
-        DEBUG("mr_blocks size: {}, blocks size: {}", mr_blocks.size(), blocks.size());
-
-        // register mr for each block, and save it to temperary local_mr
-        for (auto &mr_block : mr_blocks) {
-            void *ptr = base_ptr + mr_block.first;
-            IBVMemoryRegion *mr =
-                new IBVMemoryRegion(conn->pd, ptr, mr_block.second - mr_block.first);
-            local_mr[(uintptr_t)ptr] = mr;
-            conn->rdma_inflight_mr_size += mr->get_mr()->length;
-        }
-    }
-    else {
-        // A10G or V100 has enough bar1 memory, so we can register the whole
-        // memory region
-        if (conn->local_mr.find((uintptr_t)base_ptr) == conn->local_mr.end()) {
-            IBVMemoryRegion *mr = new IBVMemoryRegion(conn->pd, base_ptr, ptr_region_size);
-            conn->local_mr[(uintptr_t)base_ptr] = mr;
-            mr->add_ref();
-        }
-        else {
-            // ptr has been registered
-        }
+    if (!conn->local_mr_mp.count((uintptr_t)base_ptr)) {
+        ERROR("Please register memory first");
+        return -1;
     }
 
     std::vector<std::string> keys;
@@ -841,24 +754,18 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
         DEBUG("remote response: addr: {}, rkey: {}", response.blocks[i].remote_addr,
               response.blocks[i].rkey);
 
-        // request_mr could be temperary mr or registered mr
-        IBVMemoryRegion *request_mr = NULL;
-        if (conn->limited_bar1) {
-            request_mr = search_mr_from_ptr(local_mr, (char *)base_ptr + blocks[i].offset);
-        }
-        else {
-            request_mr = search_mr_from_ptr(conn->local_mr, base_ptr);
-        }
         int ret;
         if (op == OP_RDMA_WRITE) {
-            ret = perform_rdma_write(conn, (char *)base_ptr + blocks[i].offset, block_size,
-                                     response.blocks[i].remote_addr, block_size,
-                                     response.blocks[i].rkey, request_mr);
+            ret =
+                perform_rdma_write(conn, (char *)base_ptr + blocks[i].offset, block_size,
+                                   response.blocks[i].remote_addr, block_size,
+                                   response.blocks[i].rkey, conn->local_mr_mp[(uintptr_t)base_ptr]);
         }
         else if (op == OP_RDMA_READ) {
-            ret = perform_rdma_read(conn, response.blocks[i].remote_addr, block_size,
-                                    (char *)base_ptr + blocks[i].offset, block_size,
-                                    response.blocks[i].rkey, request_mr);
+            ret =
+                perform_rdma_read(conn, response.blocks[i].remote_addr, block_size,
+                                  (char *)base_ptr + blocks[i].offset, block_size,
+                                  response.blocks[i].rkey, conn->local_mr_mp[(uintptr_t)base_ptr]);
         }
         else {
             ERROR("Invalid operation");
@@ -927,5 +834,22 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, in
     if (return_code != FINISH && return_code != TASK_ACCEPTED) {
         return -1;
     }
+    return 0;
+}
+
+int register_mr(connection_t *conn, void *base_ptr, size_t ptr_region_size) {
+    if (conn->local_mr_mp.count((uintptr_t)base_ptr)) {
+        WARN("this memory address is already registered!");
+        return -1;
+    }
+    struct ibv_mr *mr;
+    mr = ibv_reg_mr(conn->pd, base_ptr, ptr_region_size,
+                    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+    if (!mr) {
+        ERROR("Failed to register memory region");
+        return -1;
+    }
+    INFO("register mr done");
+    conn->local_mr_mp[(uintptr_t)base_ptr] = mr;
     return 0;
 }
