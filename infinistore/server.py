@@ -89,8 +89,8 @@ def parse_args():
     parser.add_argument(
         "--link-type",
         required=False,
-        default="Ethernet",
-        help="IB or Ethernet, default Ethernet",
+        default="IB",
+        help="IB or Ethernet, default IB",
         type=str,
     )
     return parser.parse_args()

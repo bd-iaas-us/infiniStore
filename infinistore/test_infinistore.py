@@ -42,7 +42,11 @@ def get_gpu_count():
 @pytest.mark.parametrize("local", [True, False])
 def test_basic_read_write_cache(server, dtype, new_connection, local):
     config = infinistore.ClientConfig(
-        host_addr="127.0.0.1", service_port=22345, dev_name="mlx5_0"
+        host_addr="127.0.0.1",
+        service_port=22345,
+        dev_name="mlx5_1",
+        link_type="IB",
+        ib_port=1,
     )
     config.connection_type = (
         infinistore.TYPE_LOCAL_GPU if local else infinistore.TYPE_RDMA
@@ -58,7 +62,8 @@ def test_basic_read_write_cache(server, dtype, new_connection, local):
     # local GPU write is tricky, we need to disable the pytorch allocator's caching
     with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
         src_tensor = torch.tensor(src, device="cuda:0", dtype=dtype)
-    conn.register_mr(src_tensor)
+    if not local:
+        conn.register_mr(src_tensor)
     conn.write_cache(src_tensor, [(key, 0)], 4096)
     conn.sync()
 
@@ -67,7 +72,8 @@ def test_basic_read_write_cache(server, dtype, new_connection, local):
 
     with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
         dst = torch.zeros(4096, device="cuda:0", dtype=dtype)
-    conn.register_mr(dst)
+    if not local:
+        conn.register_mr(dst)
     conn.read_cache(dst, [(key, 0)], 4096)
     conn.sync()
     assert torch.equal(src_tensor, dst)
@@ -79,6 +85,9 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
     config = infinistore.ClientConfig(
         host_addr="127.0.0.1",
         service_port=22345,
+        dev_name="mlx5_1",
+        link_type="IB",
+        ib_port=1,
     )
     config.connection_type = (
         infinistore.TYPE_LOCAL_GPU if local else infinistore.TYPE_RDMA
@@ -105,7 +114,8 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
 
     with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
         src_tensor = torch.tensor(src, device=src_device, dtype=torch.float32)
-    conn.register_mr(src_tensor)
+    if not local:
+        conn.register_mr(src_tensor)
     blocks = [(keys[i], i * block_size) for i in range(num_of_blocks)]
 
     conn.write_cache(src_tensor, blocks, block_size)
@@ -115,7 +125,8 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
         dst = torch.zeros(
             num_of_blocks * block_size, device=dst_device, dtype=torch.float32
         )
-    conn.register_mr(dst)
+    if not local:
+        conn.register_mr(dst)
     conn.read_cache(dst, blocks, block_size)
     conn.sync()
     # import pdb; pdb.set_trace()
@@ -126,7 +137,9 @@ def test_key_check(server):
     config = infinistore.ClientConfig(
         host_addr="127.0.0.1",
         service_port=22345,
-        dev_name="mlx5_0",
+        dev_name="mlx5_1",
+        link_type="IB",
+        ib_port=1,
         connection_type=infinistore.TYPE_RDMA,
     )
     conn = infinistore.InfinityConnection(config)
@@ -143,7 +156,9 @@ def test_get_match_last_index(server):
     config = infinistore.ClientConfig(
         host_addr="127.0.0.1",
         service_port=22345,
-        dev_name="mlx5_0",
+        dev_name="mlx5_1",
+        link_type="IB",
+        ib_port=1,
         connection_type=infinistore.TYPE_RDMA,
     )
     conn = infinistore.InfinityConnection(config)

@@ -154,6 +154,8 @@ int init_rdma_resources(connection_t *conn, client_config_t config) {
 
     conn->gidx = gidx;
 
+    conn->active_mtu = port_attr.active_mtu;
+
     union ibv_gid gid;
     // get gid
     if (conn->gidx != -1 && ibv_query_gid(conn->ib_ctx, 1, gidx, &gid)) {
@@ -244,29 +246,6 @@ int sync_rdma(connection_t *conn) {
     std::unique_lock<std::mutex> lock(conn->mutex);
     conn->cv.wait(lock, [&conn] { return conn->rdma_inflight_count == 0; });
     return 0;
-}
-
-// assume all memory regions are registered
-IBVMemoryRegion *search_mr_from_ptr(std::map<uintptr_t, IBVMemoryRegion *> &mrs, void *ptr) {
-    DEBUG("searching lkey for ptr {}", ptr);
-    auto it = mrs.upper_bound((uintptr_t)ptr);
-
-    // if not found
-    if (it == mrs.begin()) {
-        ERROR("Failed to find lkey from ptr {}, reason 1", ptr);
-        assert(false);
-        return NULL;
-    }
-    // it could be end. this means the ptr is larger than all registered memory
-    // regions
-    it--;
-    if (it->first <= (uintptr_t)ptr && (uintptr_t)ptr < it->first + it->second->get_mr()->length) {
-        return it->second;
-    }
-    // if not found, it should be an error
-    ERROR("Failed to find lkey from ptr {}, reason 2", ptr);
-    assert(false);
-    return NULL;
 }
 
 int perform_rdma_read(connection_t *conn, uintptr_t src_buf, size_t src_size, char *dst_buf,
@@ -444,7 +423,7 @@ int modify_qp_to_rtr(connection_t *conn) {
 
     struct ibv_qp_attr attr = {};
     attr.qp_state = IBV_QPS_RTR;
-    attr.path_mtu = IBV_MTU_1024;
+    attr.path_mtu = conn->active_mtu;
     attr.dest_qp_num = remote_info->qpn;
     attr.rq_psn = remote_info->psn;
     attr.max_dest_rd_atomic = 4;
@@ -840,7 +819,7 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, in
 int register_mr(connection_t *conn, void *base_ptr, size_t ptr_region_size) {
     if (conn->local_mr_mp.count((uintptr_t)base_ptr)) {
         WARN("this memory address is already registered!");
-        return -1;
+        ibv_dereg_mr(conn->local_mr_mp[(uintptr_t)base_ptr]);
     }
     struct ibv_mr *mr;
     mr = ibv_reg_mr(conn->pd, base_ptr, ptr_region_size,

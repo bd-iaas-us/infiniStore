@@ -33,7 +33,7 @@ def parse_args():
     parser.add_argument(
         "--dev-name",
         required=False,
-        default="",
+        default="mlx5_1",
         help="Use IB device <dev> (default first device found)",
         type=str,
     )
@@ -41,7 +41,7 @@ def parse_args():
         "--iteration",
         required=False,
         type=int,
-        default=5,
+        default=1,
         help="number of iterations, default 100",
     )
     parser.add_argument(
@@ -82,8 +82,8 @@ def parse_args():
     parser.add_argument(
         "--link-type",
         required=False,
-        default="Ethernet",
-        help="IB or Ethernet, default Ethernet",
+        default="IB",
+        help="IB or Ethernet, default IB",
         type=str,
     )
     return parser.parse_args()
@@ -127,8 +127,9 @@ def run(args):
             num_of_blocks * block_size, device=dst_device, dtype=torch.float32
         )
 
-    conn.register_mr(src_tensor)
-    conn.register_mr(dst_tensor)
+    if args.rdma:
+        conn.register_mr(src_tensor)
+        conn.register_mr(dst_tensor)
 
     blocks = [(keys[i], i * block_size) for i in range(num_of_blocks)]
 
