@@ -16,43 +16,6 @@
 #include "protocol.h"
 
 // typedef struct connection connection_t;
-
-class IBVMemoryRegion {
-   public:
-    IBVMemoryRegion(struct ibv_pd *pd, void *addr, size_t length) : ref_count_(0) {
-        mr_ = ibv_reg_mr(pd, addr, length, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-        if (!mr_) {
-            throw std::runtime_error("Failed to register memory region");
-        }
-    }
-
-    ~IBVMemoryRegion() {
-        if (mr_) {
-            DEBUG("deregister mr: {}", (void *)this);
-            ibv_dereg_mr(mr_);
-        }
-    }
-
-    void add_ref() { ref_count_.fetch_add(1, std::memory_order_relaxed); }
-
-    size_t release() {
-        if (ref_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-            size_t ret = mr_->length;
-            delete this;
-            return ret;
-        }
-        return 0;
-    }
-
-    struct ibv_mr *get_mr() const {
-        return mr_;
-    }
-
-   private:
-    struct ibv_mr *mr_;
-    std::atomic<int> ref_count_;
-};
-
 struct Connection {
     // tcp socket
     int sock = 0;
@@ -65,11 +28,11 @@ struct Connection {
     int gidx = -1;
     int lid = -1;
     uint8_t ib_port = -1;
+    ibv_mtu active_mtu = IBV_MTU_1024;
 
     rdma_conn_info_t local_info;
     rdma_conn_info_t remote_info;
 
-    std::map<uintptr_t, IBVMemoryRegion *> local_mr;
     std::unordered_map<uintptr_t, struct ibv_mr *> local_mr_mp;
 
     struct ibv_comp_channel *comp_channel = NULL;

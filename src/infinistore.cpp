@@ -44,6 +44,7 @@ MM *mm;
 int gidx = 0;
 int lid = -1;
 uint8_t ib_port = -1;
+ibv_mtu active_mtu = IBV_MTU_1024;
 
 int get_kvmap_len() { return kv_map.size(); }
 
@@ -299,6 +300,7 @@ int init_rdma_context(server_config_t config) {
     }
 
     lid = port_attr.lid;
+    active_mtu = port_attr.active_mtu;
 
     pd = ibv_alloc_pd(ib_ctx);
     if (!pd) {
@@ -376,7 +378,7 @@ int rdma_exchange(client_t *client) {
     // Modify QP to RTR state
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTR;
-    attr.path_mtu = IBV_MTU_1024;  // FIXME: hard coded
+    attr.path_mtu = active_mtu;  // FIXME: hard coded
     attr.dest_qp_num = client->remote_info.qpn;
     attr.rq_psn = client->remote_info.psn;
     attr.max_dest_rd_atomic = 4;
