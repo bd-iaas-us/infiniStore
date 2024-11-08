@@ -44,9 +44,6 @@ def test_basic_read_write_cache(server, dtype, new_connection, local):
     config = infinistore.ClientConfig(
         host_addr="127.0.0.1",
         service_port=22345,
-        dev_name="mlx5_1",
-        link_type="IB",
-        ib_port=1,
     )
     config.connection_type = (
         infinistore.TYPE_LOCAL_GPU if local else infinistore.TYPE_RDMA
@@ -85,9 +82,6 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
     config = infinistore.ClientConfig(
         host_addr="127.0.0.1",
         service_port=22345,
-        dev_name="mlx5_1",
-        link_type="IB",
-        ib_port=1,
     )
     config.connection_type = (
         infinistore.TYPE_LOCAL_GPU if local else infinistore.TYPE_RDMA
@@ -137,9 +131,6 @@ def test_key_check(server):
     config = infinistore.ClientConfig(
         host_addr="127.0.0.1",
         service_port=22345,
-        dev_name="mlx5_1",
-        link_type="IB",
-        ib_port=1,
         connection_type=infinistore.TYPE_RDMA,
     )
     conn = infinistore.InfinityConnection(config)
@@ -156,9 +147,6 @@ def test_get_match_last_index(server):
     config = infinistore.ClientConfig(
         host_addr="127.0.0.1",
         service_port=22345,
-        dev_name="mlx5_1",
-        link_type="IB",
-        ib_port=1,
         connection_type=infinistore.TYPE_RDMA,
     )
     conn = infinistore.InfinityConnection(config)
