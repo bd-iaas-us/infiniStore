@@ -246,87 +246,6 @@ int sync_rdma(connection_t *conn) {
     return 0;
 }
 
-// assume all memory regions are registered
-IBVMemoryRegion *search_mr_from_ptr(std::map<uintptr_t, IBVMemoryRegion *> &mrs, void *ptr) {
-    DEBUG("searching lkey for ptr {}", ptr);
-    auto it = mrs.upper_bound((uintptr_t)ptr);
-
-    // if not found
-    if (it == mrs.begin()) {
-        ERROR("Failed to find lkey from ptr {}, reason 1", ptr);
-        assert(false);
-        return NULL;
-    }
-    // it could be end. this means the ptr is larger than all registered memory
-    // regions
-    it--;
-    if (it->first <= (uintptr_t)ptr && (uintptr_t)ptr < it->first + it->second->get_mr()->length) {
-        return it->second;
-    }
-    // if not found, it should be an error
-    ERROR("Failed to find lkey from ptr {}, reason 2", ptr);
-    assert(false);
-    return NULL;
-}
-
-int perform_rdma_read(connection_t *conn, uintptr_t src_buf, size_t src_size, char *dst_buf,
-                      size_t dst_size, uint32_t rkey, struct ibv_mr *mr) {
-    // Prepare RDMA read operation
-    struct ibv_sge sge = {};
-    sge.addr = (uintptr_t)dst_buf;
-    sge.length = dst_size;
-
-    sge.lkey = mr->lkey;
-
-    struct ibv_send_wr wr = {};
-    wr.wr_id = (uintptr_t)conn;
-    wr.opcode = IBV_WR_RDMA_READ;
-    wr.sg_list = &sge;
-    wr.num_sge = 1;
-    wr.send_flags = IBV_SEND_SIGNALED;
-    wr.wr.rdma.remote_addr = src_buf;  // Obtain from server
-    wr.wr.rdma.rkey = rkey;            // Obtain from server
-
-    struct ibv_send_wr *bad_wr = NULL;
-    int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
-    if (ret) {
-        ERROR("Failed to post RDMA read");
-        return -1;
-    }
-
-    conn->rdma_inflight_count++;
-    DEBUG("RDMA read completed successfully");
-    // RDMA read successful
-    return 0;
-}
-
-int perform_rdma_write(connection_t *conn, char *src_buf, size_t src_size, uintptr_t dst_buf,
-                       size_t dst_size, uint32_t rkey, struct ibv_mr *mr) {
-    // Prepare RDMA write operation
-    struct ibv_sge sge = {};
-    sge.addr = (uintptr_t)src_buf;
-    sge.length = src_size;
-    sge.lkey = mr->lkey;
-
-    struct ibv_send_wr wr = {};
-    wr.wr_id = (uintptr_t)conn;
-    wr.opcode = IBV_WR_RDMA_WRITE;
-    wr.sg_list = &sge;
-    wr.num_sge = 1;
-    wr.send_flags = IBV_SEND_SIGNALED;
-    wr.wr.rdma.remote_addr = dst_buf;  // Obtain from server
-    wr.wr.rdma.rkey = rkey;            // Obtain from server
-
-    struct ibv_send_wr *bad_wr = NULL;
-    int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
-    if (ret) {
-        ERROR("Failed to post RDMA write :{}", strerror(ret));
-        return -1;
-    }
-    conn->rdma_inflight_count++;
-    return 0;
-}
-
 void cq_handler(connection_t *conn) {
     assert(conn->comp_channel != NULL);
     while (!conn->stop) {
@@ -342,7 +261,6 @@ void cq_handler(connection_t *conn) {
 
             struct ibv_wc wc[10] = {};
             int num_completions;
-
             while ((num_completions = ibv_poll_cq(conn->cq, 10, wc)) && num_completions > 0) {
                 for (int i = 0; i < num_completions; i++) {
                     if (wc[i].status != IBV_WC_SUCCESS) {
@@ -354,7 +272,19 @@ void cq_handler(connection_t *conn) {
                         ERROR("Failed status: {}", ibv_wc_status_str(wc[i].status));
                         return;
                     }
-                    if (wc[i].opcode == IBV_WC_RDMA_READ || wc[i].opcode == IBV_WC_RDMA_WRITE) {
+
+                    if (wc[i].opcode == IBV_WC_SEND) {  // write/read cache: request sent
+                        DEBUG("write cache CTRL code send{}, ", (uintptr_t)wc[i].wr_id);
+                    }
+                    else if (wc[i].opcode == IBV_WC_RECV) {  // write cache: ACK received
+                        INFO("write cache CTRL code recv{}, ", (uintptr_t)wc[i].wr_id);
+                        conn->rdma_inflight_count--;
+                    }
+                    else if (wc[i].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {  // read cache:ACK
+                                                                           // received
+                        INFO("write cache ACK received");
+                        uint32_t imm_data = ntohl(wc[i].imm_data);
+                        INFO("Received IMM, imm_data: {}", imm_data);
                         conn->rdma_inflight_count--;
                     }
                     else {
@@ -399,6 +329,14 @@ int setup_rdma(connection_t *conn, client_config_t config) {
 
     if (modify_qp_to_rts(conn)) {
         ERROR("Failed to modify QP to RTS");
+        delete conn;
+        return -1;
+    }
+
+    conn->send_buffer = (void *)malloc(64 << 10);
+    conn->send_mr = ibv_reg_mr(conn->pd, conn->send_buffer, 64 << 10, IBV_ACCESS_LOCAL_WRITE);
+    if (!conn->send_mr) {
+        ERROR("Failed to register send MR");
         delete conn;
         return -1;
     }
@@ -665,7 +603,7 @@ int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
 }
 
 int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block_size,
-            void *base_ptr, size_t ptr_region_size) {
+            void *base_ptr) {
     assert(conn != NULL);
     assert(op == OP_RDMA_READ || op == OP_RDMA_WRITE);
     assert(base_ptr != NULL);
@@ -675,108 +613,65 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
         return -1;
     }
 
+    INFO("rw_rdma, op: {}, block_size: {}, base_ptr: {}", op, block_size, base_ptr);
+    struct ibv_mr *mr = conn->local_mr_mp[(uintptr_t)base_ptr];
+    assert(mr != NULL);
+
     std::vector<std::string> keys;
+    std::vector<uintptr_t> remote_addrs;
     for (auto &block : blocks) {
         keys.push_back(block.key);
+        remote_addrs.push_back((uintptr_t)(base_ptr + block.offset));
     }
+
+    // register memory region
     remote_meta_request request = {
         .keys = keys,
         .block_size = block_size,
-    };
-
-    std::string serialized_data;
-    if (!serialize(request, serialized_data)) {
-        ERROR("Failed to serialize remote meta request");
-        return -1;
-    }
-
-    header_t header = {
-        .magic = MAGIC,
+        .rkey = mr->rkey,
+        .remote_addrs = remote_addrs,
         .op = op,
-        .body_size = static_cast<unsigned int>(serialized_data.size()),
+    };
+    size_t size = 0;
+    serialize_to_fixed(request, (char *)conn->send_buffer, 64 << 10, size);
+    INFO("serialized size: {}", size);
+
+    // send RDMA request
+    struct ibv_sge sge = {0};
+    sge.addr = (uintptr_t)conn->send_buffer;
+    sge.length = size;
+    sge.lkey = conn->send_mr->lkey;
+
+    struct ibv_send_wr wr = {0};
+    struct ibv_send_wr *bad_wr = NULL;
+    struct ibv_wc wc;
+    // FIXME:
+    wr.wr_id = (uintptr_t)mr;
+    wr.opcode = IBV_WR_SEND;
+    wr.sg_list = &sge;
+    wr.num_sge = 1;
+    wr.send_flags = IBV_SEND_SIGNALED;
+
+    int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
+    if (ret) {
+        ERROR("Failed to post RDMA send :{}", strerror(ret));
+        return -1;
+    }
+    conn->rdma_inflight_count++;
+
+    // recv ACK for whole batch.
+    struct ibv_recv_wr recv_wr = {
+        .wr_id = (uintptr_t)mr,
+        .sg_list = NULL,
+        .num_sge = 0,
     };
 
-    struct iovec iov[2];
-    struct msghdr msg;
-    iov[0].iov_base = &header;
-    iov[0].iov_len = FIXED_HEADER_SIZE;
-    iov[1].iov_base = const_cast<void *>(static_cast<const void *>(serialized_data.data()));
-    iov[1].iov_len = serialized_data.size();
+    struct ibv_recv_wr *bad_wr_recv = NULL;
 
-    memset(&msg, 0, sizeof(msg));
-    msg.msg_iov = iov;
-    msg.msg_iovlen = 2;
-
-    if (sendmsg(conn->sock, &msg, 0) < 0) {
-        ERROR("Failed to send header and body");
-        return -1;
+    ret = ibv_post_recv(conn->qp, &recv_wr, &bad_wr_recv);
+    if (ret) {
+        ERROR("Failed to post RDMA recv :{}", strerror(ret));
     }
-
-    int return_code = -1;
-    if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
-        ERROR("Failed to receive header");
-        return -1;
-    }
-
-    if (return_code != TASK_ACCEPTED) {
-        ERROR("Remote operation failed {}", return_code);
-        return -1;
-    }
-
-    remote_meta_response response;
-    int return_size;
-    if (recv(conn->sock, &return_size, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
-        ERROR("Failed to receive return size");
-        return -1;
-    }
-    char response_data[return_size];
-    if (recv(conn->sock, &response_data, return_size, MSG_WAITALL) < 0) {
-        ERROR("Failed to receive response data");
-        return -1;
-    }
-
-    if (!deserialize(response_data, return_size, response)) {
-        ERROR("deserialize failed");
-        return -1;
-    }
-
-    if (response.blocks.size() != blocks.size()) {
-        ERROR("Invalid response");
-        return -1;
-    }
-
-    // if incoming blocks plus current inflight blocks exceed MAX_WR, wait
-    std::unique_lock<std::mutex> lock(conn->mutex);
-    conn->cv.wait(lock,
-                  [&conn, &blocks] { return conn->rdma_inflight_count + blocks.size() <= MAX_WR; });
-
-    for (int i = 0; i < response.blocks.size(); i++) {
-        DEBUG("remote response: addr: {}, rkey: {}", response.blocks[i].remote_addr,
-              response.blocks[i].rkey);
-
-        int ret;
-        if (op == OP_RDMA_WRITE) {
-            ret =
-                perform_rdma_write(conn, (char *)base_ptr + blocks[i].offset, block_size,
-                                   response.blocks[i].remote_addr, block_size,
-                                   response.blocks[i].rkey, conn->local_mr_mp[(uintptr_t)base_ptr]);
-        }
-        else if (op == OP_RDMA_READ) {
-            ret =
-                perform_rdma_read(conn, response.blocks[i].remote_addr, block_size,
-                                  (char *)base_ptr + blocks[i].offset, block_size,
-                                  response.blocks[i].rkey, conn->local_mr_mp[(uintptr_t)base_ptr]);
-        }
-        else {
-            ERROR("Invalid operation");
-            return -1;
-        }
-        if (ret < 0) {
-            ERROR("Failed to perform RDMA operation");
-            return -1;
-        }
-    }
-
     return 0;
 }
 
@@ -844,7 +739,7 @@ int register_mr(connection_t *conn, void *base_ptr, size_t ptr_region_size) {
     }
     struct ibv_mr *mr;
     mr = ibv_reg_mr(conn->pd, base_ptr, ptr_region_size,
-                    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+                    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
     if (!mr) {
         ERROR("Failed to register memory region");
         return -1;

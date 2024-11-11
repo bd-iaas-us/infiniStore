@@ -25,12 +25,12 @@ int rw_local_wrapper(connection_t *conn, char op,
 
 int rw_rdma_wrapper(connection_t *conn, char op,
                     const std::vector<std::tuple<std::string, unsigned long>> &blocks,
-                    int block_size, uintptr_t ptr, size_t ptr_region_size) {
+                    int block_size, uintptr_t ptr) {
     std::vector<block_t> c_blocks;
     for (const auto &block : blocks) {
         c_blocks.push_back(block_t{std::get<0>(block), std::get<1>(block)});
     }
-    return rw_rdma(conn, op, c_blocks, block_size, (void *)ptr, ptr_region_size);
+    return rw_rdma(conn, op, c_blocks, block_size, (void *)ptr);
 }
 
 int register_mr_wrapper(connection_t *conn, uintptr_t ptr, size_t ptr_region_size) {
@@ -48,10 +48,7 @@ PYBIND11_MODULE(_infinistore, m) {
         .def_readwrite("link_type", &client_config_t::link_type)
         .def_readwrite("host_addr", &client_config_t::host_addr);
 
-    py::class_<connection_t>(m, "Connection")
-        .def(py::init<>())
-        .def_readwrite("bar1_mem_in_mib", &Connection::bar1_mem_in_mib)
-        .def_readwrite("limited_bar1", &Connection::limited_bar1);
+    py::class_<connection_t>(m, "Connection").def(py::init<>());
 
     m.def("init_connection", &init_connection, "Initialize a connection");
     m.def("rw_local", &rw_local_wrapper, "Read/Write cpu memory from GPU device");

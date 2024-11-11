@@ -136,26 +136,17 @@ typedef struct {
 typedef struct {
     std::vector<std::string> keys;
     int block_size;
-    MSGPACK_DEFINE(keys, block_size)
+    uint32_t rkey;                        // client's rkey
+    std::vector<uintptr_t> remote_addrs;  // client's GPU address
+    char op;
+    MSGPACK_DEFINE(keys, block_size, rkey, remote_addrs, op)
 } remote_meta_request;  // rdma read/write request
 
-typedef struct {
-    uint32_t rkey;
-    uintptr_t remote_addr;
-    MSGPACK_DEFINE(rkey, remote_addr)
-} remote_block_t;
-
-typedef struct {
-    std::vector<remote_block_t> blocks;
-    MSGPACK_DEFINE(blocks)
-} remote_meta_response;  // rdma read/write response
-
-// only RoCEv2 is supported for now.
 typedef struct __attribute__((packed)) rdma_conn_info_t {
     uint32_t qpn;
     uint32_t psn;
-    union ibv_gid gid;
-    uint16_t lid;
+    union ibv_gid gid;  // RoCE v2
+    uint16_t lid;       // IB
 } rdma_conn_info_t;
 
 template <typename T>
@@ -164,6 +155,23 @@ bool serialize(const T& data, std::string& out) {
         msgpack::sbuffer sbuf;
         msgpack::pack(sbuf, data);
         out.assign(sbuf.data(), sbuf.size());
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+template <typename T>
+bool serialize_to_fixed(const T& data, char* buffer, size_t buffer_size, size_t& packed_size) {
+    try {
+        msgpack::sbuffer sbuffer;
+        msgpack::packer<msgpack::sbuffer> packer(sbuffer);
+        packer.pack(data);
+        packed_size = sbuffer.size();
+        if (packed_size > buffer_size) {
+            return false;
+        }
+        std::memcpy(buffer, sbuffer.data(), packed_size);
         return true;
     } catch (const std::exception&) {
         return false;
@@ -186,8 +194,8 @@ template bool deserialize<keys_t>(const char* data, size_t size, keys_t& out);
 template bool serialize<local_meta_t>(const local_meta_t& data, std::string& out);
 template bool deserialize<local_meta_t>(const char* data, size_t size, local_meta_t& out);
 template bool serialize<remote_meta_request>(const remote_meta_request& data, std::string& out);
-template bool deserialize<remote_meta_response>(const char* data, size_t size,
-                                                remote_meta_response& out);
+template bool deserialize<remote_meta_request>(const char* data, size_t size,
+                                               remote_meta_request& out);
 
 #define FIXED_HEADER_SIZE sizeof(header_t)
 
