@@ -8,6 +8,9 @@ import time
 # connection type: default is RDMA
 TYPE_LOCAL_GPU = "LOCAL_GPU"
 TYPE_RDMA = "RDMA"
+# rdma link type
+LINK_ETHERNET = "Ethernet"
+LINK_IB = "IB"
 
 
 class ClientConfig(_infinistore.ClientConfig):
@@ -122,7 +125,8 @@ def register_server(loop, config: ServerConfig):
 
     # from cpython.pycapsule import PyCapsule_GetPointer
     # <uint64_t>PyCapsule_GetPointer(obj, NULL)
-    return _infinistore.register_server(loop_ptr, config)
+    if _infinistore.register_server(loop_ptr, config) < 0:
+        raise Exception("Failed to register server")
 
 
 def _kernel_modules():
@@ -251,7 +255,6 @@ class InfinityConnection:
                 blocks_in_bytes,
                 page_size * element_size,
                 ptr,
-                cache.numel() * element_size,
             )
             if ret < 0:
                 raise Exception(f"Failed to write to infinistore, ret = {ret}")
@@ -291,7 +294,6 @@ class InfinityConnection:
                 blocks_in_bytes,
                 page_size * element_size,
                 ptr,
-                cache.numel() * element_size,
             )
             if ret < 0:
                 raise Exception(f"Failed to read to infinistore, ret = {ret}")

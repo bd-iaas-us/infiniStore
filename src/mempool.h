@@ -24,7 +24,7 @@ class MemoryPool {
     */
     void deallocate(void* ptr, size_t size);
 
-    uint32_t get_rkey() const { return mr_->rkey; }
+    uint32_t get_lkey() const { return mr_->lkey; }
 
    private:
     void* pool_;
@@ -50,9 +50,9 @@ class MM {
     MM(const MM& mm) = delete;
     void* allocate(size_t size, int* pool_idx);
     void deallocate(void* ptr, size_t size, int pool_idx);
-    uint32_t get_rkey(int pool_idx) const {
+    uint32_t get_lkey(int pool_idx) const {
         assert(pool_idx >= 0 && pool_idx < mempools_.size());
-        return mempools_[pool_idx]->get_rkey();
+        return mempools_[pool_idx]->get_lkey();
     }
 
     ~MM() {

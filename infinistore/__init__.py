@@ -7,6 +7,8 @@ from .lib import (
     TYPE_LOCAL_GPU,
     Logger,
     check_supported,
+    LINK_ETHERNET,
+    LINK_IB,
 )
 
 __all__ = [
@@ -18,4 +20,6 @@ __all__ = [
     "TYPE_LOCAL_GPU",
     "Logger",
     "check_supported",
+    "LINK_ETHERNET",
+    "LINK_IB",
 ]

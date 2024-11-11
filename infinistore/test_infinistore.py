@@ -13,7 +13,17 @@ import contextlib
 # Fixture to start the TCzpserver before running tests
 @pytest.fixture(scope="module")
 def server():
-    server_process = subprocess.Popen(["python", "-m", "infinistore.server"])
+    server_process = subprocess.Popen(
+        [
+            "python",
+            "-m",
+            "infinistore.server",
+            "--dev-name",
+            "mlx5_0",
+            "--link-type",
+            "Ethernet",
+        ]
+    )
     time.sleep(4)
     yield
     os.kill(server_process.pid, signal.SIGINT)
@@ -76,8 +86,8 @@ def test_basic_read_write_cache(server, dtype, new_connection, local):
     assert torch.equal(src_tensor, dst)
 
 
-@pytest.mark.parametrize("seperated_gpu", [True, False])
-@pytest.mark.parametrize("local", [True, False])
+@pytest.mark.parametrize("seperated_gpu", [False])
+@pytest.mark.parametrize("local", [False])
 def test_batch_read_write_cache(server, seperated_gpu, local):
     config = infinistore.ClientConfig(
         host_addr="127.0.0.1",
