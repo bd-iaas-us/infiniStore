@@ -646,7 +646,6 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
 
     struct ibv_send_wr wr = {0};
     struct ibv_send_wr *bad_wr = NULL;
-    struct ibv_wc wc;
     // FIXME:
     wr.wr_id = (uintptr_t)mr;
     wr.opcode = IBV_WR_SEND;

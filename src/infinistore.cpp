@@ -68,8 +68,6 @@ struct Client {
     // TCP send buffer
     char *send_buffer = NULL;
 
-    int batching_rdma_ops = 0;
-
     cudaStream_t cuda_stream;
 
     rdma_conn_info_t remote_info;
@@ -182,9 +180,10 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                     case OP_RDMA_READ:
                         read_cache(request);
                         break;
-                    case OP_RDMA_WRITE:
+                    case OP_RDMA_WRITE: {
                         write_cache(request);
                         break;
+                    }
                     default:
                         ERROR("Unexpected request op: {}", request.op);
                         break;
@@ -207,17 +206,13 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
             }
             else if (wc.opcode == IBV_WC_RDMA_READ) {  // write cache: multple RDMA read done
                 DEBUG("write cache: multple RDMA read done");
-                batching_rdma_ops--;
-                if (batching_rdma_ops == 0) {
-                    DEBUG("write cache:All RDMA read done");
-                    send_rdma_resp();
-                }
+                send_rdma_resp();
             }
             else if (wc.opcode == IBV_WC_SEND) {  // write cache: ACK received
-                INFO("write cache ACK received");
+                DEBUG("write cache ACK received");
             }
             else {
-                ERROR("Unexpected wc opcode: {}", wc.opcode);
+                ERROR("Unexpected wc opcode: {}", (int)wc.opcode);
             }
         }
         else {
@@ -232,57 +227,59 @@ int Client::read_cache(remote_meta_request &remote_meta_req) {
         ERROR("keys size and remote_addrs size mismatch");
         return -1;
     }
-    // std::vector<block> blocks;
-    // blocks.reserve(remote_meta_req.keys.size());
 
-    // for (const auto &key : remote_meta_req.keys) {
-    //     auto it = kv_map.find(key);
-    //     if (it == kv_map.end()) {
-    //         ERROR("Key not found: {}", key);
-    //         return -1;
-    //     }
-    //     const PTR &ptr = it->second;
-    //     DEBUG("rkey: {}, local_addr: {}, size : {}", mm->get_lkey(ptr.pool_idx),
-    //     (uintptr_t)ptr.ptr,
-    //           ptr.size);
-    //     blocks.push_back({.lkey = mm->get_lkey(ptr.pool_idx), .local_addr = (uintptr_t)ptr.ptr});
-    // }
+    std::vector<block> blocks;
+    blocks.reserve(remote_meta_req.keys.size());
 
-    for (int i = 0; i < remote_meta_req.keys.size(); i++) {
-        auto it = kv_map.find(remote_meta_req.keys[i]);
+    for (const auto &key : remote_meta_req.keys) {
+        auto it = kv_map.find(key);
         if (it == kv_map.end()) {
-            ERROR("Key not found: {}", remote_meta_req.keys[i]);
+            ERROR("Key not found: {}", key);
             return -1;
         }
         const PTR &ptr = it->second;
+        DEBUG("rkey: {}, local_addr: {}, size : {}", mm->get_lkey(ptr.pool_idx), (uintptr_t)ptr.ptr,
+              ptr.size);
+        blocks.push_back({.lkey = mm->get_lkey(ptr.pool_idx), .local_addr = (uintptr_t)ptr.ptr});
+    }
 
-        struct ibv_sge sge = {0};
-        sge.addr = (uintptr_t)ptr.ptr;
-        sge.length = remote_meta_req.block_size;
-        sge.lkey = mm->get_lkey(ptr.pool_idx);
+    const size_t max_wr = 16;
+    struct ibv_send_wr wrs[max_wr];
+    struct ibv_sge sges[max_wr];
 
-        struct ibv_send_wr wr = {0};
-        wr.wr_id = (uint64_t)ptr.ptr;
-        wr.sg_list = &sge;
-        wr.num_sge = 1;
-        wr.send_flags = 0;
-        wr.next = NULL;
-        wr.wr.rdma.remote_addr = remote_meta_req.remote_addrs[i];
-        wr.wr.rdma.rkey = remote_meta_req.rkey;
-        if (i == remote_meta_req.keys.size() - 1) {
-            wr.imm_data = htonl(100);
-            wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-        }
-        else {
-            wr.opcode = IBV_WR_RDMA_WRITE;
-        }
-        struct ibv_send_wr *bad_wr = NULL;
-        int ret = ibv_post_send(qp, &wr, &bad_wr);
-        if (ret) {
-            ERROR("Failed to post RDMA write");
-            return -1;
+    size_t num_wr = 0;
+    for (size_t i = 0; i < remote_meta_req.keys.size(); i++) {
+        sges[num_wr].addr = blocks[i].local_addr;
+        sges[num_wr].length = remote_meta_req.block_size;
+        sges[num_wr].lkey = blocks[i].lkey;
+
+        wrs[num_wr].wr_id = 1234;
+        wrs[num_wr].opcode =
+            (i == remote_meta_req.keys.size() - 1) ? IBV_WR_RDMA_WRITE_WITH_IMM : IBV_WR_RDMA_WRITE;
+        wrs[num_wr].sg_list = &sges[num_wr];
+        wrs[num_wr].num_sge = 1;
+        wrs[num_wr].send_flags = 0;
+        wrs[num_wr].wr.rdma.remote_addr = remote_meta_req.remote_addrs[i];
+        wrs[num_wr].wr.rdma.rkey = remote_meta_req.rkey;
+        wrs[num_wr].next = (num_wr == max_wr - 1 || i == remote_meta_req.keys.size() - 1)
+                               ? nullptr
+                               : &wrs[num_wr + 1];
+
+        num_wr++;
+
+        // If we reach the maximum number of WRs, post them
+        if (num_wr == max_wr || i == remote_meta_req.keys.size() - 1) {
+            struct ibv_send_wr *bad_wr = nullptr;
+            int ret = ibv_post_send(qp, &wrs[0], &bad_wr);
+            if (ret) {
+                ERROR("Failed to post RDMA write");
+                return -1;
+            }
+            num_wr = 0;  // Reset the counter for the next batch
         }
     }
+
+    return 0;
 }
 
 int Client::write_cache(remote_meta_request &remote_meta_req) {
@@ -315,34 +312,41 @@ int Client::write_cache(remote_meta_request &remote_meta_req) {
         blocks.push_back({.lkey = mm->get_lkey(ptr.pool_idx), .local_addr = (uintptr_t)ptr.ptr});
     }
 
-    // Prepare RDMA read operation for write_cache
-    for (int i = 0; i < remote_meta_req.keys.size(); i++) {
-        struct ibv_sge sge = {};
-        sge.addr = blocks[i].local_addr;
-        sge.length = remote_meta_req.block_size;
-        sge.lkey = blocks[i].lkey;
+    const size_t max_wr = 16;
+    struct ibv_send_wr wrs[max_wr];
+    struct ibv_sge sges[max_wr];
 
-        struct ibv_send_wr wr = {0};
-        wr.wr_id = 1234;
-        wr.opcode = IBV_WR_RDMA_READ;
-        wr.sg_list = &sge;
-        wr.num_sge = 1;
-        if (i == remote_meta_req.keys.size() - 1) {
-            wr.send_flags = IBV_SEND_SIGNALED;
-        }
-        else {
-            wr.send_flags = 0;
-        }
-        wr.wr.rdma.remote_addr = remote_meta_req.remote_addrs[i];
-        wr.wr.rdma.rkey = remote_meta_req.rkey;
-        struct ibv_send_wr *bad_wr = NULL;
-        int ret = ibv_post_send(qp, &wr, &bad_wr);
-        if (ret) {
-            ERROR("Failed to post RDMA read");
-            return -1;
+    size_t num_wr = 0;
+    for (size_t i = 0; i < remote_meta_req.keys.size(); i++) {
+        sges[num_wr].addr = blocks[i].local_addr;
+        sges[num_wr].length = remote_meta_req.block_size;
+        sges[num_wr].lkey = blocks[i].lkey;
+
+        wrs[num_wr].wr_id = 1234;
+        wrs[num_wr].opcode = IBV_WR_RDMA_READ;
+        wrs[num_wr].sg_list = &sges[num_wr];
+        wrs[num_wr].num_sge = 1;
+        wrs[num_wr].send_flags = (i == remote_meta_req.keys.size() - 1) ? IBV_SEND_SIGNALED : 0;
+        wrs[num_wr].wr.rdma.remote_addr = remote_meta_req.remote_addrs[i];
+        wrs[num_wr].wr.rdma.rkey = remote_meta_req.rkey;
+        wrs[num_wr].next = (num_wr == max_wr - 1 || i == remote_meta_req.keys.size() - 1)
+                               ? nullptr
+                               : &wrs[num_wr + 1];
+
+        num_wr++;
+
+        // If we reach the maximum number of WRs, post them
+        if (num_wr == max_wr || i == remote_meta_req.keys.size() - 1) {
+            struct ibv_send_wr *bad_wr = nullptr;
+            int ret = ibv_post_send(qp, &wrs[0], &bad_wr);
+            if (ret) {
+                ERROR("Failed to post RDMA read");
+                return -1;
+            }
+            num_wr = 0;  // Reset the counter for the next batch
         }
     }
-    batching_rdma_ops += 1;
+
     return 0;
 }
 
@@ -476,7 +480,6 @@ int write_cache(client_t *client, local_meta_t &meta) {
     req->data = (void *)wqueue_data;
     uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);
 
-    int return_code = TASK_ACCEPTED;
     send_resp(client, TASK_ACCEPTED, NULL, 0);
 
     reset_client_read_state(client);
