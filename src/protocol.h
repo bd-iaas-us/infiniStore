@@ -136,11 +136,17 @@ typedef struct {
 typedef struct {
     std::vector<std::string> keys;
     int block_size;
-    uint32_t rkey;                        // client's rkey
-    std::vector<uintptr_t> remote_addrs;  // client's GPU address
+    uint32_t rkey;                        // read request: client's rkey
+    std::vector<uintptr_t> remote_addrs;  // read request: client's GPU address
     char op;
     MSGPACK_DEFINE(keys, block_size, rkey, remote_addrs, op)
 } remote_meta_request;  // rdma read/write request
+
+typedef struct {
+    std::vector<uintptr_t> remote_addrs;
+    std::vector<uint32_t> rkeys;
+    MSGPACK_DEFINE(rkeys, remote_addrs)
+} remote_meta_response;  // rdma read response
 
 typedef struct __attribute__((packed)) rdma_conn_info_t {
     uint32_t qpn;

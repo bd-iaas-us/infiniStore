@@ -276,11 +276,19 @@ void cq_handler(connection_t *conn) {
                     }
 
                     if (wc[i].opcode == IBV_WC_SEND) {  // write/read cache: request sent
-                        DEBUG("write cache CTRL code send{}, ", (uintptr_t)wc[i].wr_id);
+                        DEBUG("write/read cache CTRL code send{}, ", (uintptr_t)wc[i].wr_id);
                     }
                     else if (wc[i].opcode == IBV_WC_RECV) {  // write cache: ACK received
-                        INFO("write cache CTRL code recv{}, ", (uintptr_t)wc[i].wr_id);
-                        conn->rdma_inflight_count--;
+                        if (wc[i].wr_id == 0) {
+                            INFO("read cache ACK received");
+                            conn->rdma_inflight_count--;
+                        }
+                        else {
+                            INFO("write cache CTRL code recv{}, ", (uintptr_t)wc[i].wr_id);
+                            WriteRequest *wr = (WriteRequest *)wc[i].wr_id;
+                            // TODO: free wr
+                            delete wr;
+                        }
                     }
                     else if (wc[i].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {  // read cache:ACK
                                                                            // received
@@ -604,6 +612,68 @@ int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
     return last_index;
 }
 
+struct WriteRequest {
+    uint32_t lkey;
+    std::vector<uintptr_t> local_addresses;
+    WriteRequest(uint32_t lkey, const std::vector<uintptr_t> &local_addresses)
+        : lkey(lkey), local_addresses(local_addresses) {}
+};
+
+int w_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, void *base_ptr,
+           struct ibv_mr *mr) {
+    std::vector<std::string> keys;
+    std::vector<uintptr_t> local_addrs;
+    for (auto &block : blocks) {
+        keys.push_back(block.key);
+        local_addrs.push_back((uintptr_t)(base_ptr + block.offset));
+    }
+    remote_meta_request request = {
+        .keys = keys,
+        .block_size = block_size,
+        .op = OP_RDMA_WRITE,
+    };
+
+    size_t size = 0;
+    serialize_to_fixed(request, (char *)conn->send_buffer, 64 << 10, size);
+
+    struct ibv_sge sge = {0};
+    sge.addr = (uintptr_t)conn->send_buffer;
+    sge.length = size;
+    sge.lkey = conn->send_mr->lkey;
+
+    struct ibv_send_wr wr = {0};
+    struct ibv_send_wr *bad_wr = NULL;
+    // FIXME:
+    wr.wr_id = (uintptr_t)mr;
+    wr.opcode = IBV_WR_SEND;
+    wr.sg_list = &sge;
+    wr.num_sge = 1;
+    wr.send_flags = IBV_SEND_SIGNALED;
+
+    int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
+    if (ret) {
+        ERROR("Failed to post RDMA send :{}", strerror(ret));
+        return -1;
+    }
+    conn->rdma_inflight_count++;
+
+    WriteRequest *wr = new WriteRequest(mr->lkey, local_addrs);
+    // recv ACK for whole batch.
+    struct ibv_recv_wr recv_wr = {
+        .wr_id = (uintptr_t)(wr).sg_list = NULL,
+        .num_sge = 0,
+    };
+
+    struct ibv_recv_wr *bad_wr_recv = NULL;
+
+    ret = ibv_post_recv(conn->qp, &recv_wr, &bad_wr_recv);
+    if (ret) {
+        ERROR("Failed to post RDMA recv :{}", strerror(ret));
+    }
+
+    return 0;
+}
+
 int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block_size,
             void *base_ptr) {
     assert(conn != NULL);
@@ -618,6 +688,10 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
     INFO("rw_rdma, op: {}, block_size: {}, base_ptr: {}", op, block_size, base_ptr);
     struct ibv_mr *mr = conn->local_mr_mp[(uintptr_t)base_ptr];
     assert(mr != NULL);
+
+    if (op == OP_RDMA_WRITE) {
+        return w_rdma(conn, blocks, block_size, base_ptr, mr);
+    }
 
     std::vector<std::string> keys;
     std::vector<uintptr_t> remote_addrs;
@@ -662,7 +736,7 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
 
     // recv ACK for whole batch.
     struct ibv_recv_wr recv_wr = {
-        .wr_id = (uintptr_t)mr,
+        .wr_id = 0,
         .sg_list = NULL,
         .num_sge = 0,
     };

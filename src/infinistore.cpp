@@ -312,41 +312,12 @@ int Client::write_cache(remote_meta_request &remote_meta_req) {
         blocks.push_back({.lkey = mm->get_lkey(ptr.pool_idx), .local_addr = (uintptr_t)ptr.ptr});
     }
 
-    const size_t max_wr = 16;
-    struct ibv_send_wr wrs[max_wr];
-    struct ibv_sge sges[max_wr];
-
-    size_t num_wr = 0;
-    for (size_t i = 0; i < remote_meta_req.keys.size(); i++) {
-        sges[num_wr].addr = blocks[i].local_addr;
-        sges[num_wr].length = remote_meta_req.block_size;
-        sges[num_wr].lkey = blocks[i].lkey;
-
-        wrs[num_wr].wr_id = 1234;
-        wrs[num_wr].opcode = IBV_WR_RDMA_READ;
-        wrs[num_wr].sg_list = &sges[num_wr];
-        wrs[num_wr].num_sge = 1;
-        wrs[num_wr].send_flags = (i == remote_meta_req.keys.size() - 1) ? IBV_SEND_SIGNALED : 0;
-        wrs[num_wr].wr.rdma.remote_addr = remote_meta_req.remote_addrs[i];
-        wrs[num_wr].wr.rdma.rkey = remote_meta_req.rkey;
-        wrs[num_wr].next = (num_wr == max_wr - 1 || i == remote_meta_req.keys.size() - 1)
-                               ? nullptr
-                               : &wrs[num_wr + 1];
-
-        num_wr++;
-
-        // If we reach the maximum number of WRs, post them
-        if (num_wr == max_wr || i == remote_meta_req.keys.size() - 1) {
-            struct ibv_send_wr *bad_wr = nullptr;
-            int ret = ibv_post_send(qp, &wrs[0], &bad_wr);
-            if (ret) {
-                ERROR("Failed to post RDMA read");
-                return -1;
-            }
-            num_wr = 0;  // Reset the counter for the next batch
-        }
+    remote_meta_response resp =
+    {.remote_addrs = remote_meta_req.remote_addrs,
+     .rkey = remote_meta_req.rkey,
     }
 
+    //
     return 0;
 }
 
