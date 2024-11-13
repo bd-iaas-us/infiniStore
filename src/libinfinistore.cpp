@@ -56,10 +56,10 @@ Connection::~Connection() {
         close(sock);
     }
 
-    for (auto it = local_mr_mp.begin(); it != local_mr_mp.end(); it++) {
+    for (auto it = local_mr.begin(); it != local_mr.end(); it++) {
         ibv_dereg_mr(it->second);
     }
-    local_mr_mp.clear();
+    local_mr.clear();
 
     if (qp) {
         struct ibv_qp_attr attr;
@@ -275,12 +275,15 @@ void cq_handler(connection_t *conn) {
                         return;
                     }
 
-                    if (wc[i].opcode == IBV_WC_SEND) {  // write/read cache: request sent
+                    if (wc[i].opcode == IBV_WC_SEND) {  // read cache: request sent
                         DEBUG("write cache CTRL code send{}, ", (uintptr_t)wc[i].wr_id);
                     }
-                    else if (wc[i].opcode == IBV_WC_RECV) {  // write cache: ACK received
-                        INFO("write cache CTRL code recv{}, ", (uintptr_t)wc[i].wr_id);
-                        conn->rdma_inflight_count--;
+                    else if (wc[i].opcode == IBV_WC_RECV) {  // allocate msg recved.
+                        INFO("allocated recv {}", (uintptr_t)wc[i].wr_id);
+                        size_t *ptr_recv_size = (size_t *)wc[i].wr_id;
+                        *ptr_recv_size = wc[i].byte_len;
+                        conn->rdma_allocate_count = 0;
+                        conn->allocater_cv.notify_all();
                     }
                     else if (wc[i].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {  // read cache:ACK
                                                                            // received
@@ -335,10 +338,28 @@ int setup_rdma(connection_t *conn, client_config_t config) {
         return -1;
     }
 
-    conn->send_buffer = (void *)malloc(64 << 10);
+    if (posix_memalign(&conn->send_buffer, 4096, 64 << 10) != 0) {
+        ERROR("Failed to allocate recv buffer");
+        delete conn;
+        return -1;
+    }
+
     conn->send_mr = ibv_reg_mr(conn->pd, conn->send_buffer, 64 << 10, IBV_ACCESS_LOCAL_WRITE);
     if (!conn->send_mr) {
         ERROR("Failed to register send MR");
+        delete conn;
+        return -1;
+    }
+
+    if (posix_memalign(&conn->recv_buffer, 4096, 64 << 10) != 0) {
+        ERROR("Failed to allocate recv buffer");
+        delete conn;
+        return -1;
+    }
+    conn->recv_mr = ibv_reg_mr(conn->pd, conn->recv_buffer, 64 << 10,
+                               IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+    if (!conn->recv_mr) {
+        ERROR("Failed to register recv MR");
         delete conn;
         return -1;
     }
@@ -604,19 +625,94 @@ int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
     return last_index;
 }
 
+// send a message to allocate memory and return the address
+std::optional<std::vector<uintptr_t>> allocate_rdma(connection_t *conn,
+                                                    std::vector<std::string> keys, int block_size) {
+    remote_meta_request req = {
+        .keys = keys,
+        .block_size = block_size,
+        .op = OP_RDMA_ALLOCATE,
+    };
+
+    size_t size = 0;
+    if (!serialize_to_fixed(req, (char *)conn->send_buffer, 64 << 10, size)) {
+        ERROR("Failed to serialize remote meta request");
+        return std::nullopt;
+    }
+
+    // send RDMA request
+    struct ibv_sge sge = {0};
+    struct ibv_send_wr wr = {0};
+    struct ibv_send_wr *bad_wr = NULL;
+
+    sge.addr = (uintptr_t)conn->send_buffer;
+    sge.length = size;
+    sge.lkey = conn->send_mr->lkey;
+
+    // FIXME:
+    wr.wr_id = 0;
+    wr.opcode = IBV_WR_SEND;
+    wr.sg_list = &sge;
+    wr.num_sge = 1;
+    wr.send_flags = IBV_SEND_SIGNALED;
+
+    int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
+    if (ret) {
+        ERROR("Failed to post RDMA send :{}", strerror(ret));
+        return std::nullopt;
+    }
+
+    struct ibv_sge recv_sge = {0};
+    struct ibv_recv_wr *bad_recv_wr = NULL;
+    struct ibv_recv_wr recv_wr = {0};
+
+    // recv all remote addresses
+    recv_sge.addr = (uintptr_t)conn->recv_buffer;
+    recv_sge.length = 64 << 10;
+    recv_sge.lkey = conn->recv_mr->lkey;
+
+    size_t *ptr_recv_size = new size_t;
+    recv_wr = {
+        .wr_id = (uintptr_t)ptr_recv_size,
+        .next = NULL,
+        .sg_list = &recv_sge,
+        .num_sge = 1,
+    };
+    ret = ibv_post_recv(conn->qp, &recv_wr, &bad_recv_wr);
+    if (ret) {
+        ERROR("Failed to post RDMA recv :{}", strerror(ret));
+        return std::nullopt;
+    }
+
+    conn->rdma_allocate_count = 1;
+    std::unique_lock<std::mutex> lock(conn->mutex);
+    if (!conn->allocater_cv.wait_for(lock, std::chrono::seconds(3),
+                                     [&conn] { return conn->rdma_allocate_count == 0; })) {
+        ERROR("timeout to allocate remote memory");
+        return std::nullopt;
+    }
+    rdma_allocate_response resp;
+    deserialize((const char *)conn->recv_buffer, *ptr_recv_size, resp);
+    delete ptr_recv_size;
+    INFO("Received allocate response, #keys: {}", resp.rkeys.size());
+    INFO("haha {}", (uintptr_t)resp.remote_addrs[0]);
+
+    return resp.remote_addrs;
+}
+
 int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block_size,
             void *base_ptr) {
     assert(conn != NULL);
-    assert(op == OP_RDMA_READ || op == OP_RDMA_WRITE);
+    assert(op == OP_RDMA_READ);
     assert(base_ptr != NULL);
 
-    if (!conn->local_mr_mp.count((uintptr_t)base_ptr)) {
+    if (!conn->local_mr.count((uintptr_t)base_ptr)) {
         ERROR("Please register memory first");
         return -1;
     }
 
     INFO("rw_rdma, op: {}, block_size: {}, base_ptr: {}", op, block_size, base_ptr);
-    struct ibv_mr *mr = conn->local_mr_mp[(uintptr_t)base_ptr];
+    struct ibv_mr *mr = conn->local_mr[(uintptr_t)base_ptr];
     assert(mr != NULL);
 
     std::vector<std::string> keys;
@@ -635,9 +731,10 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
         .op = op,
     };
     size_t size = 0;
-    serialize_to_fixed(request, (char *)conn->send_buffer, 64 << 10, size);
-    INFO("serialized size: {}", size);
-
+    if (!serialize_to_fixed(request, (char *)conn->send_buffer, 64 << 10, size)) {
+        ERROR("Failed to serialize remote meta request");
+        return -1;
+    }
     // send RDMA request
     struct ibv_sge sge = {0};
     sge.addr = (uintptr_t)conn->send_buffer;
@@ -734,9 +831,9 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, in
 }
 
 int register_mr(connection_t *conn, void *base_ptr, size_t ptr_region_size) {
-    if (conn->local_mr_mp.count((uintptr_t)base_ptr)) {
+    if (conn->local_mr.count((uintptr_t)base_ptr)) {
         WARN("this memory address is already registered!");
-        ibv_dereg_mr(conn->local_mr_mp[(uintptr_t)base_ptr]);
+        ibv_dereg_mr(conn->local_mr[(uintptr_t)base_ptr]);
     }
     struct ibv_mr *mr;
     mr = ibv_reg_mr(conn->pd, base_ptr, ptr_region_size,
@@ -746,6 +843,6 @@ int register_mr(connection_t *conn, void *base_ptr, size_t ptr_region_size) {
         return -1;
     }
     INFO("register mr done");
-    conn->local_mr_mp[(uintptr_t)base_ptr] = mr;
+    conn->local_mr[(uintptr_t)base_ptr] = mr;
     return 0;
 }

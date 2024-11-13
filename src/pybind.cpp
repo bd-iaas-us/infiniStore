@@ -53,6 +53,7 @@ PYBIND11_MODULE(_infinistore, m) {
     m.def("init_connection", &init_connection, "Initialize a connection");
     m.def("rw_local", &rw_local_wrapper, "Read/Write cpu memory from GPU device");
     m.def("rw_rdma", &rw_rdma_wrapper, "Read/Write remote memory");
+    m.def("allocate_rdma", &allocate_rdma, "Allocate remote memory");
     m.def("sync_local", &sync_local, "sync the cuda stream");
     m.def("setup_rdma", &setup_rdma, "setup rdma connection");
     m.def("sync_rdma", &sync_rdma, "sync the remote server");

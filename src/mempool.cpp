@@ -20,7 +20,13 @@ MemoryPool::MemoryPool(size_t pool_size, size_t block_size, struct ibv_pd* pd)
         "Memory pool size: {} bytes, block size: {} bytes, total blocks: {}, "
         "it may take a while",
         pool_size_, block_size_, total_blocks_);
-    CHECK_CUDA(cudaMallocHost(&pool_, pool_size_));
+    if (posix_memalign(&pool_, 4096, pool_size_) != 0) {
+        ERROR("Failed to allocate memory pool");
+        exit(EXIT_FAILURE);
+    }
+
+    CHECK_CUDA(cudaHostRegister(pool_, pool_size_, cudaHostRegisterDefault));
+
     INFO("Memory pool allocated at {}", pool_);
 
     // 注册内存区域

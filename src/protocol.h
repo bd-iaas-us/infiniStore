@@ -58,7 +58,8 @@ OR
 #define OP_W 'W'
 #define OP_SYNC 'S'
 #define OP_RDMA_EXCHANGE 'E'
-#define OP_RDMA_WRITE 'D'
+#define OP_RDMA_ALLOCATE 'D'
+#define OP_RDMA_WRITE 'B'  // FIXME
 #define OP_RDMA_READ 'A'
 #define OP_CHECK_EXIST 'C'
 #define OP_GET_MATCH_LAST_IDX 'M'
@@ -140,7 +141,13 @@ typedef struct {
     std::vector<uintptr_t> remote_addrs;  // client's GPU address
     char op;
     MSGPACK_DEFINE(keys, block_size, rkey, remote_addrs, op)
-} remote_meta_request;  // rdma read/write request
+} remote_meta_request;  // rdma read/allocate request
+
+typedef struct {
+    std::vector<uint32_t> rkeys;
+    std::vector<uintptr_t> remote_addrs;
+    MSGPACK_DEFINE(rkeys, remote_addrs)
+} rdma_allocate_response;  // rdma allocate_response
 
 typedef struct __attribute__((packed)) rdma_conn_info_t {
     uint32_t qpn;

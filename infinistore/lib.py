@@ -363,3 +363,12 @@ class InfinityConnection:
         if ret < 0:
             raise Exception("register memory region failed")
         return ret
+
+    def allocate_rdma(self, keys: List[str], block_size: int):
+        # TODO: should return a list of ptrs.
+        if not self.rdma_connected:
+            raise Exception("this function is only valid for connected rdma")
+        out = _infinistore.allocate_rdma(self.conn, keys, block_size)
+        if out is None:
+            raise Exception("allocate memory failed")
+        return out

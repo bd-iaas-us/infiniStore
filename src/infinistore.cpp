@@ -65,8 +65,12 @@ struct Client {
     char *recv_buffer = NULL;
     struct ibv_mr *recv_mr = NULL;
 
-    // TCP send buffer
+    // RDMA send buffer
     char *send_buffer = NULL;
+    struct ibv_mr *send_mr = NULL;
+
+    // TCP send buffer
+    char *tcp_send_buffer = NULL;
 
     cudaStream_t cuda_stream;
 
@@ -92,12 +96,10 @@ struct Client {
     ~Client();
 
     void cq_poll_handle(uv_poll_t *handle, int status, int events);
-    int write_cache(remote_meta_request &remote_meta_req);
-    int read_cache(remote_meta_request &remote_meta_req);
-
-   private:
-    void send_rdma_resp();
+    int read_rdma_cache(remote_meta_request &remote_meta_req);
+    int allocate_rdma(remote_meta_request &req);
 };
+
 typedef struct Client client_t;
 
 Client::~Client() {
@@ -131,18 +133,6 @@ Client::~Client() {
     }
 }
 
-void Client::send_rdma_resp() {
-    // send a empty message to wake up the cq_handler
-    struct ibv_send_wr wr = {.wr_id = (uintptr_t)this,
-                             .sg_list = NULL,
-                             .num_sge = 0,
-                             .opcode = IBV_WR_SEND,
-                             .send_flags = IBV_SEND_SIGNALED};
-    struct ibv_send_wr *bad_wr = NULL;
-    if (ibv_post_send(qp, &wr, &bad_wr)) {
-        ERROR("Failed to post ACK");
-    }
-}
 void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
     DEBUG("Polling CQ");
 
@@ -178,10 +168,15 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                      request.block_size);
                 switch (request.op) {
                     case OP_RDMA_READ:
-                        read_cache(request);
+                        read_rdma_cache(request);
+                        break;
+                    case OP_RDMA_ALLOCATE:
+                        allocate_rdma(request);
                         break;
                     case OP_RDMA_WRITE: {
-                        write_cache(request);
+                        ERROR("Unexpected request op: {}", request.op);
+                        assert(false);
+                        // write_rdma_cache(request);
                         break;
                     }
                     default:
@@ -204,12 +199,8 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                     return;
                 }
             }
-            else if (wc.opcode == IBV_WC_RDMA_READ) {  // write cache: multple RDMA read done
-                DEBUG("write cache: multple RDMA read done");
-                send_rdma_resp();
-            }
-            else if (wc.opcode == IBV_WC_SEND) {  // write cache: ACK received
-                DEBUG("write cache ACK received");
+            else if (wc.opcode == IBV_WC_SEND) {  // allocate: response sent
+                DEBUG("allocate response sent");
             }
             else {
                 ERROR("Unexpected wc opcode: {}", (int)wc.opcode);
@@ -221,7 +212,57 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
     }
 }
 
-int Client::read_cache(remote_meta_request &remote_meta_req) {
+int Client::allocate_rdma(remote_meta_request &req) {
+    INFO("do allocate_rdma...");
+
+    rdma_allocate_response resp;
+    resp.rkeys.reserve(req.keys.size());
+    resp.remote_addrs.reserve(req.keys.size());
+    for (const auto &key : req.keys) {
+        void *h_dst;
+        int pool_idx;
+        h_dst = mm->allocate(req.block_size, &pool_idx);
+        if (h_dst == NULL) {
+            ERROR("Failed to allocate host memory");
+            return SYSTEM_ERROR;
+        }
+        resp.rkeys.push_back(mm->get_rkey(pool_idx));
+        resp.remote_addrs.push_back((uintptr_t)h_dst);
+    }
+
+    // send RDMA request
+    struct ibv_sge sge = {0};
+    struct ibv_send_wr wr = {0};
+    struct ibv_send_wr *bad_wr = NULL;
+
+    size_t size = 0;
+    if (!serialize_to_fixed(resp, send_buffer, BUFFER_SIZE, size)) {
+        ERROR("Failed to serialize response");
+        return SYSTEM_ERROR;
+    }
+
+    sge.addr = (uintptr_t)send_buffer;
+    sge.length = size;
+    sge.lkey = send_mr->lkey;
+
+    wr.wr_id = 0;
+    wr.opcode = IBV_WR_SEND;
+    wr.sg_list = &sge;
+    wr.num_sge = 1;
+    wr.send_flags = IBV_SEND_SIGNALED;
+
+    INFO("allocate_rdma: send response");
+    int ret = ibv_post_send(qp, &wr, &bad_wr);
+    if (ret) {
+        ERROR("Failed to post RDMA send :{}", strerror(ret));
+        // FIXME:
+        return -1;
+    }
+
+    return 0;
+}
+
+int Client::read_rdma_cache(remote_meta_request &remote_meta_req) {
     INFO("do rdma read...");
     if (remote_meta_req.keys.size() != remote_meta_req.remote_addrs.size()) {
         ERROR("keys size and remote_addrs size mismatch");
@@ -282,7 +323,8 @@ int Client::read_cache(remote_meta_request &remote_meta_req) {
     return 0;
 }
 
-int Client::write_cache(remote_meta_request &remote_meta_req) {
+/*
+int Client::write_rdma_cache(remote_meta_request &remote_meta_req) {
     INFO("do write_cache...");
 
     if (remote_meta_req.keys.size() != remote_meta_req.remote_addrs.size()) {
@@ -349,6 +391,7 @@ int Client::write_cache(remote_meta_request &remote_meta_req) {
 
     return 0;
 }
+*/
 
 // send response to client through TCP
 void send_resp(client_t *client, int return_code, void *buf, size_t size);
@@ -678,7 +721,22 @@ int rdma_exchange(client_t *client) {
     INFO("RDMA exchange done");
     client->rdma_connected = true;
 
-    client->recv_buffer = (char *)realloc(client->recv_buffer, BUFFER_SIZE);
+    if (posix_memalign((void **)&client->send_buffer, 4096, BUFFER_SIZE) != 0) {
+        ERROR("Failed to allocate send buffer");
+        return SYSTEM_ERROR;
+    }
+
+    client->send_mr = ibv_reg_mr(pd, client->send_buffer, BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
+    if (!client->send_mr) {
+        ERROR("Failed to register MR");
+        return SYSTEM_ERROR;
+    }
+
+    if (posix_memalign((void **)&client->recv_buffer, 4096, BUFFER_SIZE) != 0) {
+        ERROR("Failed to allocate recv buffer");
+        return SYSTEM_ERROR;
+    }
+
     client->recv_mr = ibv_reg_mr(pd, client->recv_buffer, BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
     if (!client->recv_mr) {
         ERROR("Failed to register MR");
@@ -731,12 +789,12 @@ void send_resp(client_t *client, int return_code, void *buf, size_t size) {
     }
     uv_write_t *write_req = (uv_write_t *)malloc(sizeof(uv_write_t));
 
-    client->send_buffer = (char *)realloc(client->send_buffer, size + RETURN_CODE_SIZE);
+    client->tcp_send_buffer = (char *)realloc(client->tcp_send_buffer, size + RETURN_CODE_SIZE);
 
-    memcpy(client->send_buffer, &return_code, RETURN_CODE_SIZE);
-    memcpy(client->send_buffer + RETURN_CODE_SIZE, buf, size);
+    memcpy(client->tcp_send_buffer, &return_code, RETURN_CODE_SIZE);
+    memcpy(client->tcp_send_buffer + RETURN_CODE_SIZE, buf, size);
     write_req->data = client;
-    uv_buf_t wbuf = uv_buf_init(client->send_buffer, size + RETURN_CODE_SIZE);
+    uv_buf_t wbuf = uv_buf_init(client->tcp_send_buffer, size + RETURN_CODE_SIZE);
     uv_write(write_req, (uv_stream_t *)client->handle, &wbuf, 1, on_write);
 }
 
