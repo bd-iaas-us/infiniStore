@@ -117,7 +117,7 @@ void print_vector(T* ptr, size_t size) {
     for (size_t i = 0; i < size; ++i) {
         oss << ptr[i] << " ";
     }
-    DEBUG("vector content: {}", oss.str().c_str());
+    INFO("vector content: {}", oss.str().c_str());
 }
 
 template void print_vector<float>(float* ptr, size_t size);

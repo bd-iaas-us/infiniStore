@@ -66,11 +66,13 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, in
 int sync_local(connection_t *conn);
 int get_kvmap_len();
 int setup_rdma(connection_t *conn, client_config_t config);
-int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block_size, void *ptr);
+int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, void *base_ptr);
+int w_rdma(connection_t *conn, std::vector<unsigned long> &offsets, int block_size,
+           std::vector<remote_block_t> remote_blocks, void *base_ptr);
 
 int sync_rdma(connection_t *conn);
-std::optional<std::vector<uintptr_t>> allocate_rdma(connection_t *conn,
-                                                    std::vector<std::string> keys, int block_size);
+int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_size,
+                  std::vector<remote_block_t> &blocks);
 int check_exist(connection_t *conn, std::string key);
 int get_match_last_index(connection_t *conn, std::vector<std::string>);
 int register_mr(connection_t *conn, void *base_ptr, size_t ptr_region_size);

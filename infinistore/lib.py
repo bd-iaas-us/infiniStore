@@ -222,44 +222,45 @@ class InfinityConnection:
                 raise Exception("Failed to setup RDMA connection")
             self.rdma_connected = True
 
-    def write_cache(
+    def local_gpu_write_cache(
         self, cache: torch.Tensor, blocks: List[Tuple[str, int]], page_size: int
     ):
-        """
-        Writes the given cache tensor to the specified blocks in memory.
+        self._verify(cache)
+        ptr = cache.data_ptr()
+        element_size = cache.element_size()
+        torch.cuda.synchronize()
+        assert self.local_connected
+        blocks_in_bytes = [(key, offset * element_size) for key, offset in blocks]
 
-        Args:
-            cache (torch.Tensor): The tensor containing the data to be written.
-            blocks (List[Tuple[str, int]]): A list of tuples where each tuple contains a key and an offset.
-            each pair represents a page to be written to. The page is fixed size and is specified by the page_size parameter.
-            page_size (int): How many element in one page.
-        """
+        ret = _infinistore.rw_local(
+            self.conn, self.OP_W, blocks_in_bytes, page_size * element_size, ptr
+        )
+        if ret < 0:
+            raise Exception(f"Failed to write to infinistore, ret = {ret}")
+        return 0
+
+    def rdma_write_cache(
+        self, cache: torch.Tensor, offsets: List[int], page_size, remote_blocks: List
+    ):
+        """ """
+        assert self.rdma_connected
         self._verify(cache)
         ptr = cache.data_ptr()
         element_size = cache.element_size()
 
         # each offset should multiply by the element size
-        blocks_in_bytes = [(key, offset * element_size) for key, offset in blocks]
+        offsets_in_bytes = [offset * element_size for offset in offsets]
 
-        torch.cuda.synchronize()
-        if self.local_connected:
-            ret = _infinistore.rw_local(
-                self.conn, self.OP_W, blocks_in_bytes, page_size * element_size, ptr
-            )
-            if ret < 0:
-                raise Exception(f"Failed to write to infinistore, ret = {ret}")
-        elif self.rdma_connected:
-            ret = _infinistore.rw_rdma(
-                self.conn,
-                self.OP_RDMA_WRITE,
-                blocks_in_bytes,
-                page_size * element_size,
-                ptr,
-            )
-            if ret < 0:
-                raise Exception(f"Failed to write to infinistore, ret = {ret}")
-        else:
-            raise Exception("Not connected to any instance")
+        ret = _infinistore.w_rdma(
+            self.conn,
+            offsets_in_bytes,
+            page_size * element_size,
+            remote_blocks,
+            ptr,
+        )
+        if ret < 0:
+            raise Exception(f"Failed to write to infinistore, ret = {ret}")
+        return 0
 
     def read_cache(
         self, cache: torch.Tensor, blocks: List[Tuple[str, int]], page_size: int
@@ -288,9 +289,8 @@ class InfinityConnection:
             if ret < 0:
                 raise Exception(f"Failed to read to infinistore, ret = {ret}")
         elif self.rdma_connected:
-            ret = _infinistore.rw_rdma(
+            ret = _infinistore.r_rdma(
                 self.conn,
-                self.OP_RDMA_READ,
                 blocks_in_bytes,
                 page_size * element_size,
                 ptr,
@@ -364,11 +364,10 @@ class InfinityConnection:
             raise Exception("register memory region failed")
         return ret
 
-    def allocate_rdma(self, keys: List[str], block_size: int):
-        # TODO: should return a list of ptrs.
+    def allocate_rdma(self, keys: List[str], page_size_in_bytes: int):
         if not self.rdma_connected:
             raise Exception("this function is only valid for connected rdma")
-        out = _infinistore.allocate_rdma(self.conn, keys, block_size)
-        if out is None:
+        ret = _infinistore.allocate_rdma(self.conn, keys, page_size_in_bytes)
+        if len(ret) == 0:
             raise Exception("allocate memory failed")
-        return out
+        return ret

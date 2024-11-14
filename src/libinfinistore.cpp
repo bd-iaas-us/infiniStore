@@ -279,25 +279,28 @@ void cq_handler(connection_t *conn) {
                         DEBUG("write cache CTRL code send{}, ", (uintptr_t)wc[i].wr_id);
                     }
                     else if (wc[i].opcode == IBV_WC_RECV) {  // allocate msg recved.
-                        INFO("allocated recv {}", (uintptr_t)wc[i].wr_id);
+                        DEBUG("rdma allocated recv {}", (uintptr_t)wc[i].wr_id);
                         size_t *ptr_recv_size = (size_t *)wc[i].wr_id;
                         *ptr_recv_size = wc[i].byte_len;
                         conn->rdma_allocate_count = 0;
                         conn->allocater_cv.notify_all();
                     }
-                    else if (wc[i].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {  // read cache:ACK
-                                                                           // received
-                        INFO("write cache ACK received");
+                    else if (wc[i].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {  // read cache done
                         uint32_t imm_data = ntohl(wc[i].imm_data);
                         INFO("Received IMM, imm_data: {}", imm_data);
                         conn->rdma_inflight_count--;
+                        conn->cv.notify_all();
+                    }
+                    else if (wc[i].opcode == IBV_WC_RDMA_WRITE) {  // write cache done
+                        INFO("write cache completed");
+                        conn->rdma_inflight_count--;
+                        conn->cv.notify_all();
                     }
                     else {
                         ERROR("Unexpected opcode: {}", (int)wc[i].opcode);
                         return;
                     }
                 }
-                conn->cv.notify_all();
             }
         }
         else {
@@ -626,8 +629,10 @@ int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
 }
 
 // send a message to allocate memory and return the address
-std::optional<std::vector<uintptr_t>> allocate_rdma(connection_t *conn,
-                                                    std::vector<std::string> keys, int block_size) {
+int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_size,
+                  std::vector<remote_block_t> &blocks) {
+    auto start = std::chrono::high_resolution_clock::now();
+
     remote_meta_request req = {
         .keys = keys,
         .block_size = block_size,
@@ -637,7 +642,7 @@ std::optional<std::vector<uintptr_t>> allocate_rdma(connection_t *conn,
     size_t size = 0;
     if (!serialize_to_fixed(req, (char *)conn->send_buffer, 64 << 10, size)) {
         ERROR("Failed to serialize remote meta request");
-        return std::nullopt;
+        return -1;
     }
 
     // send RDMA request
@@ -659,7 +664,7 @@ std::optional<std::vector<uintptr_t>> allocate_rdma(connection_t *conn,
     int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
     if (ret) {
         ERROR("Failed to post RDMA send :{}", strerror(ret));
-        return std::nullopt;
+        return -1;
     }
 
     struct ibv_sge recv_sge = {0};
@@ -681,29 +686,88 @@ std::optional<std::vector<uintptr_t>> allocate_rdma(connection_t *conn,
     ret = ibv_post_recv(conn->qp, &recv_wr, &bad_recv_wr);
     if (ret) {
         ERROR("Failed to post RDMA recv :{}", strerror(ret));
-        return std::nullopt;
+        return -1;
     }
 
+    assert(conn->rdma_allocate_count == 0);
     conn->rdma_allocate_count = 1;
+
     std::unique_lock<std::mutex> lock(conn->mutex);
-    if (!conn->allocater_cv.wait_for(lock, std::chrono::seconds(3),
+    if (!conn->allocater_cv.wait_for(lock, std::chrono::seconds(5),
                                      [&conn] { return conn->rdma_allocate_count == 0; })) {
         ERROR("timeout to allocate remote memory");
-        return std::nullopt;
+        return -1;
     }
-    rdma_allocate_response resp;
-    deserialize((const char *)conn->recv_buffer, *ptr_recv_size, resp);
-    delete ptr_recv_size;
-    INFO("Received allocate response, #keys: {}", resp.rkeys.size());
-    INFO("haha {}", (uintptr_t)resp.remote_addrs[0]);
 
-    return resp.remote_addrs;
+    rdma_allocate_response resp;
+    if (!deserialize((const char *)conn->recv_buffer, *ptr_recv_size, resp)) {
+        ERROR("Failed to deserialize remote meta response");
+        return -1;
+    }
+
+    delete ptr_recv_size;
+    INFO("Received allocate response, #keys: {}", resp.blocks.size());
+
+    blocks = std::move(resp.blocks);
+
+    INFO("ALL TIME BEFORE RETURN {} micro seconds",
+         std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::high_resolution_clock::now() - start)
+             .count());
+    return 0;
 }
 
-int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block_size,
-            void *base_ptr) {
+int w_rdma(connection_t *conn, std::vector<unsigned long> &offsets, int block_size,
+           std::vector<remote_block_t> remote_blocks, void *base_ptr) {
     assert(conn != NULL);
-    assert(op == OP_RDMA_READ);
+    assert(base_ptr != NULL);
+    assert(offsets.size() == remote_blocks.size());
+
+    if (!conn->local_mr.count((uintptr_t)base_ptr)) {
+        ERROR("Please register memory first");
+        return -1;
+    }
+
+    INFO("w_rdma, block_size: {}, base_ptr: {}", block_size, base_ptr);
+    struct ibv_mr *mr = conn->local_mr[(uintptr_t)base_ptr];
+
+    for (int i = 0; i < remote_blocks.size(); i++) {
+        struct ibv_sge sge = {0};
+        struct ibv_send_wr wr = {0};
+        struct ibv_send_wr *bad_wr = NULL;
+        sge.addr = (uintptr_t)(base_ptr + offsets[i]);
+        sge.length = block_size;
+        sge.lkey = mr->lkey;
+
+        wr.wr_id = uintptr_t(&remote_blocks[i]);
+        if (i == remote_blocks.size() - 1) {
+            wr.opcode = IBV_WR_RDMA_WRITE;
+            // wr.imm_data = remote_blocks.size();
+            wr.send_flags = IBV_SEND_SIGNALED;
+        }
+        else {
+            wr.opcode = IBV_WR_RDMA_WRITE;
+            wr.send_flags = 0;
+        }
+        wr.sg_list = &sge;
+        wr.num_sge = 1;
+        wr.wr.rdma.remote_addr = remote_blocks[i].remote_addr;
+        wr.wr.rdma.rkey = remote_blocks[i].rkey;
+
+        int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
+        if (ret) {
+            ERROR("Failed to post RDMA send :{}", strerror(ret));
+            return -1;
+        }
+    }
+    conn->rdma_inflight_count++;
+    INFO("rdma_inflight_count: {}", conn->rdma_inflight_count);
+
+    return 0;
+}
+
+int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, void *base_ptr) {
+    assert(conn != NULL);
     assert(base_ptr != NULL);
 
     if (!conn->local_mr.count((uintptr_t)base_ptr)) {
@@ -711,7 +775,7 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
         return -1;
     }
 
-    INFO("rw_rdma, op: {}, block_size: {}, base_ptr: {}", op, block_size, base_ptr);
+    INFO("r_rdma,, block_size: {}, base_ptr: {}", block_size, base_ptr);
     struct ibv_mr *mr = conn->local_mr[(uintptr_t)base_ptr];
     assert(mr != NULL);
 
@@ -728,7 +792,7 @@ int rw_rdma(connection_t *conn, char op, std::vector<block_t> &blocks, int block
         .block_size = block_size,
         .rkey = mr->rkey,
         .remote_addrs = remote_addrs,
-        .op = op,
+        .op = OP_RDMA_READ,
     };
     size_t size = 0;
     if (!serialize_to_fixed(request, (char *)conn->send_buffer, 64 << 10, size)) {

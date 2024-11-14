@@ -170,19 +170,26 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                     case OP_RDMA_READ:
                         read_rdma_cache(request);
                         break;
-                    case OP_RDMA_ALLOCATE:
+                    case OP_RDMA_ALLOCATE: {
+                        auto start = std::chrono::high_resolution_clock::now();
                         allocate_rdma(request);
+                        INFO("allocate_rdma time: {} micro seconds",
+                             std::chrono::duration_cast<std::chrono::microseconds>(
+                                 std::chrono::high_resolution_clock::now() - start)
+                                 .count());
                         break;
+                    }
                     case OP_RDMA_WRITE: {
                         ERROR("Unexpected request op: {}", request.op);
                         assert(false);
-                        // write_rdma_cache(request);
                         break;
                     }
                     default:
                         ERROR("Unexpected request op: {}", request.op);
                         break;
                 }
+
+                INFO("ready for next request");
                 struct ibv_sge sge = {0};
                 struct ibv_recv_wr rwr = {0};
                 struct ibv_recv_wr *bad_wr = NULL;
@@ -202,6 +209,10 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
             else if (wc.opcode == IBV_WC_SEND) {  // allocate: response sent
                 DEBUG("allocate response sent");
             }
+            else if (wc.opcode ==
+                     IBV_WC_RECV_RDMA_WITH_IMM) {  // write cache: we alreay have all data now.
+                INFO("write cache completed successfully, #keys {} saved", wc.imm_data);
+            }
             else {
                 ERROR("Unexpected wc opcode: {}", (int)wc.opcode);
             }
@@ -216,8 +227,7 @@ int Client::allocate_rdma(remote_meta_request &req) {
     INFO("do allocate_rdma...");
 
     rdma_allocate_response resp;
-    resp.rkeys.reserve(req.keys.size());
-    resp.remote_addrs.reserve(req.keys.size());
+    resp.blocks.reserve(req.keys.size());
     for (const auto &key : req.keys) {
         void *h_dst;
         int pool_idx;
@@ -226,8 +236,11 @@ int Client::allocate_rdma(remote_meta_request &req) {
             ERROR("Failed to allocate host memory");
             return SYSTEM_ERROR;
         }
-        resp.rkeys.push_back(mm->get_rkey(pool_idx));
-        resp.remote_addrs.push_back((uintptr_t)h_dst);
+        remote_block_t block = {.rkey = mm->get_rkey(pool_idx), .remote_addr = (uintptr_t)h_dst};
+
+        auto ptr = PTR{.ptr = h_dst, .size = req.block_size, .pool_idx = pool_idx};
+        kv_map[key] = ptr;
+        resp.blocks.push_back(block);
     }
 
     // send RDMA request
@@ -255,7 +268,6 @@ int Client::allocate_rdma(remote_meta_request &req) {
     int ret = ibv_post_send(qp, &wr, &bad_wr);
     if (ret) {
         ERROR("Failed to post RDMA send :{}", strerror(ret));
-        // FIXME:
         return -1;
     }
 

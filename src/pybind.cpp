@@ -1,3 +1,4 @@
+#include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -11,6 +12,7 @@
 #include "log.h"
 
 namespace py = pybind11;
+
 extern int register_server(unsigned long loop_ptr, server_config_t config);
 
 int rw_local_wrapper(connection_t *conn, char op,
@@ -23,14 +25,33 @@ int rw_local_wrapper(connection_t *conn, char op,
     return rw_local(conn, op, c_blocks, block_size, (void *)ptr);
 }
 
-int rw_rdma_wrapper(connection_t *conn, char op,
-                    const std::vector<std::tuple<std::string, unsigned long>> &blocks,
-                    int block_size, uintptr_t ptr) {
+int r_rdma_wrapper(connection_t *conn,
+                   const std::vector<std::tuple<std::string, unsigned long>> &blocks,
+                   int block_size, uintptr_t ptr) {
     std::vector<block_t> c_blocks;
     for (const auto &block : blocks) {
         c_blocks.push_back(block_t{std::get<0>(block), std::get<1>(block)});
     }
-    return rw_rdma(conn, op, c_blocks, block_size, (void *)ptr);
+    return r_rdma(conn, c_blocks, block_size, (void *)ptr);
+}
+
+int w_rdma_wrapper(connection_t *conn, std::vector<unsigned long> &offsets, int block_size,
+                   std::vector<remote_block_t> remote_blocks, uintptr_t ptr) {
+    return w_rdma(conn, offsets, block_size, remote_blocks, (void *)ptr);
+}
+
+std::vector<remote_block_t> allocate_rdma_wrapper(connection_t *conn,
+                                                  std::vector<std::string> &keys, int block_size) {
+    auto start = std::chrono::high_resolution_clock::now();
+
+    std::vector<remote_block_t> blocks;
+    allocate_rdma(conn, keys, block_size, blocks);
+    DEBUG("ALL TIME TO ALLOCATE {} micro seconds",
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::high_resolution_clock::now() - start)
+              .count());
+
+    return blocks;
 }
 
 int register_mr_wrapper(connection_t *conn, uintptr_t ptr, size_t ptr_region_size) {
@@ -49,11 +70,17 @@ PYBIND11_MODULE(_infinistore, m) {
         .def_readwrite("host_addr", &client_config_t::host_addr);
 
     py::class_<connection_t>(m, "Connection").def(py::init<>());
+    py::class_<remote_block_t>(m, "RemoteBlock")
+        .def(py::init<>())
+        .def_readwrite("rkey", &remote_block_t::rkey)
+        .def_readwrite("remote_addr", &remote_block_t::remote_addr);
 
     m.def("init_connection", &init_connection, "Initialize a connection");
     m.def("rw_local", &rw_local_wrapper, "Read/Write cpu memory from GPU device");
-    m.def("rw_rdma", &rw_rdma_wrapper, "Read/Write remote memory");
-    m.def("allocate_rdma", &allocate_rdma, "Allocate remote memory");
+    m.def("r_rdma", &r_rdma_wrapper, "Read remote memory");
+    m.def("w_rdma", &w_rdma_wrapper, "Write remote memory");
+
+    m.def("allocate_rdma", &allocate_rdma_wrapper, "Allocate remote memory");
     m.def("sync_local", &sync_local, "sync the cuda stream");
     m.def("setup_rdma", &setup_rdma, "setup rdma connection");
     m.def("sync_rdma", &sync_rdma, "sync the remote server");

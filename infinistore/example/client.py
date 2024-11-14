@@ -6,8 +6,9 @@ from infinistore import (
 )
 import infinistore
 
-# import torch
-import time
+import torch
+
+# import time
 
 
 def generate_random_string(length):
@@ -20,14 +21,45 @@ def generate_random_string(length):
 
 
 def run(conn):
-    # a = [generate_random_string(5) for i in range(1024)]
-    a = ["a", "b", "c"]
     check_supported()
-    with DisableTorchCaching():
-        now = time.time()
-        x = conn.allocate_rdma(a, 1024)
-        print(x)
-        print(f"allocate elapse time is {time.time() - now}")
+    # a = [generate_random_string(8) for i in range(4096)]
+    # a = ["a", "b", "c"]
+    src = [i for i in range(4096)]
+    with DisableTorchCaching():  # not required if using RDMA
+        src_tensor = torch.tensor(src, device="cuda", dtype=torch.float32)
+
+    conn.register_mr(src_tensor)
+    # now = time.time()
+    x = conn.allocate_rdma(["a", "b", "c"], 1024 * 4)
+    y = conn.allocate_rdma(["d", "e", "f"], 1024 * 4)
+    conn.rdma_write_cache(src_tensor, [0, 1024, 2048], 1024, x)
+    conn.rdma_write_cache(src_tensor, [2048, 2048 + 1024], 1024, y[:2])
+
+    # print(x)
+
+    conn.rdma_write_cache(src_tensor, [0, 1024, 2048], 1024, x)
+    # # print(src_tensor[0:10])
+    print("1")
+
+    z = conn.allocate_rdma(["d", "e", "f"], 1024 * 4)
+    print("2")
+
+    conn.rdma_write_cache(src_tensor, [0, 1024, 2048], 1024, z)
+    print("3")
+
+    conn.sync()
+
+    # print(x)
+    # print(f"write elapse time is {time.time() - now}")
+
+    dst_tensor = torch.zeros(4096, device="cuda", dtype=torch.float32)
+    conn.register_mr(dst_tensor)
+    conn.read_cache(dst_tensor, [("a", 0), ("b", 1024)], 1024)
+
+    conn.sync()
+
+    print(dst_tensor[0:100])
+
     # src = [i for i in range(4096)]
     # with DisableTorchCaching():  # not required if using RDMA
     #     src_tensor = torch.tensor(src, device="cuda:0", dtype=torch.float32)
