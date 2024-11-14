@@ -43,7 +43,6 @@ int w_rdma_wrapper(connection_t *conn, std::vector<unsigned long> &offsets, int 
 std::vector<remote_block_t> allocate_rdma_wrapper(connection_t *conn,
                                                   std::vector<std::string> &keys, int block_size) {
     auto start = std::chrono::high_resolution_clock::now();
-
     std::vector<remote_block_t> blocks;
     allocate_rdma(conn, keys, block_size, blocks);
     DEBUG("ALL TIME TO ALLOCATE {} micro seconds",

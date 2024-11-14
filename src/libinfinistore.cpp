@@ -631,8 +631,6 @@ int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
 // send a message to allocate memory and return the address
 int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_size,
                   std::vector<remote_block_t> &blocks) {
-    auto start = std::chrono::high_resolution_clock::now();
-
     remote_meta_request req = {
         .keys = keys,
         .block_size = block_size,
@@ -709,11 +707,6 @@ int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_
     INFO("Received allocate response, #keys: {}", resp.blocks.size());
 
     blocks = std::move(resp.blocks);
-
-    INFO("ALL TIME BEFORE RETURN {} micro seconds",
-         std::chrono::duration_cast<std::chrono::microseconds>(
-             std::chrono::high_resolution_clock::now() - start)
-             .count());
     return 0;
 }
 

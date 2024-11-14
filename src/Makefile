@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -std=c++11 -Wall -O0 -g
+CXXFLAGS = -std=c++11 -Wall -O3 -g
 
 INCLUDES = -I/usr/local/cuda/include
 LDFLAGS = -L/usr/local/cuda/lib64

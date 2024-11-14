@@ -226,21 +226,21 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
 int Client::allocate_rdma(remote_meta_request &req) {
     INFO("do allocate_rdma...");
 
+    auto start = std::chrono::high_resolution_clock::now();
     rdma_allocate_response resp;
     resp.blocks.reserve(req.keys.size());
-    for (const auto &key : req.keys) {
-        void *h_dst;
-        int pool_idx;
-        h_dst = mm->allocate(req.block_size, &pool_idx);
-        if (h_dst == NULL) {
-            ERROR("Failed to allocate host memory");
-            return SYSTEM_ERROR;
-        }
-        remote_block_t block = {.rkey = mm->get_rkey(pool_idx), .remote_addr = (uintptr_t)h_dst};
+    int key_idx = 0;
+    if (!mm->allocate(req.block_size, req.keys.size(),
+                      [&](void *addr, uint32_t lkey, uint32_t rkey, int pool_idx) {
+                          auto ptr = PTR{.ptr = addr, .size = req.block_size, .pool_idx = pool_idx};
+                          kv_map[req.keys[key_idx]] = ptr;
 
-        auto ptr = PTR{.ptr = h_dst, .size = req.block_size, .pool_idx = pool_idx};
-        kv_map[key] = ptr;
-        resp.blocks.push_back(block);
+                          remote_block_t block = {.rkey = rkey, .remote_addr = (uintptr_t)addr};
+                          resp.blocks.push_back(block);
+                          key_idx++;
+                      })) {
+        ERROR("Failed to allocate memory");
+        return SYSTEM_ERROR;
     }
 
     // send RDMA request
@@ -264,7 +264,6 @@ int Client::allocate_rdma(remote_meta_request &req) {
     wr.num_sge = 1;
     wr.send_flags = IBV_SEND_SIGNALED;
 
-    INFO("allocate_rdma: send response");
     int ret = ibv_post_send(qp, &wr, &bad_wr);
     if (ret) {
         ERROR("Failed to post RDMA send :{}", strerror(ret));
@@ -530,22 +529,33 @@ int write_cache(client_t *client, local_meta_t &meta) {
     void *d_ptr;
     CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, meta.ipc_handle, cudaIpcMemLazyEnablePeerAccess));
 
-    for (auto &block : meta.blocks) {
-        // pull data from local device to CPU host
-        void *h_dst;
-        int pool_idx;
-        h_dst = mm->allocate(meta.block_size, &pool_idx);
-        if (h_dst == NULL) {
-            ERROR("Failed to allocat host memroy");
-            CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
-            return SYSTEM_ERROR;
-        }
-        // how to deal with memory overflow?
-        // pull data from local device to CPU host
-        CHECK_CUDA(cudaMemcpyAsync(h_dst, (char *)d_ptr + block.offset, meta.block_size,
-                                   cudaMemcpyDeviceToHost, client->cuda_stream));
-        kv_map[block.key] = {.ptr = h_dst, .size = meta.block_size, .pool_idx = pool_idx};
-    }
+    // for (auto &block : meta.blocks) {
+    //     // pull data from local device to CPU host
+    //     void *h_dst;
+    //     int pool_idx;
+    //     h_dst = mm->allocate(meta.block_size, &pool_idx);
+    //     if (h_dst == NULL) {
+    //         ERROR("Failed to allocat host memroy");
+    //         CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
+    //         return SYSTEM_ERROR;
+    //     }
+    //     // how to deal with memory overflow?
+    //     // pull data from local device to CPU host
+    //     CHECK_CUDA(cudaMemcpyAsync(h_dst, (char *)d_ptr + block.offset, meta.block_size,
+    //                                cudaMemcpyDeviceToHost, client->cuda_stream));
+    //     kv_map[block.key] = {.ptr = h_dst, .size = meta.block_size, .pool_idx = pool_idx};
+    // }
+
+    mm->allocate(
+        meta.block_size, meta.blocks.size(),
+        [&](void *addr, uint32_t lkey, uint32_t rkey, int pool_idx) {
+            for (auto &block : meta.blocks) {
+                // pull data from local device to CPU host
+                CHECK_CUDA(cudaMemcpyAsync(addr, (char *)d_ptr + block.offset, meta.block_size,
+                                           cudaMemcpyDeviceToHost, client->cuda_stream));
+                kv_map[block.key] = {.ptr = addr, .size = meta.block_size, .pool_idx = pool_idx};
+            }
+        });
     client->remain++;
     wqueue_data_t *wqueue_data = new wqueue_data_t();
     wqueue_data->client = client;

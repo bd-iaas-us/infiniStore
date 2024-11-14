@@ -48,16 +48,14 @@ MemoryPool::~MemoryPool() {
     }
 }
 
-void* MemoryPool::allocate(size_t size) {
-    size_t required_blocks = size / block_size_;
-    if (size % block_size_ != 0) {
-        required_blocks += 1;  // round up
-    }
+bool MemoryPool::allocate(size_t size, size_t n, SimpleAllocationCallback callback) {
+    size_t required_blocks = (size + block_size_ - 1) / block_size_;  // round up
 
     if (required_blocks > total_blocks_) {
-        return nullptr;
+        return false;
     }
 
+    int num_allocated = 0;
     size_t bit_per_word = 64;
 
     for (size_t word_index = 0; word_index < bitmap_.size(); ++word_index) {
@@ -70,32 +68,36 @@ void* MemoryPool::allocate(size_t size) {
             size_t start_block = word_index * bit_per_word + bit_index;
 
             if (start_block + required_blocks > total_blocks_) {
-                return nullptr;
+                return false;
             }
 
             bool found = true;
-            for (size_t i = 0; i < required_blocks; ++i) {
-                size_t idx = (start_block + i) / bit_per_word;
-                size_t bit = (start_block + i) % bit_per_word;
+            for (size_t j = 0; j < required_blocks; ++j) {
+                size_t idx = (start_block + j) / bit_per_word;
+                size_t bit = (start_block + j) % bit_per_word;
                 if (bitmap_[idx] & (1ULL << bit)) {
                     found = false;
-                    bit_index += i;  // skip all the blocks we already checked
+                    bit_index += j;  // skip all the blocks we already checked
                     break;
                 }
             }
 
             if (found) {
-                for (size_t i = 0; i < required_blocks; ++i) {
-                    size_t idx = (start_block + i) / bit_per_word;
-                    size_t bit = (start_block + i) % bit_per_word;
+                for (size_t j = 0; j < required_blocks; ++j) {
+                    size_t idx = (start_block + j) / bit_per_word;
+                    size_t bit = (start_block + j) % bit_per_word;
                     bitmap_[idx] |= (1ULL << bit);
                 }
                 void* addr = static_cast<char*>(pool_) + start_block * block_size_;
-                return addr;
+                callback(addr, mr_->lkey, mr_->rkey);
+                if (++num_allocated == n) {
+                    return true;
+                }
             }
         }
     }
-    return nullptr;
+
+    return num_allocated == n;
 }
 
 void MemoryPool::deallocate(void* ptr, size_t size) {
@@ -133,17 +135,20 @@ void MemoryPool::deallocate(void* ptr, size_t size) {
     }
 }
 
-void* MM::allocate(size_t size, int* pool_idx) {
-    // first fit. TODO: binaray search
+bool MM::allocate(size_t size, size_t n, AllocationCallback callback) {
     for (int i = 0; i < mempools_.size(); ++i) {
-        void* ptr = mempools_[i]->allocate(size);
-        if (ptr) {
-            *pool_idx = i;
-            return ptr;
+        // create a new callback from the original callback
+        auto simple_callback = [callback, i](void* ptr, uint32_t lkey, uint32_t rkey) {
+            callback(ptr, lkey, rkey, i);
+        };
+
+        if (mempools_[i]->allocate(size, n, simple_callback)) {
+            return true;
         }
     }
-    return nullptr;
+    return false;
 }
+
 void MM::deallocate(void* ptr, size_t size, int pool_idx) {
     mempools_[pool_idx]->deallocate(ptr, size);
 }

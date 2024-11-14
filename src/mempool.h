@@ -7,7 +7,12 @@
 #include <infiniband/verbs.h>
 
 #include <cstddef>
+#include <functional>
 #include <vector>
+
+using AllocationCallback =
+    std::function<void(void* ptr, uint32_t lkey, uint32_t rkey, int pool_idx)>;
+using SimpleAllocationCallback = std::function<void(void* ptr, uint32_t lkey, uint32_t rkey)>;
 
 class MemoryPool {
    public:
@@ -18,7 +23,7 @@ class MemoryPool {
     /*
     @brief size should be aligned to block size
     */
-    void* allocate(size_t size);
+    bool allocate(size_t size, size_t n, SimpleAllocationCallback callback);
     /*
     @brief size should be aligned to block size
     */
@@ -49,7 +54,7 @@ class MM {
         mempools_.push_back(new MemoryPool(pool_size, block_size, pd));
     }
     MM(const MM& mm) = delete;
-    void* allocate(size_t size, int* pool_idx);
+    bool allocate(size_t size, size_t n, AllocationCallback callback);
     void deallocate(void* ptr, size_t size, int pool_idx);
     uint32_t get_lkey(int pool_idx) const {
         assert(pool_idx >= 0 && pool_idx < mempools_.size());

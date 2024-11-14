@@ -102,6 +102,7 @@ def run(args):
         dev_name=args.dev_name,
         ib_port=args.ib_port,
         link_type=args.link_type,
+        log_level="debug",
     )
 
     config.connection_type = (
@@ -131,14 +132,21 @@ def run(args):
         conn.register_mr(src_tensor)
         conn.register_mr(dst_tensor)
 
-    blocks = [(keys[i], i * block_size) for i in range(num_of_blocks)]
+    offset_blocks = [i * block_size for i in range(num_of_blocks)]
 
+    # zip keys and offset_blocks
+    blocks = list(zip(keys, offset_blocks))
+
+    # blocks = [(keys[i], offset_blocks[i]) for i in range(num_of_blocks)]
     write_sum = 0.0
     read_sum = 0.0
 
     for _ in range(args.iteration):
         start = time.time()
-        conn.write_cache(src_tensor, blocks, block_size)
+        remote_addrs = conn.allocate_rdma(keys, block_size * 4)
+        print("elapsed time for allocate_rdma: ", time.time() - start)
+        conn.rdma_write_cache(src_tensor, offset_blocks, block_size, remote_addrs)
+
         conn.sync()
         mid = time.time()
         write_sum += mid - start
