@@ -35,30 +35,31 @@ def run(conn):
     conn.rdma_write_cache(src_tensor, [0, 1024, 2048], 1024, x)
     conn.rdma_write_cache(src_tensor, [2048, 2048 + 1024], 1024, y[:2])
 
+    conn.sync()
     # print(x)
 
-    conn.rdma_write_cache(src_tensor, [0, 1024, 2048], 1024, x)
-    # # print(src_tensor[0:10])
-    print("1")
+    # conn.rdma_write_cache(src_tensor, [0, 1024, 2048], 1024, x)
+    # # # print(src_tensor[0:10])
+    # print("1")
 
-    z = conn.allocate_rdma(["d", "e", "f"], 1024 * 4)
-    print("2")
+    # z = conn.allocate_rdma(["d", "e", "f"], 1024 * 4)
+    # print("2")
 
-    conn.rdma_write_cache(src_tensor, [0, 1024, 2048], 1024, z)
-    print("3")
+    # conn.rdma_write_cache(src_tensor, [0, 1024, 2048], 1024, z)
+    # print("3")
 
-    conn.sync()
+    # conn.sync()
 
-    # print(x)
-    # print(f"write elapse time is {time.time() - now}")
+    # # print(x)
+    # # print(f"write elapse time is {time.time() - now}")
 
-    dst_tensor = torch.zeros(4096, device="cuda", dtype=torch.float32)
-    conn.register_mr(dst_tensor)
-    conn.read_cache(dst_tensor, [("a", 0), ("b", 1024)], 1024)
+    # dst_tensor = torch.zeros(4096, device="cuda", dtype=torch.float32)
+    # conn.register_mr(dst_tensor)
+    # conn.read_cache(dst_tensor, [("a", 0), ("b", 1024)], 1024)
 
-    conn.sync()
+    # conn.sync()
 
-    print(dst_tensor[0:100])
+    # print(dst_tensor[0:100])
 
     # src = [i for i in range(4096)]
     # with DisableTorchCaching():  # not required if using RDMA

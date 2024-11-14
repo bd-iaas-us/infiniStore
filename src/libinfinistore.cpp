@@ -741,8 +741,8 @@ int w_rdma(connection_t *conn, std::vector<unsigned long> &offsets, int block_si
 
         wr.wr_id = uintptr_t(&remote_blocks[i]);
         if (i == remote_blocks.size() - 1) {
-            wr.opcode = IBV_WR_RDMA_WRITE;
-            // wr.imm_data = remote_blocks.size();
+            wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+            wr.imm_data = remote_blocks.size();
             wr.send_flags = IBV_SEND_SIGNALED;
         }
         else {

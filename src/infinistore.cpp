@@ -271,6 +271,25 @@ int Client::allocate_rdma(remote_meta_request &req) {
         return -1;
     }
 
+    {  // FIXME
+        // put a recv wr to receive the WRITE_IMM
+        struct ibv_sge sge = {0};
+        struct ibv_recv_wr rwr = {0};
+        struct ibv_recv_wr *bad_wr = NULL;
+        sge.addr = (uintptr_t)recv_buffer;
+        sge.length = BUFFER_SIZE;
+        sge.lkey = recv_mr->lkey;
+
+        rwr.wr_id = (uint64_t)recv_buffer;
+        rwr.next = NULL;
+        rwr.sg_list = &sge;
+        rwr.num_sge = 1;
+        if (ibv_post_recv(qp, &rwr, &bad_wr)) {
+            ERROR("Failed to post receive, {}");
+            return -1;
+        }
+    }
+
     return 0;
 }
 
