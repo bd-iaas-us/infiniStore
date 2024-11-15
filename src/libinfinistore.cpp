@@ -724,35 +724,40 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
     INFO("w_rdma, block_size: {}, base_ptr: {}", block_size, base_ptr);
     struct ibv_mr *mr = conn->local_mr[(uintptr_t)base_ptr];
 
-    for (int i = 0; i < remote_blocks_len; i++) {
-        struct ibv_sge sge = {0};
-        struct ibv_send_wr wr = {0};
-        struct ibv_send_wr *bad_wr = NULL;
-        sge.addr = (uintptr_t)(base_ptr + p_offsets[i]);
-        sge.length = block_size;
-        sge.lkey = mr->lkey;
+    const size_t max_wr = 16;
+    struct ibv_send_wr wrs[max_wr];
+    struct ibv_sge sges[max_wr];
 
-        wr.wr_id = 0;
-        if (i == remote_blocks_len - 1) {
-            wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-            wr.imm_data = remote_blocks_len;
-            wr.send_flags = IBV_SEND_SIGNALED;
-        }
-        else {
-            wr.opcode = IBV_WR_RDMA_WRITE;
-            wr.send_flags = 0;
-        }
-        wr.sg_list = &sge;
-        wr.num_sge = 1;
-        wr.wr.rdma.remote_addr = p_remote_blocks[i].remote_addr;
-        wr.wr.rdma.rkey = p_remote_blocks[i].rkey;
+    size_t num_wr = 0;
+    for (size_t i = 0; i < remote_blocks_len; i++) {
+        sges[num_wr].addr = (uintptr_t)(base_ptr + p_offsets[i]);
+        sges[num_wr].length = block_size;
+        sges[num_wr].lkey = mr->lkey;
 
-        int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
-        if (ret) {
-            ERROR("Failed to post RDMA send :{}", strerror(ret));
-            return -1;
+        wrs[num_wr].wr_id = 0;
+        wrs[num_wr].opcode =
+            (i == remote_blocks_len - 1) ? IBV_WR_RDMA_WRITE_WITH_IMM : IBV_WR_RDMA_WRITE;
+        wrs[num_wr].sg_list = &sges[num_wr];
+        wrs[num_wr].num_sge = 1;
+        wrs[num_wr].send_flags = (i == remote_blocks_len - 1) ? IBV_SEND_SIGNALED : 0;
+        wrs[num_wr].wr.rdma.remote_addr = p_remote_blocks[i].remote_addr;
+        wrs[num_wr].wr.rdma.rkey = p_remote_blocks[i].rkey;
+        wrs[num_wr].next =
+            (num_wr == max_wr - 1 || i == remote_blocks_len - 1) ? nullptr : &wrs[num_wr + 1];
+
+        num_wr++;
+
+        if (num_wr == max_wr || i == remote_blocks_len - 1) {
+            struct ibv_send_wr *bad_wr = nullptr;
+            int ret = ibv_post_send(conn->qp, &wrs[0], &bad_wr);
+            if (ret) {
+                ERROR("Failed to post RDMA write");
+                return -1;
+            }
+            num_wr = 0;
         }
     }
+
     conn->rdma_inflight_count++;
     INFO("rdma_inflight_count: {}", conn->rdma_inflight_count);
 
