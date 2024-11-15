@@ -3,6 +3,7 @@
 #include <pybind11/stl.h>
 
 #include <iostream>
+#include <memory>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -35,22 +36,45 @@ int r_rdma_wrapper(connection_t *conn,
     return r_rdma(conn, c_blocks, block_size, (void *)ptr);
 }
 
-int w_rdma_wrapper(connection_t *conn, std::vector<unsigned long> &offsets, int block_size,
-                   std::vector<remote_block_t> remote_blocks, uintptr_t ptr) {
-    return w_rdma(conn, offsets, block_size, remote_blocks, (void *)ptr);
+int w_rdma_wrapper(
+    connection_t *conn,
+    py::array_t<unsigned long, py::array::c_style | py::array::forcecast> offsets, int block_size,
+    py::array_t<remote_block_t, py::array::c_style | py::array::forcecast> remote_blocks,
+    uintptr_t base_ptr) {
+    py::buffer_info block_buf = remote_blocks.request();
+    py::buffer_info offset_buf = offsets.request();
+
+    assert(block_buf.ndim == 1);
+    assert(offset_buf.ndim == 1);
+
+    remote_block_t *p_remote_blocks = static_cast<remote_block_t *>(block_buf.ptr);
+    unsigned long *p_offsets = static_cast<unsigned long *>(offset_buf.ptr);
+    size_t remote_blocks_len = block_buf.shape[0];
+    size_t offsets_len = offset_buf.shape[0];
+    return w_rdma(conn, p_offsets, offsets_len, block_size, p_remote_blocks, remote_blocks_len,
+                  (void *)base_ptr);
 }
 
-std::vector<remote_block_t> allocate_rdma_wrapper(connection_t *conn,
-                                                  std::vector<std::string> &keys, int block_size) {
-    auto start = std::chrono::high_resolution_clock::now();
+// See https://github.com/pybind/pybind11/issues/1042#issuecomment-642215028
+// as_pyarray is a helper function to convert a C++ sequence to a numpy array and zero-copy
+template <typename Sequence>
+inline py::array_t<typename Sequence::value_type> as_pyarray(Sequence &&seq) {
+    // Move entire object to heap. Memory handled via Python capsule
+    Sequence *seq_ptr = new Sequence(std::move(seq));
+    // Capsule shall delete sequence object when done
+    auto capsule = py::capsule(seq_ptr, [](void *p) { delete reinterpret_cast<Sequence *>(p); });
+
+    return py::array(static_cast<py::ssize_t>(seq_ptr->size()),  // shape of array
+                     seq_ptr->data(),  // c-style contiguous strides for Sequence
+                     capsule           // numpy array references this parent
+    );
+}
+
+py::array allocate_rdma_wrapper(connection_t *conn, std::vector<std::string> &keys,
+                                int block_size) {
     std::vector<remote_block_t> blocks;
     allocate_rdma(conn, keys, block_size, blocks);
-    DEBUG("ALL TIME TO ALLOCATE {} micro seconds",
-          std::chrono::duration_cast<std::chrono::microseconds>(
-              std::chrono::high_resolution_clock::now() - start)
-              .count());
-
-    return blocks;
+    return as_pyarray(std::move(blocks));
 }
 
 int register_mr_wrapper(connection_t *conn, uintptr_t ptr, size_t ptr_region_size) {
@@ -69,15 +93,13 @@ PYBIND11_MODULE(_infinistore, m) {
         .def_readwrite("host_addr", &client_config_t::host_addr);
 
     py::class_<connection_t>(m, "Connection").def(py::init<>());
-    py::class_<remote_block_t>(m, "RemoteBlock")
-        .def(py::init<>())
-        .def_readwrite("rkey", &remote_block_t::rkey)
-        .def_readwrite("remote_addr", &remote_block_t::remote_addr);
 
     m.def("init_connection", &init_connection, "Initialize a connection");
     m.def("rw_local", &rw_local_wrapper, "Read/Write cpu memory from GPU device");
     m.def("r_rdma", &r_rdma_wrapper, "Read remote memory");
     m.def("w_rdma", &w_rdma_wrapper, "Write remote memory");
+
+    PYBIND11_NUMPY_DTYPE(remote_block_t, rkey, remote_addr);
 
     m.def("allocate_rdma", &allocate_rdma_wrapper, "Allocate remote memory");
     m.def("sync_local", &sync_local, "sync the cuda stream");

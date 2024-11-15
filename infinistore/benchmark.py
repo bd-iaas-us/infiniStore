@@ -102,7 +102,7 @@ def run(args):
         dev_name=args.dev_name,
         ib_port=args.ib_port,
         link_type=args.link_type,
-        log_level="debug",
+        log_level="warning",
     )
 
     config.connection_type = (
@@ -144,7 +144,6 @@ def run(args):
     for _ in range(args.iteration):
         start = time.time()
         remote_addrs = conn.allocate_rdma(keys, block_size * 4)
-        print("elapsed time for allocate_rdma: ", time.time() - start)
         conn.rdma_write_cache(src_tensor, offset_blocks, block_size, remote_addrs)
 
         conn.sync()

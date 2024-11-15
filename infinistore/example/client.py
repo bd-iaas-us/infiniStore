@@ -5,10 +5,8 @@ from infinistore import (
     InfinityConnection,
 )
 import infinistore
-
 import torch
-
-# import time
+import time
 
 
 def generate_random_string(length):
@@ -22,71 +20,37 @@ def generate_random_string(length):
 
 def run(conn):
     check_supported()
-    # a = [generate_random_string(8) for i in range(4096)]
-    # a = ["a", "b", "c"]
-    src = [i for i in range(4096)]
     with DisableTorchCaching():  # not required if using RDMA
-        src_tensor = torch.tensor(src, device="cuda", dtype=torch.float32)
+        src_tensor = torch.tensor(
+            [i for i in range(4096)], device="cuda:0", dtype=torch.float32
+        )
+    if conn.rdma_connected:
+        conn.register_mr(src_tensor)
 
-    conn.register_mr(src_tensor)
-    # now = time.time()
-    x = conn.allocate_rdma(["a", "b", "c"], 1024 * 4)
-    y = conn.allocate_rdma(["d", "e", "f"], 1024 * 4)
-    conn.rdma_write_cache(src_tensor, [0, 1024, 2048], 1024, x)
-    conn.rdma_write_cache(src_tensor, [2048, 2048 + 1024], 1024, y[:2])
+    keys = ["key1", "key2", "key3"]
+    remote_addr = conn.allocate_rdma(
+        keys, 1024 * 4
+    )  # 1024(block_size) * 4(element size)
+    now = time.time()
+    conn.rdma_write_cache(src_tensor, [0, 1024, 2048], 1024, remote_addr)
+    print(f"write elapse time is {time.time() - now}")
+
+    before_sync = time.time()
+    conn.sync()
+    print(f"sync elapse time is {time.time() - before_sync}")
+
+    with DisableTorchCaching():
+        dst_tensor = torch.zeros(4096, device="cuda:2", dtype=torch.float32)
+    if conn.rdma_connected:
+        conn.register_mr(dst_tensor)
+    now = time.time()
+    conn.read_cache(dst_tensor, [("key1", 0), ("key2", 1024)], 1024)
 
     conn.sync()
-    # print(x)
+    print(f"read elapse time is {time.time() - now}")
 
-    # conn.rdma_write_cache(src_tensor, [0, 1024, 2048], 1024, x)
-    # # # print(src_tensor[0:10])
-    # print("1")
-
-    # z = conn.allocate_rdma(["d", "e", "f"], 1024 * 4)
-    # print("2")
-
-    # conn.rdma_write_cache(src_tensor, [0, 1024, 2048], 1024, z)
-    # print("3")
-
-    # conn.sync()
-
-    # # print(x)
-    # # print(f"write elapse time is {time.time() - now}")
-
-    # dst_tensor = torch.zeros(4096, device="cuda", dtype=torch.float32)
-    # conn.register_mr(dst_tensor)
-    # conn.read_cache(dst_tensor, [("a", 0), ("b", 1024)], 1024)
-
-    # conn.sync()
-
-    # print(dst_tensor[0:100])
-
-    # src = [i for i in range(4096)]
-    # with DisableTorchCaching():  # not required if using RDMA
-    #     src_tensor = torch.tensor(src, device="cuda:0", dtype=torch.float32)
-    # if conn.rdma_connected:
-    #     conn.register_mr(src_tensor)
-    # now = time.time()
-    # conn.write_cache(src_tensor, [("key1", 0), ("key2", 1024), ("key3", 2048)], 1024)
-    # print(f"write elapse time is {time.time() - now}")
-
-    # before_sync = time.time()
-    # conn.sync()
-    # print(f"sync elapse time is {time.time() - before_sync}")
-
-    # with DisableTorchCaching():
-    #     dst_tensor = torch.zeros(4096, device="cuda:2", dtype=torch.float32)
-    # if conn.rdma_connected:
-    #     conn.register_mr(dst_tensor)
-    # now = time.time()
-    # conn.read_cache(dst_tensor, [("key1", 0), ("key2", 1024)], 1024)
-    # # conn.read_cache(dst_tensor, [("key1", 0)], 1024)
-
-    # conn.sync()
-    # print(f"read elapse time is {time.time() - now}")
-
-    # assert torch.equal(src_tensor[0:1024].cpu(), dst_tensor[0:1024].cpu())
-    # assert torch.equal(src_tensor[1024:2048].cpu(), dst_tensor[1024:2048].cpu())
+    assert torch.equal(src_tensor[0:1024].cpu(), dst_tensor[0:1024].cpu())
+    assert torch.equal(src_tensor[1024:2048].cpu(), dst_tensor[1024:2048].cpu())
 
 
 if __name__ == "__main__":

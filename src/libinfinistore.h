@@ -67,8 +67,8 @@ int sync_local(connection_t *conn);
 int get_kvmap_len();
 int setup_rdma(connection_t *conn, client_config_t config);
 int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, void *base_ptr);
-int w_rdma(connection_t *conn, std::vector<unsigned long> &offsets, int block_size,
-           std::vector<remote_block_t> remote_blocks, void *base_ptr);
+int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int block_size,
+           remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr);
 
 int sync_rdma(connection_t *conn);
 int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_size,

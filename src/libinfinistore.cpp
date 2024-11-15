@@ -60,7 +60,6 @@ Connection::~Connection() {
         ibv_dereg_mr(it->second);
     }
     local_mr.clear();
-
     if (qp) {
         struct ibv_qp_attr attr;
         memset(&attr, 0, sizeof(attr));
@@ -710,11 +709,12 @@ int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_
     return 0;
 }
 
-int w_rdma(connection_t *conn, std::vector<unsigned long> &offsets, int block_size,
-           std::vector<remote_block_t> remote_blocks, void *base_ptr) {
+int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int block_size,
+           remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr) {
     assert(conn != NULL);
     assert(base_ptr != NULL);
-    assert(offsets.size() == remote_blocks.size());
+    assert(p_remote_blocks != NULL);
+    assert(offsets_len == remote_blocks_len);
 
     if (!conn->local_mr.count((uintptr_t)base_ptr)) {
         ERROR("Please register memory first");
@@ -724,18 +724,18 @@ int w_rdma(connection_t *conn, std::vector<unsigned long> &offsets, int block_si
     INFO("w_rdma, block_size: {}, base_ptr: {}", block_size, base_ptr);
     struct ibv_mr *mr = conn->local_mr[(uintptr_t)base_ptr];
 
-    for (int i = 0; i < remote_blocks.size(); i++) {
+    for (int i = 0; i < remote_blocks_len; i++) {
         struct ibv_sge sge = {0};
         struct ibv_send_wr wr = {0};
         struct ibv_send_wr *bad_wr = NULL;
-        sge.addr = (uintptr_t)(base_ptr + offsets[i]);
+        sge.addr = (uintptr_t)(base_ptr + p_offsets[i]);
         sge.length = block_size;
         sge.lkey = mr->lkey;
 
-        wr.wr_id = uintptr_t(&remote_blocks[i]);
-        if (i == remote_blocks.size() - 1) {
+        wr.wr_id = 0;
+        if (i == remote_blocks_len - 1) {
             wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-            wr.imm_data = remote_blocks.size();
+            wr.imm_data = remote_blocks_len;
             wr.send_flags = IBV_SEND_SIGNALED;
         }
         else {
@@ -744,8 +744,8 @@ int w_rdma(connection_t *conn, std::vector<unsigned long> &offsets, int block_si
         }
         wr.sg_list = &sge;
         wr.num_sge = 1;
-        wr.wr.rdma.remote_addr = remote_blocks[i].remote_addr;
-        wr.wr.rdma.rkey = remote_blocks[i].rkey;
+        wr.wr.rdma.remote_addr = p_remote_blocks[i].remote_addr;
+        wr.wr.rdma.rkey = p_remote_blocks[i].rkey;
 
         int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
         if (ret) {
@@ -899,7 +899,7 @@ int register_mr(connection_t *conn, void *base_ptr, size_t ptr_region_size) {
         ERROR("Failed to register memory region");
         return -1;
     }
-    INFO("register mr done");
+    INFO("register mr done for base_ptr: {}, size: {}", (uintptr_t)base_ptr, ptr_region_size);
     conn->local_mr[(uintptr_t)base_ptr] = mr;
     return 0;
 }
