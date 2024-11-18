@@ -274,13 +274,11 @@ void cq_handler(connection_t *conn) {
                         return;
                     }
 
-                    if (wc[i].opcode == IBV_WC_SEND) {  // read cache: request sent
-                        DEBUG("write cache CTRL code send{}, ", (uintptr_t)wc[i].wr_id);
+                    if (wc[i].opcode == IBV_WC_SEND) {  // read cache/allocate msg: request sent
+                        DEBUG("read cache/allocated msg request send{}, ", (uintptr_t)wc[i].wr_id);
                     }
                     else if (wc[i].opcode == IBV_WC_RECV) {  // allocate msg recved.
                         DEBUG("rdma allocated recv {}", (uintptr_t)wc[i].wr_id);
-                        size_t *ptr_recv_size = (size_t *)wc[i].wr_id;
-                        *ptr_recv_size = wc[i].byte_len;
                         conn->rdma_allocate_count = 0;
                         conn->allocater_cv.notify_all();
                     }
@@ -340,25 +338,26 @@ int setup_rdma(connection_t *conn, client_config_t config) {
         return -1;
     }
 
-    if (posix_memalign(&conn->send_buffer, 4096, 64 << 10) != 0) {
+    if (posix_memalign(&conn->send_buffer, 4096, PROTOCOL_BUFFER_SIZE) != 0) {
         ERROR("Failed to allocate recv buffer");
         delete conn;
         return -1;
     }
 
-    conn->send_mr = ibv_reg_mr(conn->pd, conn->send_buffer, 64 << 10, IBV_ACCESS_LOCAL_WRITE);
+    conn->send_mr =
+        ibv_reg_mr(conn->pd, conn->send_buffer, PROTOCOL_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
     if (!conn->send_mr) {
         ERROR("Failed to register send MR");
         delete conn;
         return -1;
     }
 
-    if (posix_memalign(&conn->recv_buffer, 4096, 64 << 10) != 0) {
+    if (posix_memalign(&conn->recv_buffer, 4096, PROTOCOL_BUFFER_SIZE) != 0) {
         ERROR("Failed to allocate recv buffer");
         delete conn;
         return -1;
     }
-    conn->recv_mr = ibv_reg_mr(conn->pd, conn->recv_buffer, 64 << 10,
+    conn->recv_mr = ibv_reg_mr(conn->pd, conn->recv_buffer, PROTOCOL_BUFFER_SIZE,
                                IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
     if (!conn->recv_mr) {
         ERROR("Failed to register recv MR");
@@ -630,25 +629,30 @@ int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
 // send a message to allocate memory and return the address
 int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_size,
                   std::vector<remote_block_t> &blocks) {
+    /*
+    ENCODING
     remote_meta_request req = {
         .keys = keys,
         .block_size = block_size,
         .op = OP_RDMA_ALLOCATE,
-    };
-
-    size_t size = 0;
-    if (!serialize_to_fixed(req, (char *)conn->send_buffer, 64 << 10, size)) {
-        ERROR("Failed to serialize remote meta request");
-        return -1;
     }
+    */
+
+    FixedBufferAllocator allocator(conn->send_buffer, PROTOCOL_BUFFER_SIZE);
+    FlatBufferBuilder builder(64 << 10, &allocator);
+    auto keys_offset = builder.CreateVectorOfStrings(keys);
+
+    auto req = CreateRemoteMetaRequest(builder, keys_offset, block_size, 0, 0, OP_RDMA_ALLOCATE);
+
+    builder.Finish(req);
 
     // send RDMA request
     struct ibv_sge sge = {0};
     struct ibv_send_wr wr = {0};
     struct ibv_send_wr *bad_wr = NULL;
 
-    sge.addr = (uintptr_t)conn->send_buffer;
-    sge.length = size;
+    sge.addr = (uintptr_t)builder.GetBufferPointer();
+    sge.length = builder.GetSize();
     sge.lkey = conn->send_mr->lkey;
 
     // FIXME:
@@ -670,12 +674,11 @@ int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_
 
     // recv all remote addresses
     recv_sge.addr = (uintptr_t)conn->recv_buffer;
-    recv_sge.length = 64 << 10;
+    recv_sge.length = PROTOCOL_BUFFER_SIZE;
     recv_sge.lkey = conn->recv_mr->lkey;
 
-    size_t *ptr_recv_size = new size_t;
     recv_wr = {
-        .wr_id = (uintptr_t)ptr_recv_size,
+        .wr_id = 1234,
         .next = NULL,
         .sg_list = &recv_sge,
         .num_sge = 1,
@@ -696,16 +699,20 @@ int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_
         return -1;
     }
 
-    rdma_allocate_response resp;
-    if (!deserialize((const char *)conn->recv_buffer, *ptr_recv_size, resp)) {
-        ERROR("Failed to deserialize remote meta response");
-        return -1;
+    const RdmaAllocateResponse *resp = GetRdmaAllocateResponse(conn->recv_buffer);
+
+    INFO("Received allocate response, #keys: {}", resp->blocks()->size());
+
+    // copy data to std::vector, and pybind11 will pass ptr to python.
+    blocks.reserve(resp->blocks()->size());
+
+    for (const auto *block : *resp->blocks()) {
+        remote_block_t remote_block = {
+            .rkey = block->rkey(),
+            .remote_addr = block->remote_addr(),
+        };
+        blocks.push_back(remote_block);
     }
-
-    delete ptr_recv_size;
-    INFO("Received allocate response, #keys: {}", resp.blocks.size());
-
-    blocks = std::move(resp.blocks);
     return 0;
 }
 
@@ -784,29 +791,35 @@ int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, voi
         remote_addrs.push_back((uintptr_t)(base_ptr + block.offset));
     }
 
-    // register memory region
-    remote_meta_request request = {
+    /*
+    remote_meta_req = {
         .keys = keys,
         .block_size = block_size,
         .rkey = mr->rkey,
         .remote_addrs = remote_addrs,
         .op = OP_RDMA_READ,
-    };
-    size_t size = 0;
-    if (!serialize_to_fixed(request, (char *)conn->send_buffer, 64 << 10, size)) {
-        ERROR("Failed to serialize remote meta request");
-        return -1;
     }
+    */
+    FixedBufferAllocator allocator(conn->send_buffer, PROTOCOL_BUFFER_SIZE);
+    FlatBufferBuilder builder(64 << 10, &allocator);
+
+    auto keys_offset = builder.CreateVectorOfStrings(keys);
+    auto remote_addrs_offset = builder.CreateVector(remote_addrs);
+    auto req = CreateRemoteMetaRequest(builder, keys_offset, block_size, mr->rkey,
+                                       remote_addrs_offset, OP_RDMA_READ);
+
+    builder.Finish(req);
+
     // send RDMA request
     struct ibv_sge sge = {0};
-    sge.addr = (uintptr_t)conn->send_buffer;
-    sge.length = size;
+    sge.addr = (uintptr_t)builder.GetBufferPointer();
+    sge.length = builder.GetSize();
     sge.lkey = conn->send_mr->lkey;
 
     struct ibv_send_wr wr = {0};
     struct ibv_send_wr *bad_wr = NULL;
     // FIXME:
-    wr.wr_id = (uintptr_t)mr;
+    wr.wr_id = 1234;
     wr.opcode = IBV_WR_SEND;
     wr.sg_list = &sge;
     wr.num_sge = 1;

@@ -9,6 +9,12 @@
 #include <string>
 #include <vector>
 
+#include "allocate_response_generated.h"
+#include "flatbuffers/flatbuffers.h"
+#include "meta_request_generated.h"
+
+using namespace flatbuffers;
+
 /*
 Protocol:
 
@@ -79,6 +85,9 @@ std::string op_name(char op);
 
 #define RETURN_CODE_SIZE sizeof(int)
 
+#define PROTOCOL_BUFFER_SIZE \
+    (300 << 10)  // 300KB could be enough for (4096 blocks and 64byte key name)
+
 typedef struct __attribute__((packed)) {
     unsigned int magic;
     char op;
@@ -134,25 +143,11 @@ typedef struct {
 
 } local_meta_t;
 
-typedef struct {
-    std::vector<std::string> keys;
-    int block_size;
-    uint32_t rkey;                        // client's rkey
-    std::vector<uintptr_t> remote_addrs;  // client's GPU address
-    char op;
-    MSGPACK_DEFINE(keys, block_size, rkey, remote_addrs, op)
-} remote_meta_request;  // rdma read/allocate request
-
+// remote_block_t is used to to talk to PYTHON layer. not used in RDMA/TCP layer.
 typedef struct {
     uint32_t rkey;
     uintptr_t remote_addr;
-    MSGPACK_DEFINE(rkey, remote_addr)
-} remote_block_t;  // rdma allocate_response
-
-typedef struct {
-    std::vector<remote_block_t> blocks;
-    MSGPACK_DEFINE(blocks);
-} rdma_allocate_response;  // rdma allocate_response
+} remote_block_t;
 
 typedef struct __attribute__((packed)) rdma_conn_info_t {
     uint32_t qpn;
@@ -163,13 +158,22 @@ typedef struct __attribute__((packed)) rdma_conn_info_t {
 
 template <typename T>
 bool serialize(const T& data, std::string& out);
-
-template <typename T>
-bool serialize_to_fixed(const T& data, char* buffer, size_t buffer_size, size_t& packed_size);
-
 template <typename T>
 bool deserialize(const char* data, size_t size, T& out);
 
 #define FIXED_HEADER_SIZE sizeof(header_t)
+
+class FixedBufferAllocator : public Allocator {
+   public:
+    FixedBufferAllocator(void* buffer, size_t size) : buffer_(buffer), size_(size), offset_(0) {}
+
+    uint8_t* allocate(size_t size) override;
+    void deallocate(uint8_t*, size_t) override;
+
+   private:
+    void* buffer_;
+    size_t size_;
+    size_t offset_;
+};
 
 #endif

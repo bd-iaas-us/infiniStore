@@ -31,23 +31,6 @@ bool serialize(const T& data, std::string& out) {
 }
 
 template <typename T>
-bool serialize_to_fixed(const T& data, char* buffer, size_t buffer_size, size_t& packed_size) {
-    try {
-        msgpack::sbuffer sbuffer;
-        msgpack::packer<msgpack::sbuffer> packer(sbuffer);
-        packer.pack(data);
-        packed_size = sbuffer.size();
-        if (packed_size > buffer_size) {
-            return false;
-        }
-        std::memcpy(buffer, sbuffer.data(), packed_size);
-        return true;
-    } catch (const std::exception&) {
-        return false;
-    }
-}
-
-template <typename T>
 bool deserialize(const char* data, size_t size, T& out) {
     try {
         msgpack::object_handle oh = msgpack::unpack(data, size);
@@ -58,19 +41,20 @@ bool deserialize(const char* data, size_t size, T& out) {
     }
 }
 
+uint8_t* FixedBufferAllocator::allocate(size_t size) {
+    if (offset_ + size > size_) {
+        throw std::runtime_error("Buffer overflow in FixedBufferAllocator");
+    }
+    uint8_t* ptr = static_cast<uint8_t*>(buffer_) + offset_;
+    offset_ += size;
+    return ptr;
+}
+
+void FixedBufferAllocator::deallocate(uint8_t*, size_t) {
+    // no-op
+}
+
 template bool serialize<keys_t>(const keys_t& data, std::string& out);
 template bool deserialize<keys_t>(const char* data, size_t size, keys_t& out);
 template bool serialize<local_meta_t>(const local_meta_t& data, std::string& out);
 template bool deserialize<local_meta_t>(const char* data, size_t size, local_meta_t& out);
-template bool serialize<remote_meta_request>(const remote_meta_request& data, std::string& out);
-template bool deserialize<remote_meta_request>(const char* data, size_t size,
-                                               remote_meta_request& out);
-template bool serialize<rdma_allocate_response>(const rdma_allocate_response& data,
-                                                std::string& out);
-template bool deserialize<rdma_allocate_response>(const char* data, size_t size,
-                                                  rdma_allocate_response& out);
-template bool serialize_to_fixed<rdma_allocate_response>(const rdma_allocate_response& data,
-                                                         char* buffer, size_t buffer_size,
-                                                         size_t& packed_size);
-template bool serialize_to_fixed<remote_meta_request>(const remote_meta_request& data, char* buffer,
-                                                      size_t buffer_size, size_t& packed_size);

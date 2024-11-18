@@ -25,8 +25,6 @@
 #include "protocol.h"
 #include "utils.h"
 
-#define BUFFER_SIZE (64 << 10)
-
 struct PTR {
     void *ptr;
     size_t size;
@@ -96,8 +94,8 @@ struct Client {
     ~Client();
 
     void cq_poll_handle(uv_poll_t *handle, int status, int events);
-    int read_rdma_cache(remote_meta_request &remote_meta_req);
-    int allocate_rdma(remote_meta_request &req);
+    int read_rdma_cache(const RemoteMetaRequest *req);
+    int allocate_rdma(const RemoteMetaRequest *req);
 };
 
 typedef struct Client client_t;
@@ -159,14 +157,12 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
         if (wc.status == IBV_WC_SUCCESS) {
             if (wc.opcode == IBV_WC_RECV) {  // recv RDMA read/write request
                 INFO("RDMA Send completed successfully, recved {}", wc.byte_len);
-                remote_meta_request request;
-                if (!deserialize(recv_buffer, wc.byte_len, request)) {
-                    ERROR("Failed to deserialize remote meta request");
-                    continue;
-                }
-                INFO("Received remote meta request, #keys: {}, block size {}", request.keys.size(),
-                     request.block_size);
-                switch (request.op) {
+                const RemoteMetaRequest *request = GetRemoteMetaRequest(recv_buffer);
+
+                INFO("Received remote meta request, #keys: {}, OP {}", request->keys()->size(),
+                     op_name(request->op()));
+
+                switch (request->op()) {
                     case OP_RDMA_READ:
                         read_rdma_cache(request);
                         break;
@@ -180,12 +176,12 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                         break;
                     }
                     case OP_RDMA_WRITE: {
-                        ERROR("Unexpected request op: {}", request.op);
+                        ERROR("Unexpected request op: {}", request->op());
                         assert(false);
                         break;
                     }
                     default:
-                        ERROR("Unexpected request op: {}", request.op);
+                        ERROR("Unexpected request op: {}", request->op());
                         break;
                 }
 
@@ -194,7 +190,7 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                 struct ibv_recv_wr rwr = {0};
                 struct ibv_recv_wr *bad_wr = NULL;
                 sge.addr = (uintptr_t)recv_buffer;
-                sge.length = BUFFER_SIZE;
+                sge.length = PROTOCOL_BUFFER_SIZE;
                 sge.lkey = recv_mr->lkey;
 
                 rwr.wr_id = (uint64_t)recv_buffer;
@@ -223,39 +219,39 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
     }
 }
 
-int Client::allocate_rdma(remote_meta_request &req) {
+int Client::allocate_rdma(const RemoteMetaRequest *req) {
     INFO("do allocate_rdma...");
 
-    auto start = std::chrono::high_resolution_clock::now();
-    rdma_allocate_response resp;
-    resp.blocks.reserve(req.keys.size());
-    int key_idx = 0;
-    if (!mm->allocate(req.block_size, req.keys.size(),
-                      [&](void *addr, uint32_t lkey, uint32_t rkey, int pool_idx) {
-                          auto ptr = PTR{.ptr = addr, .size = req.block_size, .pool_idx = pool_idx};
-                          kv_map[req.keys[key_idx]] = ptr;
+    FixedBufferAllocator allocator(send_buffer, PROTOCOL_BUFFER_SIZE);
+    FlatBufferBuilder builder(64 << 10, &allocator);
 
-                          remote_block_t block = {.rkey = rkey, .remote_addr = (uintptr_t)addr};
-                          resp.blocks.push_back(block);
+    int key_idx = 0;
+    int block_size = req->block_size();
+    std::vector<RemoteBlock> blocks;
+    blocks.reserve(req->keys()->size());
+
+    if (!mm->allocate(block_size, req->keys()->size(),
+                      [&](void *addr, uint32_t lkey, uint32_t rkey, int pool_idx) {
+                          auto ptr = PTR{.ptr = addr, .size = block_size, .pool_idx = pool_idx};
+                          const auto *key = req->keys()->Get(key_idx);
+                          kv_map[key->str()] = ptr;
+                          blocks.push_back(RemoteBlock(rkey, (uint64_t)addr));
                           key_idx++;
                       })) {
         ERROR("Failed to allocate memory");
         return SYSTEM_ERROR;
     }
 
+    auto resp = CreateRdmaAllocateResponseDirect(builder, &blocks);
+    builder.Finish(resp);
+
     // send RDMA request
     struct ibv_sge sge = {0};
     struct ibv_send_wr wr = {0};
     struct ibv_send_wr *bad_wr = NULL;
 
-    size_t size = 0;
-    if (!serialize_to_fixed(resp, send_buffer, BUFFER_SIZE, size)) {
-        ERROR("Failed to serialize response");
-        return SYSTEM_ERROR;
-    }
-
-    sge.addr = (uintptr_t)send_buffer;
-    sge.length = size;
+    sge.addr = (uintptr_t)builder.GetBufferPointer();
+    sge.length = builder.GetSize();
     sge.lkey = send_mr->lkey;
 
     wr.wr_id = 0;
@@ -276,7 +272,7 @@ int Client::allocate_rdma(remote_meta_request &req) {
         struct ibv_recv_wr rwr = {0};
         struct ibv_recv_wr *bad_wr = NULL;
         sge.addr = (uintptr_t)recv_buffer;
-        sge.length = BUFFER_SIZE;
+        sge.length = PROTOCOL_BUFFER_SIZE;
         sge.lkey = recv_mr->lkey;
 
         rwr.wr_id = (uint64_t)recv_buffer;
@@ -292,25 +288,28 @@ int Client::allocate_rdma(remote_meta_request &req) {
     return 0;
 }
 
-int Client::read_rdma_cache(remote_meta_request &remote_meta_req) {
+int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
     INFO("do rdma read...");
-    if (remote_meta_req.keys.size() != remote_meta_req.remote_addrs.size()) {
+
+    if (remote_meta_req->keys()->size() != remote_meta_req->remote_addrs()->size()) {
         ERROR("keys size and remote_addrs size mismatch");
         return -1;
     }
 
     std::vector<block> blocks;
-    blocks.reserve(remote_meta_req.keys.size());
+    blocks.reserve(remote_meta_req->keys()->size());
 
-    for (const auto &key : remote_meta_req.keys) {
-        auto it = kv_map.find(key);
+    for (const auto *key : *remote_meta_req->keys()) {
+        auto it = kv_map.find(key->str());
         if (it == kv_map.end()) {
-            ERROR("Key not found: {}", key);
+            ERROR("Key not found: {}", key->str());
             return -1;
         }
         const PTR &ptr = it->second;
+
         DEBUG("rkey: {}, local_addr: {}, size : {}", mm->get_lkey(ptr.pool_idx), (uintptr_t)ptr.ptr,
               ptr.size);
+
         blocks.push_back({.lkey = mm->get_lkey(ptr.pool_idx), .local_addr = (uintptr_t)ptr.ptr});
     }
 
@@ -319,27 +318,27 @@ int Client::read_rdma_cache(remote_meta_request &remote_meta_req) {
     struct ibv_sge sges[max_wr];
 
     size_t num_wr = 0;
-    for (size_t i = 0; i < remote_meta_req.keys.size(); i++) {
+    for (size_t i = 0; i < remote_meta_req->keys()->size(); i++) {
         sges[num_wr].addr = blocks[i].local_addr;
-        sges[num_wr].length = remote_meta_req.block_size;
+        sges[num_wr].length = remote_meta_req->block_size();
         sges[num_wr].lkey = blocks[i].lkey;
 
         wrs[num_wr].wr_id = 1234;
-        wrs[num_wr].opcode =
-            (i == remote_meta_req.keys.size() - 1) ? IBV_WR_RDMA_WRITE_WITH_IMM : IBV_WR_RDMA_WRITE;
+        wrs[num_wr].opcode = (i == remote_meta_req->keys()->size() - 1) ? IBV_WR_RDMA_WRITE_WITH_IMM
+                                                                        : IBV_WR_RDMA_WRITE;
         wrs[num_wr].sg_list = &sges[num_wr];
         wrs[num_wr].num_sge = 1;
         wrs[num_wr].send_flags = 0;
-        wrs[num_wr].wr.rdma.remote_addr = remote_meta_req.remote_addrs[i];
-        wrs[num_wr].wr.rdma.rkey = remote_meta_req.rkey;
-        wrs[num_wr].next = (num_wr == max_wr - 1 || i == remote_meta_req.keys.size() - 1)
+        wrs[num_wr].wr.rdma.remote_addr = remote_meta_req->remote_addrs()->Get(i);
+        wrs[num_wr].wr.rdma.rkey = remote_meta_req->rkey();
+        wrs[num_wr].next = (num_wr == max_wr - 1 || i == remote_meta_req->keys()->size() - 1)
                                ? nullptr
                                : &wrs[num_wr + 1];
 
         num_wr++;
 
         // If we reach the maximum number of WRs, post them
-        if (num_wr == max_wr || i == remote_meta_req.keys.size() - 1) {
+        if (num_wr == max_wr || i == remote_meta_req->keys()->size() - 1) {
             struct ibv_send_wr *bad_wr = nullptr;
             int ret = ibv_post_send(qp, &wrs[0], &bad_wr);
             if (ret) {
@@ -352,76 +351,6 @@ int Client::read_rdma_cache(remote_meta_request &remote_meta_req) {
 
     return 0;
 }
-
-/*
-int Client::write_rdma_cache(remote_meta_request &remote_meta_req) {
-    INFO("do write_cache...");
-
-    if (remote_meta_req.keys.size() != remote_meta_req.remote_addrs.size()) {
-        ERROR("keys size and remote_addrs size mismatch");
-        return -1;
-    }
-
-    std::vector<block> blocks;
-    blocks.reserve(remote_meta_req.keys.size());
-
-    // allocate memory
-    for (const auto &key : remote_meta_req.keys) {
-        void *h_dst;
-        int pool_idx;
-        h_dst = mm->allocate(remote_meta_req.block_size, &pool_idx);
-        // FIXME: only one h_dst is sent
-        if (h_dst == NULL) {
-            ERROR("Failed to allocate host memory");
-            return SYSTEM_ERROR;
-        }
-        auto ptr = PTR{.ptr = h_dst, .size = remote_meta_req.block_size, .pool_idx = pool_idx};
-        // save to the map
-        kv_map[key] = ptr;
-        DEBUG("rkey: {}, local_addr: {}, size : {}", mm->get_lkey(pool_idx), (uintptr_t)h_dst,
-              remote_meta_req.block_size);
-
-        blocks.push_back({.lkey = mm->get_lkey(ptr.pool_idx), .local_addr = (uintptr_t)ptr.ptr});
-    }
-
-    const size_t max_wr = 16;
-    struct ibv_send_wr wrs[max_wr];
-    struct ibv_sge sges[max_wr];
-
-    size_t num_wr = 0;
-    for (size_t i = 0; i < remote_meta_req.keys.size(); i++) {
-        sges[num_wr].addr = blocks[i].local_addr;
-        sges[num_wr].length = remote_meta_req.block_size;
-        sges[num_wr].lkey = blocks[i].lkey;
-
-        wrs[num_wr].wr_id = 1234;
-        wrs[num_wr].opcode = IBV_WR_RDMA_READ;
-        wrs[num_wr].sg_list = &sges[num_wr];
-        wrs[num_wr].num_sge = 1;
-        wrs[num_wr].send_flags = (i == remote_meta_req.keys.size() - 1) ? IBV_SEND_SIGNALED : 0;
-        wrs[num_wr].wr.rdma.remote_addr = remote_meta_req.remote_addrs[i];
-        wrs[num_wr].wr.rdma.rkey = remote_meta_req.rkey;
-        wrs[num_wr].next = (num_wr == max_wr - 1 || i == remote_meta_req.keys.size() - 1)
-                               ? nullptr
-                               : &wrs[num_wr + 1];
-
-        num_wr++;
-
-        // If we reach the maximum number of WRs, post them
-        if (num_wr == max_wr || i == remote_meta_req.keys.size() - 1) {
-            struct ibv_send_wr *bad_wr = nullptr;
-            int ret = ibv_post_send(qp, &wrs[0], &bad_wr);
-            if (ret) {
-                ERROR("Failed to post RDMA read");
-                return -1;
-            }
-            num_wr = 0;  // Reset the counter for the next batch
-        }
-    }
-
-    return 0;
-}
-*/
 
 // send response to client through TCP
 void send_resp(client_t *client, int return_code, void *buf, size_t size);
@@ -762,23 +691,25 @@ int rdma_exchange(client_t *client) {
     INFO("RDMA exchange done");
     client->rdma_connected = true;
 
-    if (posix_memalign((void **)&client->send_buffer, 4096, BUFFER_SIZE) != 0) {
+    if (posix_memalign((void **)&client->send_buffer, 4096, PROTOCOL_BUFFER_SIZE) != 0) {
         ERROR("Failed to allocate send buffer");
         return SYSTEM_ERROR;
     }
 
-    client->send_mr = ibv_reg_mr(pd, client->send_buffer, BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
+    client->send_mr =
+        ibv_reg_mr(pd, client->send_buffer, PROTOCOL_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
     if (!client->send_mr) {
         ERROR("Failed to register MR");
         return SYSTEM_ERROR;
     }
 
-    if (posix_memalign((void **)&client->recv_buffer, 4096, BUFFER_SIZE) != 0) {
+    if (posix_memalign((void **)&client->recv_buffer, 4096, PROTOCOL_BUFFER_SIZE) != 0) {
         ERROR("Failed to allocate recv buffer");
         return SYSTEM_ERROR;
     }
 
-    client->recv_mr = ibv_reg_mr(pd, client->recv_buffer, BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
+    client->recv_mr =
+        ibv_reg_mr(pd, client->recv_buffer, PROTOCOL_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
     if (!client->recv_mr) {
         ERROR("Failed to register MR");
         return SYSTEM_ERROR;
@@ -791,7 +722,7 @@ int rdma_exchange(client_t *client) {
     struct ibv_recv_wr *bad_wr = NULL;
 
     sge.addr = (uintptr_t)client->recv_buffer;
-    sge.length = BUFFER_SIZE;
+    sge.length = PROTOCOL_BUFFER_SIZE;
     sge.lkey = client->recv_mr->lkey;
 
     rwr.wr_id = (uint64_t)client->recv_buffer;

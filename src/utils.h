@@ -17,15 +17,6 @@
         }                                                                    \
     } while (0)
 
-#define CHECK_GDR(call)                                                               \
-    do {                                                                              \
-        int ret = call;                                                               \
-        if (ret) {                                                                    \
-            fprintf(stderr, "GDRCopy error in %s:%d: %d\n", __FILE__, __LINE__, ret); \
-            exit(EXIT_FAILURE);                                                       \
-        }                                                                             \
-    } while (0)
-
 int send_exact(int socket, const void *buffer, size_t length);
 int recv_exact(int socket, void *buffer, size_t length);
 void print_ipc_handle(cudaIpcMemHandle_t ipc_handle);

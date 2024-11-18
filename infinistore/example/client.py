@@ -31,6 +31,8 @@ def run(conn):
     remote_addr = conn.allocate_rdma(
         keys, 1024 * 4
     )  # 1024(block_size) * 4(element size)
+
+    print(f"remote_addr: {remote_addr}")
     now = time.time()
     conn.rdma_write_cache(src_tensor, [0, 1024, 2048], 1024, remote_addr)
     print(f"write elapse time is {time.time() - now}")

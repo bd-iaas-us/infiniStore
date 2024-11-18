@@ -43,7 +43,7 @@ setup(
     package_data={
         "infinistore": ["*.so"],
     },
-    install_requires=["torch", "uvloop", "fastapi", "pybind11", "uvicorn"],
+    install_requires=["torch", "uvloop", "fastapi", "pybind11", "uvicorn", "numpy"],
     description="A kvcache memory pool",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
