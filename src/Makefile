@@ -24,11 +24,13 @@ manylinux: PYTHON_EXTENSION_SUFFIX = $(shell $(PYTHON)-config --extension-suffix
 manylinux: PYBIND_TARGET = _infinistore$(PYTHON_EXTENSION_SUFFIX)
 manylinux: $(PYBIND_TARGET)
 
--include $(OBJECTS:.o=.d)
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -fPIC -c $< -o $@
+
 %__generated.h: %.fbs
 	flatc --cpp $<
+
+-include $(OBJECTS:.o=.d)
 
 $(PYBIND_TARGET): pybind.cpp libinfinistore.o utils.o protocol.o infinistore.o log.o ibv_helper.o mempool.o
 	$(CXX) $(CXXFLAGS) $(INCLUDES) --shared -fPIC $(PYBIND11_INCLUDES) $^ \

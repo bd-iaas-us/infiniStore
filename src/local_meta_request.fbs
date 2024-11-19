@@ -1,0 +1,12 @@
+table Block {
+  key: string;
+  offset: ulong;
+}
+
+table LocalMetaRequest {
+  ipc_handle: [ubyte];
+  block_size: int;
+  blocks: [Block];
+}
+
+root_type LocalMetaRequest;

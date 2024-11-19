@@ -58,8 +58,6 @@ def run(conn):
     conn.sync()
     print(f"read elapse time is {time.time() - now}")
 
-    print("src_tensor: ", src_tensor[:1024])
-    print("dst_tensor: ", dst_tensor[:1024])
     assert torch.equal(src_tensor[0:1024].cpu(), dst_tensor[0:1024].cpu())
     assert torch.equal(src_tensor[1024:2048].cpu(), dst_tensor[1024:2048].cpu())
 

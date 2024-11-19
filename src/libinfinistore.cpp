@@ -790,7 +790,6 @@ int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, voi
         keys.push_back(block.key);
         remote_addrs.push_back((uintptr_t)(base_ptr + block.offset));
     }
-
     /*
     remote_meta_req = {
         .keys = keys,
@@ -853,27 +852,34 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, in
     assert(conn != NULL);
     assert(ptr != NULL);
 
-    cudaIpcMemHandle_t ipc_handle;
-    memset(&ipc_handle, 0, sizeof(cudaIpcMemHandle_t));
+    std::vector<uint8_t> ipc_handle(sizeof(cudaIpcMemHandle_t));
+    CHECK_CUDA(cudaIpcGetMemHandle((cudaIpcMemHandle_t *)ipc_handle.data(), ptr));
 
-    CHECK_CUDA(cudaIpcGetMemHandle(&ipc_handle, ptr));
-
+    /*
     local_meta_t meta = {
         .ipc_handle = ipc_handle,
         .block_size = block_size,
         .blocks = blocks,
     };
+    */
 
-    std::string serialized_data;
-    if (!serialize(meta, serialized_data)) {
-        ERROR("Failed to serialize local meta");
-        return -1;
+    // dynamic create buffer.
+    FlatBufferBuilder builder(64 << 10);
+
+    std::vector<Offset<Block>> block_offsets;
+    for (const auto &block : blocks) {
+        block_offsets.push_back(
+            CreateBlock(builder, builder.CreateString(block.key), block.offset));
     }
+
+    auto req = CreateLocalMetaRequestDirect(builder, &ipc_handle, block_size, &block_offsets);
+
+    builder.Finish(req);
 
     header_t header = {
         .magic = MAGIC,
         .op = op,
-        .body_size = static_cast<unsigned int>(serialized_data.size()),
+        .body_size = builder.GetSize(),
     };
 
     struct iovec iov[2];
@@ -881,8 +887,8 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, in
 
     iov[0].iov_base = &header;
     iov[0].iov_len = FIXED_HEADER_SIZE;
-    iov[1].iov_base = const_cast<void *>(static_cast<const void *>(serialized_data.data()));
-    iov[1].iov_len = serialized_data.size();
+    iov[1].iov_base = builder.GetBufferPointer();
+    iov[1].iov_len = builder.GetSize();
 
     memset(&msg, 0, sizeof(msg));
     msg.msg_iov = iov;

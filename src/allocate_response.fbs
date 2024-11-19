@@ -1,0 +1,10 @@
+//RDMA allocate response
+struct RemoteBlock {
+  rkey: uint;
+  remote_addr: ulong;
+}
+
+table RdmaAllocateResponse {
+  blocks: [RemoteBlock];
+}
+root_type RdmaAllocateResponse;

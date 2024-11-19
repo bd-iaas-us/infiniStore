@@ -9,9 +9,13 @@
 #include <string>
 #include <vector>
 
-#include "allocate_response_generated.h"
 #include "flatbuffers/flatbuffers.h"
+// RDMA protocols
+#include "allocate_response_generated.h"
 #include "meta_request_generated.h"
+
+// local TCP protocols
+#include "local_meta_request_generated.h"
 
 using namespace flatbuffers;
 
@@ -55,59 +59,20 @@ typedef struct __attribute__((packed)) {
 } header_t;
 
 typedef struct {
-    std::string key;
-    unsigned long offset;
-    MSGPACK_DEFINE(key, offset)
-} block_t;
-
-typedef struct {
     std::vector<std::string> keys;
     MSGPACK_DEFINE(keys)
 } keys_t;
 
-// implement pack for ipcHandler
-namespace msgpack {
-MSGPACK_API_VERSION_NAMESPACE(MSGPACK_DEFAULT_API_NS) {
-    namespace adaptor {
-
-    template <>
-    struct pack<cudaIpcMemHandle_t> {
-        template <typename Stream>
-        packer<Stream>& operator()(msgpack::packer<Stream>& o, const cudaIpcMemHandle_t& v) const {
-            o.pack_bin(sizeof(cudaIpcMemHandle_t));
-            o.pack_bin_body(reinterpret_cast<const char*>(&v), sizeof(cudaIpcMemHandle_t));
-            return o;
-        }
-    };
-
-    template <>
-    struct convert<cudaIpcMemHandle_t> {
-        msgpack::object const& operator()(msgpack::object const& o, cudaIpcMemHandle_t& v) const {
-            if (o.type != msgpack::type::BIN || o.via.bin.size != sizeof(cudaIpcMemHandle_t)) {
-                throw msgpack::type_error();
-            }
-            std::memcpy(&v, o.via.bin.ptr, sizeof(cudaIpcMemHandle_t));
-            return o;
-        }
-    };
-
-    }  // namespace adaptor
-}  // MSGPACK_API_VERSION_NAMESPACE(MSGPACK_DEFAULT_API_NS)
-}  // namespace msgpack
-
-typedef struct {
-    cudaIpcMemHandle_t ipc_handle;
-    int block_size;
-    std::vector<block_t> blocks;
-    MSGPACK_DEFINE(ipc_handle, block_size, blocks)
-
-} local_meta_t;
-
-// remote_block_t is used to to talk to PYTHON layer. not used in RDMA/TCP layer.
+// remote_block_t and block_t is used to to talk to PYTHON layer. not used in RDMA/TCP layer.
 typedef struct {
     uint32_t rkey;
     uintptr_t remote_addr;
 } remote_block_t;
+
+typedef struct {
+    std::string key;
+    unsigned long offset;
+} block_t;
 
 typedef struct __attribute__((packed)) rdma_conn_info_t {
     uint32_t qpn;

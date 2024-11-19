@@ -426,7 +426,7 @@ void after_ipc_close_completion(uv_work_t *req, int status) {
     delete req;
 }
 
-int read_cache(client_t *client, local_meta_t &meta) {
+int read_cache(client_t *client, const LocalMetaRequest *meta_req) {
     INFO("do read_cache...");
     const header_t *header = &client->header;
     void *d_ptr;
@@ -434,26 +434,27 @@ int read_cache(client_t *client, local_meta_t &meta) {
     assert(header != NULL);
     // TODO: check device_id
 
-    CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, meta.ipc_handle, cudaIpcMemLazyEnablePeerAccess));
+    cudaIpcMemHandle_t ipc_handle = *(cudaIpcMemHandle_t *)meta_req->ipc_handle()->data();
+    CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, ipc_handle, cudaIpcMemLazyEnablePeerAccess));
 
-    for (auto &block : meta.blocks) {
-        if (kv_map.count(block.key) == 0) {
-            ERROR("Key not found: {}", block.key);
+    size_t block_size = meta_req->block_size();
+    for (auto *block : *meta_req->blocks()) {
+        auto key = block->key()->str();
+        if (kv_map.count(key) == 0) {
+            ERROR("Key not found: {}", key);
             CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
             send_resp(client, KEY_NOT_FOUND, NULL, 0);
             return 0;
         }
-        void *h_src = kv_map[block.key].ptr;
-        if (h_src == NULL) {
-            ERROR("Key not found: {}", block.key);
-            send_resp(client, KEY_NOT_FOUND, NULL, 0);
-            return 0;
-        }
-        DEBUG("key: {}, local_addr: {}, size : {}", block.key, (uintptr_t)h_src, meta.block_size);
+        void *h_src = kv_map[key].ptr;
+        assert(h_src != NULL);
+
+        DEBUG("key: {}, local_addr: {}, size : {}", key, (uintptr_t)h_src, block_size);
         // push the host cpu data to local device
-        CHECK_CUDA(cudaMemcpyAsync((char *)d_ptr + block.offset, h_src, meta.block_size,
+        CHECK_CUDA(cudaMemcpyAsync((char *)d_ptr + block->offset(), h_src, block_size,
                                    cudaMemcpyHostToDevice, client->cuda_stream));
     }
+
     client->remain++;
     wqueue_data_t *wqueue_data = new wqueue_data_t();
     wqueue_data->client = client;
@@ -467,25 +468,31 @@ int read_cache(client_t *client, local_meta_t &meta) {
     return 0;
 }
 
-int write_cache(client_t *client, local_meta_t &meta) {
+int write_cache(client_t *client, const LocalMetaRequest *meta_req) {
     // allocate host memory
+
     void *d_ptr;
-    CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, meta.ipc_handle, cudaIpcMemLazyEnablePeerAccess));
+    cudaIpcMemHandle_t ipc_handle = *(cudaIpcMemHandle_t *)meta_req->ipc_handle()->data();
+
+    CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, ipc_handle, cudaIpcMemLazyEnablePeerAccess));
 
     int key_idx = 0;
-    mm->allocate(
-        meta.block_size, meta.blocks.size(),
-        [&](void *addr, uint32_t lkey, uint32_t rkey, int pool_idx) {
-            block_t *block = &meta.blocks[key_idx];
+    size_t block_size = meta_req->block_size();
+    size_t num_of_blocks = meta_req->blocks()->size();
 
-            DEBUG("key: {}, local_addr: {}, size : {}", block->key, (uintptr_t)addr,
-                  meta.block_size);
+    mm->allocate(
+        block_size, num_of_blocks, [&](void *addr, uint32_t lkey, uint32_t rkey, int pool_idx) {
+            auto block = meta_req->blocks()->Get(key_idx);
+
+            DEBUG("key: {}, local_addr: {}, size : {}", block->key()->str(), (uintptr_t)addr,
+                  block_size);
             // pull data from local device to CPU host
-            CHECK_CUDA(cudaMemcpyAsync(addr, (char *)d_ptr + block->offset, meta.block_size,
+            CHECK_CUDA(cudaMemcpyAsync(addr, (char *)d_ptr + block->offset(), block_size,
                                        cudaMemcpyDeviceToHost, client->cuda_stream));
-            kv_map[block->key] = {.ptr = addr, .size = meta.block_size, .pool_idx = pool_idx};
+            kv_map[block->key()->str()] = {.ptr = addr, .size = block_size, .pool_idx = pool_idx};
             key_idx++;
         });
+
     client->remain++;
     wqueue_data_t *wqueue_data = new wqueue_data_t();
     wqueue_data->client = client;
@@ -494,6 +501,7 @@ int write_cache(client_t *client, local_meta_t &meta) {
     req->data = (void *)wqueue_data;
     uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);
 
+    INFO("SEND TASK_ACCEPTED");
     send_resp(client, TASK_ACCEPTED, NULL, 0);
 
     reset_client_read_state(client);
@@ -812,25 +820,13 @@ void handle_request(uv_stream_t *stream, client_t *client) {
     // if error_code is not 0, close the connection
     switch (client->header.op) {
         case OP_R: {
-            local_meta_t local_meta;
-
-            if (!deserialize(client->tcp_recv_buffer, client->expected_bytes, local_meta)) {
-                ERROR("Failed to deserialize local meta");
-                error_code = SYSTEM_ERROR;
-                break;
-            }
-            error_code = read_cache(client, local_meta);
+            const LocalMetaRequest *request = GetLocalMetaRequest(client->tcp_recv_buffer);
+            error_code = read_cache(client, request);
             break;
         }
         case OP_W: {
-            local_meta_t local_meta;
-
-            if (!deserialize(client->tcp_recv_buffer, client->expected_bytes, local_meta)) {
-                ERROR("Failed to deserialize local meta");
-                error_code = SYSTEM_ERROR;
-                break;
-            }
-            error_code = write_cache(client, local_meta);
+            const LocalMetaRequest *request = GetLocalMetaRequest(client->tcp_recv_buffer);
+            error_code = write_cache(client, request);
             break;
         }
         case OP_SYNC: {

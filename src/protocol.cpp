@@ -56,5 +56,3 @@ void FixedBufferAllocator::deallocate(uint8_t*, size_t) {
 
 template bool serialize<keys_t>(const keys_t& data, std::string& out);
 template bool deserialize<keys_t>(const char* data, size_t size, keys_t& out);
-template bool serialize<local_meta_t>(const local_meta_t& data, std::string& out);
-template bool deserialize<local_meta_t>(const char* data, size_t size, local_meta_t& out);
