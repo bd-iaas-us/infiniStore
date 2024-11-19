@@ -27,14 +27,19 @@ def run(conn):
     if conn.rdma_connected:
         conn.register_mr(src_tensor)
 
-    keys = ["key1", "key2", "key3"]
-    remote_addr = conn.allocate_rdma(
-        keys, 1024 * 4
-    )  # 1024(block_size) * 4(element size)
-
-    print(f"remote_addr: {remote_addr}")
+    if conn.rdma_connected:
+        keys = ["key1", "key2", "key3"]
+        remote_addr = conn.allocate_rdma(
+            keys, 1024 * 4
+        )  # 1024(block_size) * 4(element size)
+        print(f"remote_addr: {remote_addr}")
     now = time.time()
-    conn.rdma_write_cache(src_tensor, [0, 1024, 2048], 1024, remote_addr)
+    if conn.rdma_connected:
+        conn.rdma_write_cache(src_tensor, [0, 1024, 2048], 1024, remote_addr)
+    else:
+        conn.local_gpu_write_cache(
+            src_tensor, [("key1", 0), ("key2", 1024), ("key3", 2048)], 1024
+        )
     print(f"write elapse time is {time.time() - now}")
 
     before_sync = time.time()
@@ -43,14 +48,18 @@ def run(conn):
 
     with DisableTorchCaching():
         dst_tensor = torch.zeros(4096, device="cuda:2", dtype=torch.float32)
+
     if conn.rdma_connected:
         conn.register_mr(dst_tensor)
     now = time.time()
+
     conn.read_cache(dst_tensor, [("key1", 0), ("key2", 1024)], 1024)
 
     conn.sync()
     print(f"read elapse time is {time.time() - now}")
 
+    print("src_tensor: ", src_tensor[:1024])
+    print("dst_tensor: ", dst_tensor[:1024])
     assert torch.equal(src_tensor[0:1024].cpu(), dst_tensor[0:1024].cpu())
     assert torch.equal(src_tensor[1024:2048].cpu(), dst_tensor[1024:2048].cpu())
 
@@ -65,11 +74,11 @@ if __name__ == "__main__":
         link_type=infinistore.LINK_ETHERNET,
         dev_name="mlx5_0",
     )
-    rdma_conn = InfinityConnection(config)
-    rdma_conn.connect()
-    run(rdma_conn)
+    # rdma_conn = InfinityConnection(config)
+    # rdma_conn.connect()
+    # run(rdma_conn)
 
-    # config.connection_type = infinistore.TYPE_LOCAL_GPU
-    # local_conn = InfinityConnection(config)
-    # local_conn.connect()
-    # run(local_conn)
+    config.connection_type = infinistore.TYPE_LOCAL_GPU
+    local_conn = InfinityConnection(config)
+    local_conn.connect()
+    run(local_conn)

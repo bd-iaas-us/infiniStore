@@ -69,6 +69,7 @@ struct Client {
 
     // TCP send buffer
     char *tcp_send_buffer = NULL;
+    char *tcp_recv_buffer = NULL;
 
     cudaStream_t cuda_stream;
 
@@ -114,6 +115,21 @@ Client::~Client() {
         free(recv_buffer);
         recv_buffer = NULL;
     }
+    if (send_buffer) {
+        free(send_buffer);
+        send_buffer = NULL;
+    }
+
+    if (tcp_send_buffer) {
+        free(tcp_send_buffer);
+        tcp_send_buffer = NULL;
+    }
+
+    if (tcp_recv_buffer) {
+        free(tcp_recv_buffer);
+        tcp_recv_buffer = NULL;
+    }
+
     cudaStreamDestroy(cuda_stream);
     INFO("destroy cuda stream");
     if (qp) {
@@ -366,9 +382,7 @@ void reset_client_read_state(client_t *client) {
     client->bytes_read = 0;
     client->expected_bytes = FIXED_HEADER_SIZE;
     memset(&client->header, 0, sizeof(header_t));
-
-    // keep the recv_buffer as it is
-    memset(client->recv_buffer, 0, client->expected_bytes);
+    // keep the tcp_recv_buffer as it is
 }
 
 void on_close(uv_handle_t *handle) {
@@ -413,6 +427,7 @@ void after_ipc_close_completion(uv_work_t *req, int status) {
 }
 
 int read_cache(client_t *client, local_meta_t &meta) {
+    INFO("do read_cache...");
     const header_t *header = &client->header;
     void *d_ptr;
 
@@ -423,19 +438,18 @@ int read_cache(client_t *client, local_meta_t &meta) {
 
     for (auto &block : meta.blocks) {
         if (kv_map.count(block.key) == 0) {
-            std::cout << "Key not found: " << block.key << std::endl;
+            ERROR("Key not found: {}", block.key);
             CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
             send_resp(client, KEY_NOT_FOUND, NULL, 0);
             return 0;
         }
-
-        // key found
-        // std::cout << "Key found: " << block.key << std::endl;
         void *h_src = kv_map[block.key].ptr;
         if (h_src == NULL) {
+            ERROR("Key not found: {}", block.key);
             send_resp(client, KEY_NOT_FOUND, NULL, 0);
             return 0;
         }
+        DEBUG("key: {}, local_addr: {}, size : {}", block.key, (uintptr_t)h_src, meta.block_size);
         // push the host cpu data to local device
         CHECK_CUDA(cudaMemcpyAsync((char *)d_ptr + block.offset, h_src, meta.block_size,
                                    cudaMemcpyHostToDevice, client->cuda_stream));
@@ -458,32 +472,19 @@ int write_cache(client_t *client, local_meta_t &meta) {
     void *d_ptr;
     CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, meta.ipc_handle, cudaIpcMemLazyEnablePeerAccess));
 
-    // for (auto &block : meta.blocks) {
-    //     // pull data from local device to CPU host
-    //     void *h_dst;
-    //     int pool_idx;
-    //     h_dst = mm->allocate(meta.block_size, &pool_idx);
-    //     if (h_dst == NULL) {
-    //         ERROR("Failed to allocat host memroy");
-    //         CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
-    //         return SYSTEM_ERROR;
-    //     }
-    //     // how to deal with memory overflow?
-    //     // pull data from local device to CPU host
-    //     CHECK_CUDA(cudaMemcpyAsync(h_dst, (char *)d_ptr + block.offset, meta.block_size,
-    //                                cudaMemcpyDeviceToHost, client->cuda_stream));
-    //     kv_map[block.key] = {.ptr = h_dst, .size = meta.block_size, .pool_idx = pool_idx};
-    // }
-
+    int key_idx = 0;
     mm->allocate(
         meta.block_size, meta.blocks.size(),
         [&](void *addr, uint32_t lkey, uint32_t rkey, int pool_idx) {
-            for (auto &block : meta.blocks) {
-                // pull data from local device to CPU host
-                CHECK_CUDA(cudaMemcpyAsync(addr, (char *)d_ptr + block.offset, meta.block_size,
-                                           cudaMemcpyDeviceToHost, client->cuda_stream));
-                kv_map[block.key] = {.ptr = addr, .size = meta.block_size, .pool_idx = pool_idx};
-            }
+            block_t *block = &meta.blocks[key_idx];
+
+            DEBUG("key: {}, local_addr: {}, size : {}", block->key, (uintptr_t)addr,
+                  meta.block_size);
+            // pull data from local device to CPU host
+            CHECK_CUDA(cudaMemcpyAsync(addr, (char *)d_ptr + block->offset, meta.block_size,
+                                       cudaMemcpyDeviceToHost, client->cuda_stream));
+            kv_map[block->key] = {.ptr = addr, .size = meta.block_size, .pool_idx = pool_idx};
+            key_idx++;
         });
     client->remain++;
     wqueue_data_t *wqueue_data = new wqueue_data_t();
@@ -813,7 +814,7 @@ void handle_request(uv_stream_t *stream, client_t *client) {
         case OP_R: {
             local_meta_t local_meta;
 
-            if (!deserialize(client->recv_buffer, client->expected_bytes, local_meta)) {
+            if (!deserialize(client->tcp_recv_buffer, client->expected_bytes, local_meta)) {
                 ERROR("Failed to deserialize local meta");
                 error_code = SYSTEM_ERROR;
                 break;
@@ -824,7 +825,7 @@ void handle_request(uv_stream_t *stream, client_t *client) {
         case OP_W: {
             local_meta_t local_meta;
 
-            if (!deserialize(client->recv_buffer, client->expected_bytes, local_meta)) {
+            if (!deserialize(client->tcp_recv_buffer, client->expected_bytes, local_meta)) {
                 ERROR("Failed to deserialize local meta");
                 error_code = SYSTEM_ERROR;
                 break;
@@ -837,18 +838,18 @@ void handle_request(uv_stream_t *stream, client_t *client) {
             break;
         }
         case OP_RDMA_EXCHANGE: {
-            memcpy((void *)(&client->remote_info), client->recv_buffer, client->expected_bytes);
+            memcpy((void *)(&client->remote_info), client->tcp_recv_buffer, client->expected_bytes);
             error_code = rdma_exchange(client);
             break;
         }
         case OP_CHECK_EXIST: {
-            std::string key_to_check(client->recv_buffer, client->expected_bytes);
+            std::string key_to_check(client->tcp_recv_buffer, client->expected_bytes);
             error_code = check_key(client, key_to_check);
             break;
         }
         case OP_GET_MATCH_LAST_IDX: {
             keys_t keys_meta;
-            if (!deserialize(client->recv_buffer, client->expected_bytes, keys_meta)) {
+            if (!deserialize(client->tcp_recv_buffer, client->expected_bytes, keys_meta)) {
                 ERROR("Failed to deserialize keys meta");
                 error_code = SYSTEM_ERROR;
                 break;
@@ -906,7 +907,7 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                         // prepare for reading body
                         client->expected_bytes = client->header.body_size;
                         client->bytes_read = 0;
-                        client->recv_buffer =
+                        client->tcp_recv_buffer =
                             (char *)realloc(client->recv_buffer, client->expected_bytes);
                         client->state = READ_BODY;
                     }
@@ -918,13 +919,13 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
             }
 
             case READ_BODY: {
-                assert(client->recv_buffer != NULL);
+                assert(client->tcp_recv_buffer != NULL);
 
                 DEBUG("reading body, bytes_read: {}, expected_bytes: {}", client->bytes_read,
                       client->expected_bytes);
                 size_t to_copy = MIN(nread - offset, client->expected_bytes - client->bytes_read);
 
-                memcpy(client->recv_buffer + client->bytes_read, buf->base + offset, to_copy);
+                memcpy(client->tcp_recv_buffer + client->bytes_read, buf->base + offset, to_copy);
                 client->bytes_read += to_copy;
                 offset += to_copy;
                 if (client->bytes_read == client->expected_bytes) {
@@ -955,7 +956,6 @@ void on_new_connection(uv_stream_t *server, int status) {
         client->state = READ_HEADER;
         client->bytes_read = 0;
         client->expected_bytes = FIXED_HEADER_SIZE;
-        client->recv_buffer = NULL;
         uv_read_start((uv_stream_t *)client_handle, alloc_buffer, on_read);
     }
     else {

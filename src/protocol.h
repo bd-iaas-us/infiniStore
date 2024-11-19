@@ -15,46 +15,6 @@
 
 using namespace flatbuffers;
 
-/*
-Protocol:
-
-REQUEST:
-+-------------------+
-| MAGIC(4 bytes)    |
-+-------------------+
-| OP(1 byte)        |
-+-------------------+
-
-and then
-
-+-------------------+
-|Fixed Size Payload |
-+-------------------+
-OR
-+---------------------+
-|Variable Size Payload|
-+---------------------+
-
-
-
-RESPONSE:
-
-Error code:
-+--------------------+
-| ERROR_CODE(4 bytes)|
-+--------------------+
-
-and then
-
-+-------------------+
-|Fixed Size Payload |
-+-------------------+
-OR
-+---------------------+
-|Variable Size Payload|
-+---------------------+
-*/
-
 #define MAX_WR 8192
 
 #define MAGIC 0xdeadbeef
