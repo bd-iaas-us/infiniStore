@@ -1,6 +1,7 @@
 #ifndef UTILS_H
 #define UTILS_H
 
+#include <arpa/inet.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <stddef.h>

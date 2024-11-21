@@ -501,7 +501,6 @@ int write_cache(client_t *client, const LocalMetaRequest *meta_req) {
     req->data = (void *)wqueue_data;
     uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);
 
-    INFO("SEND TASK_ACCEPTED");
     send_resp(client, TASK_ACCEPTED, NULL, 0);
 
     reset_client_read_state(client);
@@ -793,11 +792,12 @@ int check_key(client_t *client, std::string &key_to_check) {
     return 0;
 }
 
-int get_match_last_index(client_t *client, keys_t &keys_meta) {
-    int left = 0, right = keys_meta.keys.size();
+int get_match_last_index(client_t *client, const GetMatchLastIndexRequest *request) {
+    int left = 0, right = request->keys()->size();
     while (left < right) {
         int mid = left + (right - left) / 2;
-        if (kv_map.count(keys_meta.keys[mid])) {
+        request->keys()->Get(mid);
+        if (kv_map.count(request->keys()->Get(mid)->str())) {
             left = mid + 1;
         }
         else {
@@ -840,17 +840,14 @@ void handle_request(uv_stream_t *stream, client_t *client) {
         }
         case OP_CHECK_EXIST: {
             std::string key_to_check(client->tcp_recv_buffer, client->expected_bytes);
+            INFO("check key: {}", key_to_check);
             error_code = check_key(client, key_to_check);
             break;
         }
         case OP_GET_MATCH_LAST_IDX: {
-            keys_t keys_meta;
-            if (!deserialize(client->tcp_recv_buffer, client->expected_bytes, keys_meta)) {
-                ERROR("Failed to deserialize keys meta");
-                error_code = SYSTEM_ERROR;
-                break;
-            }
-            error_code = get_match_last_index(client, keys_meta);
+            const GetMatchLastIndexRequest *request =
+                GetGetMatchLastIndexRequest(client->tcp_recv_buffer);
+            error_code = get_match_last_index(client, request);
             break;
         }
         default:
@@ -904,7 +901,7 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                         client->expected_bytes = client->header.body_size;
                         client->bytes_read = 0;
                         client->tcp_recv_buffer =
-                            (char *)realloc(client->recv_buffer, client->expected_bytes);
+                            (char *)realloc(client->tcp_recv_buffer, client->expected_bytes);
                         client->state = READ_BODY;
                     }
                     else if (client->header.op == OP_SYNC) {

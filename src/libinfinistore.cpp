@@ -575,30 +575,27 @@ int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
     INFO("get_match_last_index");
     assert(conn != NULL);
 
-    keys_t meta = {
-        .keys = keys,
-    };
+    FlatBufferBuilder builder(64 << 10);
 
-    std::string serialized_data;
-    if (!serialize(meta, serialized_data)) {
-        ERROR("Failed to serialize local meta");
-        return -1;
-    }
+    auto keys_offset = builder.CreateVectorOfStrings(keys);
+    auto req = CreateGetMatchLastIndexRequest(builder, keys_offset);
+    builder.Finish(req);
 
     header_t header = {
         .magic = MAGIC,
         .op = OP_GET_MATCH_LAST_IDX,
-        .body_size = static_cast<unsigned int>(serialized_data.size()),
+        .body_size = builder.GetSize(),
     };
 
     struct iovec iov[2];
     struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+
     iov[0].iov_base = &header;
     iov[0].iov_len = FIXED_HEADER_SIZE;
-    iov[1].iov_base = const_cast<void *>(static_cast<const void *>(serialized_data.data()));
-    iov[1].iov_len = serialized_data.size();
+    iov[1].iov_base = builder.GetBufferPointer();
+    iov[1].iov_len = builder.GetSize();
 
-    memset(&msg, 0, sizeof(msg));
     msg.msg_iov = iov;
     msg.msg_iovlen = 2;
 
@@ -741,7 +738,7 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
         sges[num_wr].length = block_size;
         sges[num_wr].lkey = mr->lkey;
 
-        wrs[num_wr].wr_id = 0;
+        wrs[num_wr].wr_id = i;
         wrs[num_wr].opcode =
             (i == remote_blocks_len - 1) ? IBV_WR_RDMA_WRITE_WITH_IMM : IBV_WR_RDMA_WRITE;
         wrs[num_wr].sg_list = &sges[num_wr];

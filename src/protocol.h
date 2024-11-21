@@ -5,7 +5,6 @@
 #include <cuda_runtime.h>
 #include <infiniband/verbs.h>
 
-#include <msgpack.hpp>
 #include <string>
 #include <vector>
 
@@ -15,6 +14,7 @@
 #include "meta_request_generated.h"
 
 // local TCP protocols
+#include "get_match_last_index_generated.h"
 #include "local_meta_request_generated.h"
 
 using namespace flatbuffers;
@@ -58,17 +58,13 @@ typedef struct __attribute__((packed)) {
     unsigned int body_size;
 } header_t;
 
-typedef struct {
-    std::vector<std::string> keys;
-    MSGPACK_DEFINE(keys)
-} keys_t;
-
-// remote_block_t and block_t is used to to talk to PYTHON layer. not used in RDMA/TCP layer.
+// remote_block_t is used to to talk to PYTHON layer. not used in RDMA/TCP layer.
 typedef struct {
     uint32_t rkey;
     uintptr_t remote_addr;
 } remote_block_t;
 
+// block_t is used to to talk to PYTHON layer. not used in RDMA/TCP layer.
 typedef struct {
     std::string key;
     unsigned long offset;
@@ -80,11 +76,6 @@ typedef struct __attribute__((packed)) rdma_conn_info_t {
     union ibv_gid gid;  // RoCE v2
     uint16_t lid;       // IB
 } rdma_conn_info_t;
-
-template <typename T>
-bool serialize(const T& data, std::string& out);
-template <typename T>
-bool deserialize(const char* data, size_t size, T& out);
 
 #define FIXED_HEADER_SIZE sizeof(header_t)
 

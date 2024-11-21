@@ -1,13 +1,12 @@
 #include "protocol.h"
 
-#include <msgpack.hpp>
-
 std::unordered_map<char, std::string> op_map = {{OP_R, "READ"},
                                                 {OP_W, "WRITE"},
                                                 {OP_SYNC, "SYNC"},
                                                 {OP_RDMA_EXCHANGE, "RDMA_EXCHANGE"},
                                                 {OP_RDMA_WRITE, "RDMA_WRITE"},
                                                 {OP_RDMA_READ, "RDMA_READ"},
+                                                {OP_RDMA_ALLOCATE, "RDMA_ALLOCATE"},
                                                 {OP_CHECK_EXIST, "CHECK_EXIST"},
                                                 {OP_GET_MATCH_LAST_IDX, "GET_MATCH_LAST_IDX"}};
 std::string op_name(char op_code) {
@@ -16,29 +15,6 @@ std::string op_name(char op_code) {
         return it->second;
     }
     return "UNKNOWN";  // 如果未找到匹配项
-}
-
-template <typename T>
-bool serialize(const T& data, std::string& out) {
-    try {
-        msgpack::sbuffer sbuf;
-        msgpack::pack(sbuf, data);
-        out.assign(sbuf.data(), sbuf.size());
-        return true;
-    } catch (const std::exception&) {
-        return false;
-    }
-}
-
-template <typename T>
-bool deserialize(const char* data, size_t size, T& out) {
-    try {
-        msgpack::object_handle oh = msgpack::unpack(data, size);
-        oh.get().convert(out);
-        return true;
-    } catch (const std::exception&) {
-        return false;
-    }
 }
 
 uint8_t* FixedBufferAllocator::allocate(size_t size) {
@@ -53,6 +29,3 @@ uint8_t* FixedBufferAllocator::allocate(size_t size) {
 void FixedBufferAllocator::deallocate(uint8_t*, size_t) {
     // no-op
 }
-
-template bool serialize<keys_t>(const keys_t& data, std::string& out);
-template bool deserialize<keys_t>(const char* data, size_t size, keys_t& out);
