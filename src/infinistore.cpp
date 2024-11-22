@@ -53,37 +53,37 @@ typedef enum {
 } read_state_t;
 
 struct Client {
-    uv_tcp_t *handle = NULL;    // uv_stream_t
-    read_state_t state;         // state of the client, for parsing the request
-    size_t bytes_read = 0;      // bytes read so far, for parsing the request
-    size_t expected_bytes = 0;  // expected size of the body
-    header_t header;
+    uv_tcp_t *handle_ = NULL;    // uv_stream_t
+    read_state_t state_;         // state of the client, for parsing the request
+    size_t bytes_read_ = 0;      // bytes read so far, for parsing the request
+    size_t expected_bytes_ = 0;  // expected size of the body
+    header_t header_;
 
     // RDMA recv buffer
-    char *recv_buffer = NULL;
-    struct ibv_mr *recv_mr = NULL;
+    char *recv_buffer_ = NULL;
+    struct ibv_mr *recv_mr_ = NULL;
 
     // RDMA send buffer
-    char *send_buffer = NULL;
-    struct ibv_mr *send_mr = NULL;
+    char *send_buffer_ = NULL;
+    struct ibv_mr *send_mr_ = NULL;
 
     // TCP send buffer
-    char *tcp_send_buffer = NULL;
-    char *tcp_recv_buffer = NULL;
+    char *tcp_send_buffer_ = NULL;
+    char *tcp_recv_buffer_ = NULL;
 
-    cudaStream_t cuda_stream;
+    cudaStream_t cuda_stream_;
 
-    rdma_conn_info_t remote_info;
-    rdma_conn_info_t local_info;
+    rdma_conn_info_t remote_info_;
+    rdma_conn_info_t local_info_;
 
-    struct ibv_cq *cq = NULL;
-    struct ibv_qp *qp = NULL;
-    bool rdma_connected = false;
-    int gidx;  // gid index
+    struct ibv_cq *cq_ = NULL;
+    struct ibv_qp *qp_ = NULL;
+    bool rdma_connected_ = false;
+    int gidx_;  // gid index
 
-    int remain;
+    int remain_;
 
-    uv_poll_t poll_handle;
+    uv_poll_t poll_handle_;
 
     struct block {
         uint32_t lkey;
@@ -97,6 +97,16 @@ struct Client {
     void cq_poll_handle(uv_poll_t *handle, int status, int events);
     int read_rdma_cache(const RemoteMetaRequest *req);
     int allocate_rdma(const RemoteMetaRequest *req);
+    int read_cache(const LocalMetaRequest *meta_req);
+    int write_cache(const LocalMetaRequest *meta_req);
+    // send response to client through TCP
+    void send_resp(int return_code, void *buf, size_t size);
+    int sync_stream();
+    void reset_client_read_state();
+    int check_key(const std::string &key_to_check);
+    int get_match_last_index(const GetMatchLastIndexRequest *request);
+    int rdma_exchange();
+    int prepare_recv_rdma_request();
 };
 
 typedef struct Client client_t;
@@ -104,45 +114,45 @@ typedef struct Client client_t;
 Client::~Client() {
     DEBUG("free client resources");
 
-    if (poll_handle.data) {
-        uv_poll_stop(&poll_handle);
+    if (poll_handle_.data) {
+        uv_poll_stop(&poll_handle_);
     }
-    if (handle) {
-        free(handle);
-        handle = NULL;
+    if (handle_) {
+        free(handle_);
+        handle_ = NULL;
     }
-    if (recv_buffer) {
-        free(recv_buffer);
-        recv_buffer = NULL;
+    if (recv_buffer_) {
+        free(recv_buffer_);
+        recv_buffer_ = NULL;
     }
-    if (send_buffer) {
-        free(send_buffer);
-        send_buffer = NULL;
-    }
-
-    if (tcp_send_buffer) {
-        free(tcp_send_buffer);
-        tcp_send_buffer = NULL;
+    if (send_buffer_) {
+        free(send_buffer_);
+        send_buffer_ = NULL;
     }
 
-    if (tcp_recv_buffer) {
-        free(tcp_recv_buffer);
-        tcp_recv_buffer = NULL;
+    if (tcp_send_buffer_) {
+        free(tcp_send_buffer_);
+        tcp_send_buffer_ = NULL;
     }
 
-    cudaStreamDestroy(cuda_stream);
+    if (tcp_recv_buffer_) {
+        free(tcp_recv_buffer_);
+        tcp_recv_buffer_ = NULL;
+    }
+
+    cudaStreamDestroy(cuda_stream_);
     INFO("destroy cuda stream");
-    if (qp) {
+    if (qp_) {
         struct ibv_qp_attr attr;
         memset(&attr, 0, sizeof(attr));
         attr.qp_state = IBV_QPS_ERR;
-        if (ibv_modify_qp(qp, &attr, IBV_QP_STATE)) {
+        if (ibv_modify_qp(qp_, &attr, IBV_QP_STATE)) {
             ERROR("Failed to modify QP to ERR state");
         }
     }
-    if (qp) {
-        ibv_destroy_qp(qp);
-        qp = NULL;
+    if (qp_) {
+        ibv_destroy_qp(qp_);
+        qp_ = NULL;
         INFO("QP destroyed");
     }
 }
@@ -173,7 +183,7 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
         if (wc.status == IBV_WC_SUCCESS) {
             if (wc.opcode == IBV_WC_RECV) {  // recv RDMA read/write request
                 INFO("RDMA Send completed successfully, recved {}", wc.byte_len);
-                const RemoteMetaRequest *request = GetRemoteMetaRequest(recv_buffer);
+                const RemoteMetaRequest *request = GetRemoteMetaRequest(recv_buffer_);
 
                 INFO("Received remote meta request, #keys: {}, OP {}", request->keys()->size(),
                      op_name(request->op()));
@@ -202,19 +212,8 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                 }
 
                 INFO("ready for next request");
-                struct ibv_sge sge = {0};
-                struct ibv_recv_wr rwr = {0};
-                struct ibv_recv_wr *bad_wr = NULL;
-                sge.addr = (uintptr_t)recv_buffer;
-                sge.length = PROTOCOL_BUFFER_SIZE;
-                sge.lkey = recv_mr->lkey;
-
-                rwr.wr_id = (uint64_t)recv_buffer;
-                rwr.next = NULL;
-                rwr.sg_list = &sge;
-                rwr.num_sge = 1;
-                if (ibv_post_recv(qp, &rwr, &bad_wr)) {
-                    ERROR("Failed to post receive, {}");
+                if (prepare_recv_rdma_request() < 0) {
+                    ERROR("Failed to prepare recv rdma request");
                     return;
                 }
             }
@@ -238,7 +237,7 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
 int Client::allocate_rdma(const RemoteMetaRequest *req) {
     INFO("do allocate_rdma...");
 
-    FixedBufferAllocator allocator(send_buffer, PROTOCOL_BUFFER_SIZE);
+    FixedBufferAllocator allocator(send_buffer_, PROTOCOL_BUFFER_SIZE);
     FlatBufferBuilder builder(64 << 10, &allocator);
 
     int key_idx = 0;
@@ -268,7 +267,7 @@ int Client::allocate_rdma(const RemoteMetaRequest *req) {
 
     sge.addr = (uintptr_t)builder.GetBufferPointer();
     sge.length = builder.GetSize();
-    sge.lkey = send_mr->lkey;
+    sge.lkey = send_mr_->lkey;
 
     wr.wr_id = 0;
     wr.opcode = IBV_WR_SEND;
@@ -276,31 +275,36 @@ int Client::allocate_rdma(const RemoteMetaRequest *req) {
     wr.num_sge = 1;
     wr.send_flags = IBV_SEND_SIGNALED;
 
-    int ret = ibv_post_send(qp, &wr, &bad_wr);
+    int ret = ibv_post_send(qp_, &wr, &bad_wr);
     if (ret) {
         ERROR("Failed to post RDMA send :{}", strerror(ret));
         return -1;
     }
 
-    {  // FIXME
-        // put a recv wr to receive the WRITE_IMM
-        struct ibv_sge sge = {0};
-        struct ibv_recv_wr rwr = {0};
-        struct ibv_recv_wr *bad_wr = NULL;
-        sge.addr = (uintptr_t)recv_buffer;
-        sge.length = PROTOCOL_BUFFER_SIZE;
-        sge.lkey = recv_mr->lkey;
-
-        rwr.wr_id = (uint64_t)recv_buffer;
-        rwr.next = NULL;
-        rwr.sg_list = &sge;
-        rwr.num_sge = 1;
-        if (ibv_post_recv(qp, &rwr, &bad_wr)) {
-            ERROR("Failed to post receive, {}");
-            return -1;
-        }
+    // put a recv wr to receive the WRITE_IMM for rdma write
+    if (prepare_recv_rdma_request() < 0) {
+        ERROR("Failed to prepare recv rdma request");
+        return -1;
     }
+    return 0;
+}
 
+int Client::prepare_recv_rdma_request() {
+    struct ibv_sge sge = {0};
+    struct ibv_recv_wr rwr = {0};
+    struct ibv_recv_wr *bad_wr = NULL;
+    sge.addr = (uintptr_t)recv_buffer_;
+    sge.length = PROTOCOL_BUFFER_SIZE;
+    sge.lkey = recv_mr_->lkey;
+
+    rwr.wr_id = (uint64_t)recv_buffer_;
+    rwr.next = NULL;
+    rwr.sg_list = &sge;
+    rwr.num_sge = 1;
+    if (ibv_post_recv(qp_, &rwr, &bad_wr)) {
+        ERROR("Failed to post receive, {}");
+        return -1;
+    }
     return 0;
 }
 
@@ -356,7 +360,7 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
         // If we reach the maximum number of WRs, post them
         if (num_wr == max_wr || i == remote_meta_req->keys()->size() - 1) {
             struct ibv_send_wr *bad_wr = nullptr;
-            int ret = ibv_post_send(qp, &wrs[0], &bad_wr);
+            int ret = ibv_post_send(qp_, &wrs[0], &bad_wr);
             if (ret) {
                 ERROR("Failed to post RDMA write");
                 return -1;
@@ -368,26 +372,22 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
     return 0;
 }
 
-// send response to client through TCP
-void send_resp(client_t *client, int return_code, void *buf, size_t size);
-
 typedef struct {
     client_t *client;
     void *d_ptr;
 } wqueue_data_t;
 
 // FIXME:
-void reset_client_read_state(client_t *client) {
-    client->state = READ_HEADER;
-    client->bytes_read = 0;
-    client->expected_bytes = FIXED_HEADER_SIZE;
-    memset(&client->header, 0, sizeof(header_t));
-    // keep the tcp_recv_buffer as it is
+void Client::reset_client_read_state() {
+    state_ = READ_HEADER;
+    bytes_read_ = 0;
+    expected_bytes_ = FIXED_HEADER_SIZE;
+    memset(&header_, 0, sizeof(header_t));
+    // keep the tcp_recv_buffer/tcp_send_buffer as it is
 }
 
 void on_close(uv_handle_t *handle) {
     client_t *client = (client_t *)handle->data;
-
     delete client;
 }
 
@@ -420,15 +420,15 @@ void wait_for_ipc_close_completion(uv_work_t *req) {
 
 void after_ipc_close_completion(uv_work_t *req, int status) {
     wqueue_data_t *wqueue_data = (wqueue_data_t *)req->data;
-    wqueue_data->client->remain--;
+    wqueue_data->client->remain_--;
     INFO("after_ipc_close_completion done");
     delete wqueue_data;
     delete req;
 }
 
-int read_cache(client_t *client, const LocalMetaRequest *meta_req) {
+int Client::read_cache(const LocalMetaRequest *meta_req) {
     INFO("do read_cache...");
-    const header_t *header = &client->header;
+    const header_t *header = &this->header_;
     void *d_ptr;
 
     assert(header != NULL);
@@ -443,7 +443,7 @@ int read_cache(client_t *client, const LocalMetaRequest *meta_req) {
         if (kv_map.count(key) == 0) {
             ERROR("Key not found: {}", key);
             CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
-            send_resp(client, KEY_NOT_FOUND, NULL, 0);
+            send_resp(KEY_NOT_FOUND, NULL, 0);
             return 0;
         }
         void *h_src = kv_map[key].ptr;
@@ -452,23 +452,23 @@ int read_cache(client_t *client, const LocalMetaRequest *meta_req) {
         DEBUG("key: {}, local_addr: {}, size : {}", key, (uintptr_t)h_src, block_size);
         // push the host cpu data to local device
         CHECK_CUDA(cudaMemcpyAsync((char *)d_ptr + block->offset(), h_src, block_size,
-                                   cudaMemcpyHostToDevice, client->cuda_stream));
+                                   cudaMemcpyHostToDevice, cuda_stream_));
     }
 
-    client->remain++;
+    remain_++;
     wqueue_data_t *wqueue_data = new wqueue_data_t();
-    wqueue_data->client = client;
+    wqueue_data->client = this;
     wqueue_data->d_ptr = d_ptr;
     uv_work_t *req = new uv_work_t();
     req->data = (void *)wqueue_data;
     uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);
 
-    send_resp(client, TASK_ACCEPTED, NULL, 0);
-    reset_client_read_state(client);
+    send_resp(TASK_ACCEPTED, NULL, 0);
+    reset_client_read_state();
     return 0;
 }
 
-int write_cache(client_t *client, const LocalMetaRequest *meta_req) {
+int Client::write_cache(const LocalMetaRequest *meta_req) {
     // allocate host memory
 
     void *d_ptr;
@@ -488,22 +488,22 @@ int write_cache(client_t *client, const LocalMetaRequest *meta_req) {
                   block_size);
             // pull data from local device to CPU host
             CHECK_CUDA(cudaMemcpyAsync(addr, (char *)d_ptr + block->offset(), block_size,
-                                       cudaMemcpyDeviceToHost, client->cuda_stream));
+                                       cudaMemcpyDeviceToHost, cuda_stream_));
             kv_map[block->key()->str()] = {.ptr = addr, .size = block_size, .pool_idx = pool_idx};
             key_idx++;
         });
 
-    client->remain++;
+    remain_++;
     wqueue_data_t *wqueue_data = new wqueue_data_t();
-    wqueue_data->client = client;
+    wqueue_data->client = this;
     wqueue_data->d_ptr = d_ptr;
     uv_work_t *req = new uv_work_t();
     req->data = (void *)wqueue_data;
     uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);
 
-    send_resp(client, TASK_ACCEPTED, NULL, 0);
+    send_resp(TASK_ACCEPTED, NULL, 0);
 
-    reset_client_read_state(client);
+    reset_client_read_state();
     return 0;
 }
 
@@ -577,12 +577,12 @@ int init_rdma_context(server_config_t config) {
     return 0;
 }
 
-int rdma_exchange(client_t *client) {
+int Client::rdma_exchange() {
     INFO("do rdma exchange...");
 
     int ret;
 
-    if (client->rdma_connected == true) {
+    if (rdma_connected_ == true) {
         ERROR("RDMA already connected");
         return SYSTEM_ERROR;
     }
@@ -590,24 +590,24 @@ int rdma_exchange(client_t *client) {
     // RDMA setup if not already done
     assert(comp_channel != NULL);
 
-    client->cq = ibv_create_cq(ib_ctx, MAX_WR * 2, NULL, comp_channel, 0);
-    if (!client->cq) {
+    cq_ = ibv_create_cq(ib_ctx, MAX_WR * 2, NULL, comp_channel, 0);
+    if (!cq_) {
         ERROR("Failed to create CQ");
         return SYSTEM_ERROR;
     }
 
     // Create Queue Pair
     struct ibv_qp_init_attr qp_init_attr = {};
-    qp_init_attr.send_cq = client->cq;
-    qp_init_attr.recv_cq = client->cq;
+    qp_init_attr.send_cq = cq_;
+    qp_init_attr.recv_cq = cq_;
     qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
     qp_init_attr.cap.max_send_wr = MAX_WR;
     qp_init_attr.cap.max_recv_wr = MAX_WR;
     qp_init_attr.cap.max_send_sge = 1;
     qp_init_attr.cap.max_recv_sge = 1;
 
-    client->qp = ibv_create_qp(pd, &qp_init_attr);
-    if (!client->qp) {
+    qp_ = ibv_create_qp(pd, &qp_init_attr);
+    if (!qp_) {
         ERROR("Failed to create QP");
         return SYSTEM_ERROR;
     }
@@ -621,13 +621,13 @@ int rdma_exchange(client_t *client) {
 
     int flags = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
 
-    ret = ibv_modify_qp(client->qp, &attr, flags);
+    ret = ibv_modify_qp(qp_, &attr, flags);
     if (ret) {
         ERROR("Failed to modify QP to INIT");
         return SYSTEM_ERROR;
     }
 
-    client->gidx = gidx;
+    gidx_ = gidx;
 
     union ibv_gid gid;
     // get gid
@@ -636,20 +636,21 @@ int rdma_exchange(client_t *client) {
         return -1;
     }
 
-    client->local_info.qpn = client->qp->qp_num;
-    client->local_info.psn = lrand48() & 0xffffff;
-    client->local_info.gid = gid;
-    client->local_info.lid = lid;
+    local_info_.qpn = qp_->qp_num;
+    local_info_.psn = lrand48() & 0xffffff;
+    local_info_.gid = gid;
+    local_info_.lid = lid;
 
-    INFO("gid index: {}", client->gidx);
-    print_rdma_conn_info(&client->local_info, false);
+    INFO("gid index: {}", gidx_);
+    print_rdma_conn_info(&local_info_, false);
+    print_rdma_conn_info(&remote_info_, true);
 
     // Modify QP to RTR state
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTR;
     attr.path_mtu = active_mtu;  // FIXME: hard coded
-    attr.dest_qp_num = client->remote_info.qpn;
-    attr.rq_psn = client->remote_info.psn;
+    attr.dest_qp_num = remote_info_.qpn;
+    attr.rq_psn = remote_info_.psn;
     attr.max_dest_rd_atomic = 4;
     attr.min_rnr_timer = 12;
     attr.ah_attr.dlid = 0;  // RoCE v2 is used.
@@ -659,23 +660,23 @@ int rdma_exchange(client_t *client) {
 
     if (gidx == -1) {
         // IB
-        attr.ah_attr.dlid = client->remote_info.lid;
+        attr.ah_attr.dlid = remote_info_.lid;
         attr.ah_attr.is_global = 0;
     }
     else {
         // RoCE v2
         attr.ah_attr.is_global = 1;
-        attr.ah_attr.grh.dgid = client->remote_info.gid;
-        attr.ah_attr.grh.sgid_index = client->gidx;
+        attr.ah_attr.grh.dgid = remote_info_.gid;
+        attr.ah_attr.grh.sgid_index = gidx_;
         attr.ah_attr.grh.hop_limit = 1;
     }
 
     flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
             IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
 
-    ret = ibv_modify_qp(client->qp, &attr, flags);
+    ret = ibv_modify_qp(qp_, &attr, flags);
     if (ret) {
-        ERROR("Failed to modify QP to RTR");
+        ERROR("Failed to modify QP to RTR: reason: {}", strerror(ret));
         return SYSTEM_ERROR;
     }
 
@@ -685,114 +686,98 @@ int rdma_exchange(client_t *client) {
     attr.timeout = 14;
     attr.retry_cnt = 7;
     attr.rnr_retry = 7;
-    attr.sq_psn = client->local_info.psn;
+    attr.sq_psn = local_info_.psn;
     attr.max_rd_atomic = 1;
 
     flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN |
             IBV_QP_MAX_QP_RD_ATOMIC;
 
-    ret = ibv_modify_qp(client->qp, &attr, flags);
+    ret = ibv_modify_qp(qp_, &attr, flags);
     if (ret) {
         ERROR("Failed to modify QP to RTS");
         return SYSTEM_ERROR;
     }
     INFO("RDMA exchange done");
-    client->rdma_connected = true;
+    rdma_connected_ = true;
 
-    if (posix_memalign((void **)&client->send_buffer, 4096, PROTOCOL_BUFFER_SIZE) != 0) {
+    if (posix_memalign((void **)&send_buffer_, 4096, PROTOCOL_BUFFER_SIZE) != 0) {
         ERROR("Failed to allocate send buffer");
         return SYSTEM_ERROR;
     }
 
-    client->send_mr =
-        ibv_reg_mr(pd, client->send_buffer, PROTOCOL_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
-    if (!client->send_mr) {
+    send_mr_ = ibv_reg_mr(pd, send_buffer_, PROTOCOL_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
+    if (!send_mr_) {
         ERROR("Failed to register MR");
         return SYSTEM_ERROR;
     }
 
-    if (posix_memalign((void **)&client->recv_buffer, 4096, PROTOCOL_BUFFER_SIZE) != 0) {
+    if (posix_memalign((void **)&recv_buffer_, 4096, PROTOCOL_BUFFER_SIZE) != 0) {
         ERROR("Failed to allocate recv buffer");
         return SYSTEM_ERROR;
     }
 
-    client->recv_mr =
-        ibv_reg_mr(pd, client->recv_buffer, PROTOCOL_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
-    if (!client->recv_mr) {
+    recv_mr_ = ibv_reg_mr(pd, recv_buffer_, PROTOCOL_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
+    if (!recv_mr_) {
         ERROR("Failed to register MR");
         return SYSTEM_ERROR;
     }
 
     // ready to receive RDMA_SEND
-    struct ibv_sge sge = {0};
-    struct ibv_recv_wr rwr = {0};
-
-    struct ibv_recv_wr *bad_wr = NULL;
-
-    sge.addr = (uintptr_t)client->recv_buffer;
-    sge.length = PROTOCOL_BUFFER_SIZE;
-    sge.lkey = client->recv_mr->lkey;
-
-    rwr.wr_id = (uint64_t)client->recv_buffer;
-    rwr.next = NULL;
-    rwr.sg_list = &sge;
-    rwr.num_sge = 1;
-
-    if (ibv_post_recv(client->qp, &rwr, &bad_wr)) {
-        ERROR("Failed to post receive, {}");
-        return SYSTEM_ERROR;
+    if (prepare_recv_rdma_request() < 0) {
+        ERROR("Failed to prepare recv rdma request");
+        return -1;
     }
 
-    if (ibv_req_notify_cq(client->cq, 0)) {
+    if (ibv_req_notify_cq(cq_, 0)) {
         ERROR("Failed to request notify for CQ");
         return -1;
     }
 
-    uv_poll_init(loop, &client->poll_handle, comp_channel->fd);
-    client->poll_handle.data = client;
-    uv_poll_start(&client->poll_handle, UV_READABLE | UV_WRITABLE,
+    uv_poll_init(loop, &poll_handle_, comp_channel->fd);
+    poll_handle_.data = this;
+    uv_poll_start(&poll_handle_, UV_READABLE | UV_WRITABLE,
                   [](uv_poll_t *handle, int status, int events) {
                       client_t *client = static_cast<client_t *>(handle->data);
                       client->cq_poll_handle(handle, status, events);
                   });
 
     // Send server's RDMA connection info to client
-    send_resp(client, FINISH, &client->local_info, sizeof(client->local_info));
-    reset_client_read_state(client);
+    send_resp(FINISH, &local_info_, sizeof(local_info_));
+    reset_client_read_state();
     return 0;
 }
 
 // send_resp send fixed size response to client.
-void send_resp(client_t *client, int return_code, void *buf, size_t size) {
+void Client::send_resp(int return_code, void *buf, size_t size) {
     if (size > 0) {
         assert(buf != NULL);
     }
     uv_write_t *write_req = (uv_write_t *)malloc(sizeof(uv_write_t));
 
-    client->tcp_send_buffer = (char *)realloc(client->tcp_send_buffer, size + RETURN_CODE_SIZE);
+    tcp_send_buffer_ = (char *)realloc(tcp_send_buffer_, size + RETURN_CODE_SIZE);
 
-    memcpy(client->tcp_send_buffer, &return_code, RETURN_CODE_SIZE);
-    memcpy(client->tcp_send_buffer + RETURN_CODE_SIZE, buf, size);
-    write_req->data = client;
-    uv_buf_t wbuf = uv_buf_init(client->tcp_send_buffer, size + RETURN_CODE_SIZE);
-    uv_write(write_req, (uv_stream_t *)client->handle, &wbuf, 1, on_write);
+    memcpy(tcp_send_buffer_, &return_code, RETURN_CODE_SIZE);
+    memcpy(tcp_send_buffer_ + RETURN_CODE_SIZE, buf, size);
+    write_req->data = this;
+    uv_buf_t wbuf = uv_buf_init(tcp_send_buffer_, size + RETURN_CODE_SIZE);
+    uv_write(write_req, (uv_stream_t *)handle_, &wbuf, 1, on_write);
 }
 
-int sync_stream(client_t *client) {
-    send_resp(client, FINISH, &client->remain, sizeof(client->remain));
+int Client::sync_stream() {
+    send_resp(FINISH, &remain_, sizeof(remain_));
     // Reset client state
-    reset_client_read_state(client);
+    reset_client_read_state();
     return 0;
 }
 
-int check_key(client_t *client, std::string &key_to_check) {
+int Client::check_key(const std::string &key_to_check) {
     int ret = kv_map.count(key_to_check) ? 0 : 1;
-    send_resp(client, FINISH, &ret, sizeof(ret));
-    reset_client_read_state(client);
+    send_resp(FINISH, &ret, sizeof(ret));
+    reset_client_read_state();
     return 0;
 }
 
-int get_match_last_index(client_t *client, const GetMatchLastIndexRequest *request) {
+int Client::get_match_last_index(const GetMatchLastIndexRequest *request) {
     int left = 0, right = request->keys()->size();
     while (left < right) {
         int mid = left + (right - left) / 2;
@@ -805,8 +790,8 @@ int get_match_last_index(client_t *client, const GetMatchLastIndexRequest *reque
         }
     }
     left--;
-    send_resp(client, FINISH, &left, sizeof(left));
-    reset_client_read_state(client);
+    send_resp(FINISH, &left, sizeof(left));
+    reset_client_read_state();
     return 0;
 }
 
@@ -816,38 +801,39 @@ int get_match_last_index(client_t *client, const GetMatchLastIndexRequest *reque
 void handle_request(uv_stream_t *stream, client_t *client) {
     auto start = std::chrono::high_resolution_clock::now();
     int error_code = 0;
-    int op = client->header.op;
+    int op = client->header_.op;
     // if error_code is not 0, close the connection
-    switch (client->header.op) {
+    switch (client->header_.op) {
         case OP_R: {
-            const LocalMetaRequest *request = GetLocalMetaRequest(client->tcp_recv_buffer);
-            error_code = read_cache(client, request);
+            const LocalMetaRequest *request = GetLocalMetaRequest(client->tcp_recv_buffer_);
+            error_code = client->read_cache(request);
             break;
         }
         case OP_W: {
-            const LocalMetaRequest *request = GetLocalMetaRequest(client->tcp_recv_buffer);
-            error_code = write_cache(client, request);
+            const LocalMetaRequest *request = GetLocalMetaRequest(client->tcp_recv_buffer_);
+            error_code = client->write_cache(request);
             break;
         }
         case OP_SYNC: {
-            error_code = sync_stream(client);
+            error_code = client->sync_stream();
             break;
         }
         case OP_RDMA_EXCHANGE: {
-            memcpy((void *)(&client->remote_info), client->tcp_recv_buffer, client->expected_bytes);
-            error_code = rdma_exchange(client);
+            memcpy((void *)(&client->remote_info_), client->tcp_recv_buffer_,
+                   client->expected_bytes_);
+            error_code = client->rdma_exchange();
             break;
         }
         case OP_CHECK_EXIST: {
-            std::string key_to_check(client->tcp_recv_buffer, client->expected_bytes);
+            std::string key_to_check(client->tcp_recv_buffer_, client->expected_bytes_);
             INFO("check key: {}", key_to_check);
-            error_code = check_key(client, key_to_check);
+            error_code = client->check_key(key_to_check);
             break;
         }
         case OP_GET_MATCH_LAST_IDX: {
             const GetMatchLastIndexRequest *request =
-                GetGetMatchLastIndexRequest(client->tcp_recv_buffer);
-            error_code = get_match_last_index(client, request);
+                GetGetMatchLastIndexRequest(client->tcp_recv_buffer_);
+            error_code = client->get_match_last_index(request);
             break;
         }
         default:
@@ -857,8 +843,8 @@ void handle_request(uv_stream_t *stream, client_t *client) {
     }
 
     if (error_code != 0) {
-        send_resp(client, error_code, NULL, 0);
-        reset_client_read_state(client);
+        client->send_resp(error_code, NULL, 0);
+        client->reset_client_read_state();
     }
 
     auto end = std::chrono::high_resolution_clock::now();
@@ -878,33 +864,34 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
     }
 
     while (offset < nread) {
-        switch (client->state) {
+        switch (client->state_) {
             case READ_HEADER: {
-                size_t to_copy = MIN(nread - offset, FIXED_HEADER_SIZE - client->bytes_read);
-                memcpy(((char *)&client->header) + client->bytes_read, buf->base + offset, to_copy);
-                client->bytes_read += to_copy;
+                size_t to_copy = MIN(nread - offset, FIXED_HEADER_SIZE - client->bytes_read_);
+                memcpy(((char *)&client->header_) + client->bytes_read_, buf->base + offset,
+                       to_copy);
+                client->bytes_read_ += to_copy;
                 offset += to_copy;
-                if (client->bytes_read == FIXED_HEADER_SIZE) {
-                    DEBUG("HEADER: op: {}, body_size :{}", client->header.op,
-                          (unsigned int)client->header.body_size);
-                    if (client->header.op == OP_R || client->header.op == OP_W ||
-                        client->header.op == OP_CHECK_EXIST ||
-                        client->header.op == OP_GET_MATCH_LAST_IDX ||
-                        client->header.op == OP_RDMA_EXCHANGE) {
-                        int ret = veryfy_header(&client->header);
+                if (client->bytes_read_ == FIXED_HEADER_SIZE) {
+                    DEBUG("HEADER: op: {}, body_size :{}", client->header_.op,
+                          (unsigned int)client->header_.body_size);
+                    if (client->header_.op == OP_R || client->header_.op == OP_W ||
+                        client->header_.op == OP_CHECK_EXIST ||
+                        client->header_.op == OP_GET_MATCH_LAST_IDX ||
+                        client->header_.op == OP_RDMA_EXCHANGE) {
+                        int ret = veryfy_header(&client->header_);
                         if (ret != 0) {
                             ERROR("Invalid header");
                             uv_close((uv_handle_t *)stream, on_close);
                             goto clean_up;
                         }
                         // prepare for reading body
-                        client->expected_bytes = client->header.body_size;
-                        client->bytes_read = 0;
-                        client->tcp_recv_buffer =
-                            (char *)realloc(client->tcp_recv_buffer, client->expected_bytes);
-                        client->state = READ_BODY;
+                        client->expected_bytes_ = client->header_.body_size;
+                        client->bytes_read_ = 0;
+                        client->tcp_recv_buffer_ =
+                            (char *)realloc(client->tcp_recv_buffer_, client->expected_bytes_);
+                        client->state_ = READ_BODY;
                     }
-                    else if (client->header.op == OP_SYNC) {
+                    else if (client->header_.op == OP_SYNC) {
                         handle_request(stream, client);
                     }
                 }
@@ -912,17 +899,17 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
             }
 
             case READ_BODY: {
-                assert(client->tcp_recv_buffer != NULL);
+                assert(client->tcp_recv_buffer_ != NULL);
 
-                DEBUG("reading body, bytes_read: {}, expected_bytes: {}", client->bytes_read,
-                      client->expected_bytes);
-                size_t to_copy = MIN(nread - offset, client->expected_bytes - client->bytes_read);
+                DEBUG("reading body, bytes_read: {}, expected_bytes: {}", client->bytes_read_,
+                      client->expected_bytes_);
+                size_t to_copy = MIN(nread - offset, client->expected_bytes_ - client->bytes_read_);
 
-                memcpy(client->tcp_recv_buffer + client->bytes_read, buf->base + offset, to_copy);
-                client->bytes_read += to_copy;
+                memcpy(client->tcp_recv_buffer_ + client->bytes_read_, buf->base + offset, to_copy);
+                client->bytes_read_ += to_copy;
                 offset += to_copy;
-                if (client->bytes_read == client->expected_bytes) {
-                    DEBUG("body read done, size {}", client->expected_bytes);
+                if (client->bytes_read_ == client->expected_bytes_) {
+                    DEBUG("body read done, size {}", client->expected_bytes_);
                     handle_request(stream, client);
                 }
                 break;
@@ -943,12 +930,12 @@ void on_new_connection(uv_stream_t *server, int status) {
     uv_tcp_init(loop, client_handle);
     if (uv_accept(server, (uv_stream_t *)client_handle) == 0) {
         client_t *client = new client_t();
-        CHECK_CUDA(cudaStreamCreate(&client->cuda_stream));
-        client->handle = client_handle;
+        CHECK_CUDA(cudaStreamCreate(&client->cuda_stream_));
+        client->handle_ = client_handle;
         client_handle->data = client;
-        client->state = READ_HEADER;
-        client->bytes_read = 0;
-        client->expected_bytes = FIXED_HEADER_SIZE;
+        client->state_ = READ_HEADER;
+        client->bytes_read_ = 0;
+        client->expected_bytes_ = FIXED_HEADER_SIZE;
         uv_read_start((uv_stream_t *)client_handle, alloc_buffer, on_read);
     }
     else {

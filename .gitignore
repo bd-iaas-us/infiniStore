@@ -9,3 +9,4 @@ infinity_server
 __pycache__
 infini*.egg-info
 test_run
+*.so
