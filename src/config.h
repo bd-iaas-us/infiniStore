@@ -3,6 +3,13 @@
 
 #include <string>
 
+/*
+If you want to add new fields to the configuration,
+you need to modify the following files:
+1. pybind
+2. construct function in lib.py
+3. args.parse in server.py
+*/
 typedef struct ServerConfig {
     int service_port;
     std::string log_level;
@@ -10,6 +17,7 @@ typedef struct ServerConfig {
     size_t prealloc_size;  // unit: GB
     int ib_port;
     std::string link_type;
+    int minimal_allocate_size;  // unit: KB
 } server_config_t;
 
 typedef struct ClientConfig {

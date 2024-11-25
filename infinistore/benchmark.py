@@ -143,8 +143,11 @@ def run(args):
 
     for _ in range(args.iteration):
         start = time.time()
-        remote_addrs = conn.allocate_rdma(keys, block_size * 4)
-        conn.rdma_write_cache(src_tensor, offset_blocks, block_size, remote_addrs)
+        if args.rdma:
+            remote_addrs = conn.allocate_rdma(keys, block_size * 4)
+            conn.rdma_write_cache(src_tensor, offset_blocks, block_size, remote_addrs)
+        else:
+            conn.local_gpu_write_cache(src_tensor, blocks, block_size)
 
         conn.sync()
         mid = time.time()

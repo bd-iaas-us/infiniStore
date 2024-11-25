@@ -34,6 +34,7 @@ class ClientConfig(_infinistore.ClientConfig):
             f"ServerConfig(service_port={self.service_port}, "
             f"log_level='{self.log_level}', host_addr='{self.host_addr}', "
             f"connection_type='{self.connection_type.name}')"
+            f"dev_name='{self.dev_name}', ib_port={self.ib_port}, link_type='{self.link_type}'"
         )
 
     def verify(self):
@@ -61,11 +62,14 @@ class ServerConfig(_infinistore.ServerConfig):
         self.ib_port = kwargs.get("ib_port", 1)
         self.link_type = kwargs.get("link_type", "IB")
         self.prealloc_size = kwargs.get("prealloc_size", 16)
+        self.minimal_allocate_size = kwargs.get("minimal_allocate_size", 64)
 
     def __repr__(self):
         return (
             f"ServerConfig(service_port={self.service_port}, manage_port={self.manage_port}, "
             f"log_level='{self.log_level}')"
+            f"dev_name='{self.dev_name}', ib_port={self.ib_port}, link_type='{self.link_type}', "
+            f"prealloc_size={self.prealloc_size}, minimal_allocate_size={self.minimal_allocate_size}"
         )
 
     def verify(self):
@@ -79,6 +83,8 @@ class ServerConfig(_infinistore.ServerConfig):
             raise Exception("ib port of device should be greater than 0")
         if self.link_type not in ["IB", "Ethernet"]:
             raise Exception("link type should be IB or Ethernet")
+        if self.minimal_allocate_size < 64:
+            raise Exception("minimal allocate size should be greater than 64")
 
 
 class Logger:

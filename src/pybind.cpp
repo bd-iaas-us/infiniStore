@@ -118,7 +118,8 @@ PYBIND11_MODULE(_infinistore, m) {
         .def_readwrite("dev_name", &ServerConfig::dev_name)
         .def_readwrite("ib_port", &ServerConfig::ib_port)
         .def_readwrite("link_type", &ServerConfig::link_type)
-        .def_readwrite("prealloc_size", &ServerConfig::prealloc_size);
+        .def_readwrite("prealloc_size", &ServerConfig::prealloc_size)
+        .def_readwrite("minimal_allocate_size", &ServerConfig::minimal_allocate_size);
     m.def("get_kvmap_len", &get_kvmap_len, "get kv map size");
     m.def("register_server", &register_server, "register the server");
 

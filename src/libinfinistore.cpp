@@ -243,7 +243,8 @@ int modify_qp_to_init(connection_t *conn) {
 
 int sync_rdma(connection_t *conn) {
     std::unique_lock<std::mutex> lock(conn->mutex);
-    conn->cv.wait(lock, [&conn] { return conn->rdma_inflight_count == 0; });
+    conn->cv.wait_for(lock, std::chrono::seconds(5),
+                      [&conn] { return conn->rdma_inflight_count == 0; });
     return 0;
 }
 
@@ -763,7 +764,7 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
     }
 
     conn->rdma_inflight_count++;
-    INFO("rdma_inflight_count: {}", conn->rdma_inflight_count);
+    DEBUG("rdma_inflight_count: {}", conn->rdma_inflight_count.load());
 
     return 0;
 }

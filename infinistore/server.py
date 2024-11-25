@@ -93,6 +93,13 @@ def parse_args():
         help="IB or Ethernet, default IB",
         type=str,
     )
+    parser.add_argument(
+        "--minimal-allocate-size",
+        required=False,
+        default=64,
+        help="minimal allocate size, default 64, unit: KB",
+        type=int,
+    )
     return parser.parse_args()
 
 
@@ -106,6 +113,7 @@ def main():
         dev_name=args.dev_name,
         ib_port=args.ib_port,
         link_type=args.link_type,
+        minimal_allocate_size=args.minimal_allocate_size,
     )
     config.verify()
     check_p2p_access()
@@ -113,8 +121,6 @@ def main():
 
     Logger.set_log_level(config.log_level)
     Logger.info(config)
-    # print error
-    # Logger.error("test error", sys._getframe(1).f_lineno, __file__)
 
     loop = uvloop.new_event_loop()
     asyncio.set_event_loop(loop)
