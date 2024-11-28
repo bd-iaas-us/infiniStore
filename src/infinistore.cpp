@@ -257,6 +257,8 @@ int Client::allocate_rdma(const RemoteMetaRequest *req) {
         return SYSTEM_ERROR;
     }
 
+    INFO("ready to do serialize");
+
     auto resp = CreateRdmaAllocateResponseDirect(builder, &blocks);
     builder.Finish(resp);
 
@@ -849,7 +851,12 @@ void handle_request(uv_stream_t *stream, client_t *client) {
 
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> elapsed = end - start;
-    INFO("handle request {} runtime: {} ms", op_name(op), elapsed.count());
+    if (op != OP_SYNC) {
+        INFO("handle request {} runtime: {} ms", op_name(op), elapsed.count());
+    }
+    else {  // we may have a a lot OP_SYNC request
+        DEBUG("handle request {} runtime: {} ms", op_name(op), elapsed.count());
+    }
 }
 
 void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {

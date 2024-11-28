@@ -1,9 +1,9 @@
 CXX = g++
-CXXFLAGS = -std=c++17 -Wall -O3 -g
+CXXFLAGS = -std=c++17 -Wall -O3 -g -ftls-model=global-dynamic
 
 INCLUDES = -I/usr/local/cuda/include
 LDFLAGS = -L/usr/local/cuda/lib64
-LIBS = -lcudart -luv -libverbs
+LIBS = -ljemalloc -lcudart -luv -libverbs
 PYTHON=python3
 PYBIND11_INCLUDES = $(shell $(PYTHON) -m pybind11 --includes)
 PYTHON_EXTENSION_SUFFIX = $(shell $(PYTHON)-config --extension-suffix)

@@ -1,5 +1,7 @@
 #include "protocol.h"
 
+#include "log.h"
+
 std::unordered_map<char, std::string> op_map = {{OP_R, "READ"},
                                                 {OP_W, "WRITE"},
                                                 {OP_SYNC, "SYNC"},
@@ -18,6 +20,7 @@ std::string op_name(char op_code) {
 }
 
 uint8_t* FixedBufferAllocator::allocate(size_t size) {
+    INFO("FIXED BUFFER ALLOCATOR ALLOCATE");
     if (offset_ + size > size_) {
         throw std::runtime_error("Buffer overflow in FixedBufferAllocator");
     }
