@@ -79,7 +79,6 @@ struct Client {
     struct ibv_cq *cq_ = NULL;
     struct ibv_qp *qp_ = NULL;
     bool rdma_connected_ = false;
-    int gidx_;  // gid index
 
     int remain_;
 
@@ -627,8 +626,6 @@ int Client::rdma_exchange() {
         return SYSTEM_ERROR;
     }
 
-    gidx_ = gidx;
-
     union ibv_gid gid;
     // get gid
     if (gidx != -1 && ibv_query_gid(ib_ctx, 1, gidx, &gid)) {
@@ -641,7 +638,7 @@ int Client::rdma_exchange() {
     local_info_.gid = gid;
     local_info_.lid = lid;
 
-    INFO("gid index: {}", gidx_);
+    INFO("gid index: {}", gidx);
     print_rdma_conn_info(&local_info_, false);
     print_rdma_conn_info(&remote_info_, true);
 
@@ -667,7 +664,7 @@ int Client::rdma_exchange() {
         // RoCE v2
         attr.ah_attr.is_global = 1;
         attr.ah_attr.grh.dgid = remote_info_.gid;
-        attr.ah_attr.grh.sgid_index = gidx_;
+        attr.ah_attr.grh.sgid_index = gidx;
         attr.ah_attr.grh.hop_limit = 1;
     }
 
