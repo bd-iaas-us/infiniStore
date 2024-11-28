@@ -153,108 +153,82 @@ void MM::deallocate(void *ptr, size_t size, int pool_idx) {
     mempools_[pool_idx]->deallocate(ptr, size);
 }
 
-// I use this to pass instance JEMemoryPool
-typedef struct {
-    extent_hooks_t hooks;
-    void *user_data;
-} custom_extent_hooks_t;
-
-typedef struct {
-    void *base;     // 内存池的起始地址
-    size_t size;    // 内存池的总大小
-    size_t offset;  // 当前已分配的偏移量
-} mempool_t;
-
-mempool_t mempool;
-
-void *custom_extent_alloc(extent_hooks_t *extent_hooks, void *new_addr, size_t size,
-                          size_t alignment, bool *zero, bool *commit, unsigned arena_ind) {
-    INFO("custom_extent_alloc called");
-    size_t aligned_offset = (mempool.offset + alignment - 1) & ~(alignment - 1);
-    if (aligned_offset + size > mempool.size) {
-        // 内存池空间不足
-        return NULL;
-    }
-    void *result = (void *)((uintptr_t)mempool.base + aligned_offset);
-    mempool.offset = aligned_offset + size;
-    if (*zero) {
-        memset(result, 0, size);
-    }
-    return result;
-}
-
-// 自定义的内存释放函数
-bool custom_extent_dalloc(extent_hooks_t *extent_hooks, void *addr, size_t size, bool committed,
-                          unsigned arena_ind) {
-    // 在这个简单的示例中，不执行实际的释放操作
-    return false;  // 返回 false 表示成功
-}
-
-extent_hooks_t custom_hooks = {
-    .alloc = custom_extent_alloc,
-    .dalloc = custom_extent_dalloc,
-};
-
 JEMemoryPool::JEMemoryPool(size_t pool_size, struct ibv_pd *pd)
-    : pool_size_(pool_size), arena_ind_(0), mr_(nullptr) {
+    : pool_(nullptr), pool_size_(pool_size), arena_ind_(0), mr_(nullptr), offset_(0) {
+    memset(&custom_hooks_, 0, sizeof(custom_hooks_));
+
     INFO("JEMemory pool size: {} bytes", pool_size_);
-    // if (posix_memalign(&pool_, 4096, pool_size_) != 0) {
-    //     ERROR("Failed to allocate jemalloc memory pool");
-    //     exit(EXIT_FAILURE);
-    // }
 
-    // CHECK_CUDA(cudaHostRegister(pool_, pool_size_, cudaHostRegisterDefault));
-
-    // INFO("JEMemory pool allocated at {}", pool_);
-
-    // mr_ = ibv_reg_mr(pd, pool_, pool_size_,
-    //                  IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
-    // if (!mr_) {
-    //     ERROR("Failed to register MR");
-    //     exit(EXIT_FAILURE);
-    // }
-
-    if (posix_memalign(&mempool.base, 4096, pool_size) != 0) {
-        perror("posix_memalign failed");
+    if (posix_memalign(&pool_, 4096, pool_size_) != 0) {
+        ERROR("Failed to allocate jemalloc memory pool");
+        exit(EXIT_FAILURE);
     }
 
-    mr_ = ibv_reg_mr(pd, mempool.base, pool_size,
+    CHECK_CUDA(cudaHostRegister(pool_, pool_size_, cudaHostRegisterDefault));
+
+    INFO("JEMemory pool allocated at {}", pool_);
+
+    mr_ = ibv_reg_mr(pd, pool_, pool_size_,
                      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
     if (!mr_) {
-        perror("ibv_reg_mr failed");
-    }
-    mempool.size = pool_size;
-    mempool.offset = 0;
-
-    // 创建新的 arena
-    unsigned arena_ind;
-    size_t sz = sizeof(arena_ind);
-    if (mallctl("arenas.create", &arena_ind, &sz, NULL, 0) != 0) {
-        perror("mallctl arenas.create failed");
+        ERROR("Failed to register MR");
+        exit(EXIT_FAILURE);
     }
 
-    // 设置自定义的 extent_hooks
+    size_t sz = sizeof(arena_ind_);
+    if (mallctl("arenas.create", &arena_ind_, &sz, nullptr, 0) != 0) {
+        ERROR("mallctl arenas.create failed");
+        exit(EXIT_FAILURE);
+    }
+
+    custom_hooks_ = {
+        .hooks = {
+            .alloc = [](extent_hooks_t *extent_hooks, void *new_addr, size_t size, size_t alignment,
+                        bool *zero, bool *commit, unsigned arena_ind) -> void * {
+                DEBUG("custom_extent_alloc called: size: {}, alignment: {}", size, alignment);
+                JEMemoryPool *pool =
+                    static_cast<JEMemoryPool *>(((custom_extent_hooks_t *)extent_hooks)->user_data);
+                size_t aligned_offset = (pool->offset_ + alignment - 1) & ~(alignment - 1);
+
+                if (aligned_offset + size > pool->pool_size_) {
+                    ERROR("JEMemoryPool out of memory, offset: {}, size: {}, pool_size: {}",
+                          pool->offset_, size, pool->pool_size_);
+                    return NULL;
+                }
+
+                void *result = (void *)((uintptr_t)pool->pool_ + aligned_offset);
+                pool->offset_ = aligned_offset + size;
+                if (*zero) {
+                    memset(result, 0, size);
+                }
+                return result;
+            },
+            .dalloc = [](extent_hooks_t *extent_hooks, void *addr, size_t size, bool committed,
+                         unsigned arena_ind) -> bool { return false; }},
+        .user_data = this,
+    };
+
     char cmd[128];
-    snprintf(cmd, sizeof(cmd), "arena.%u.extent_hooks", arena_ind);
-    extent_hooks_t *new_hooks = &custom_hooks;
-    printf("size of new_hooks: %lu, %lu, %lu\n", sizeof(new_hooks), sizeof(extent_hooks_t *),
-           sizeof(extent_hooks_t));
+    snprintf(cmd, sizeof(cmd), "arena.%u.extent_hooks", arena_ind_);
+    extent_hooks_t *new_hooks = (extent_hooks_t *)(&custom_hooks_);
     if (mallctl(cmd, nullptr, nullptr, &new_hooks, sizeof(new_hooks)) != 0) {
-        perror("mallctl setting extent_hooks failed");
+        ERROR("mallctl setting extent_hooks failed");
+        exit(EXIT_FAILURE);
     }
-    arena_ind_ = arena_ind;
 }
 
 bool JEMemoryPool::allocate(size_t size, size_t n, SimpleAllocationCallback callback) {
     size_t required_size = size * n;
-    if (mempool.offset + required_size > pool_size_) {
+    if (offset_ + required_size > pool_size_) {
         return false;
     }
 
     for (size_t i = 0; i < n; ++i) {
-        INFO("Allocating {} bytes from JEMemoryPool {}", size, arena_ind_);
-        void *addr = mallocx(size, MALLOCX_ARENA(arena_ind_));
-        INFO("done allocating {}", (uintptr_t)addr);
+        // minimum alignment is 32KB
+        void *addr = mallocx(size, MALLOCX_ARENA(arena_ind_) | MALLOCX_ALIGN(4096));
+        if (!addr) {
+            return false;
+        }
         callback(addr, mr_->lkey, mr_->rkey);
     }
     return true;
@@ -265,5 +239,9 @@ void JEMemoryPool::deallocate(void *ptr, size_t size) { dallocx(ptr, MALLOCX_ARE
 JEMemoryPool::~JEMemoryPool() {
     if (mr_) {
         ibv_dereg_mr(mr_);
+    }
+    if (pool_) {
+        // cudaHostUnregister(pool_);
+        free(pool_);
     }
 }

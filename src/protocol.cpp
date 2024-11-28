@@ -20,7 +20,6 @@ std::string op_name(char op_code) {
 }
 
 uint8_t* FixedBufferAllocator::allocate(size_t size) {
-    INFO("FIXED BUFFER ALLOCATOR ALLOCATE");
     if (offset_ + size > size_) {
         throw std::runtime_error("Buffer overflow in FixedBufferAllocator");
     }

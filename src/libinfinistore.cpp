@@ -740,6 +740,7 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
         sges[num_wr].lkey = mr->lkey;
 
         wrs[num_wr].wr_id = i;
+        wrs[num_wr].imm_data = remote_blocks_len;
         wrs[num_wr].opcode =
             (i == remote_blocks_len - 1) ? IBV_WR_RDMA_WRITE_WITH_IMM : IBV_WR_RDMA_WRITE;
         wrs[num_wr].sg_list = &sges[num_wr];

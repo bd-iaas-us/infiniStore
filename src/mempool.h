@@ -54,6 +54,12 @@ class BitmapMemoryPool : public MemoryPool {
     struct ibv_mr* mr_;
 };
 
+// I use this to pass instance JEMemoryPool
+typedef struct {
+    extent_hooks_t hooks;
+    void* user_data;
+} custom_extent_hooks_t;
+
 class JEMemoryPool : public MemoryPool {
    public:
     JEMemoryPool(size_t pool_size, struct ibv_pd* pd);
@@ -64,11 +70,12 @@ class JEMemoryPool : public MemoryPool {
     uint32_t get_rkey() const override { return mr_->rkey; }
 
    private:
-    // void * custom_extent_alloc(extent_hooks_t *extent_hooks, void *new_addr, size_t size,
-    //                    size_t alignment, bool *zero, bool *commit, unsigned arena_ind);
     size_t pool_size_;
     unsigned arena_ind_;
     struct ibv_mr* mr_;
+    void* pool_;
+    size_t offset_;
+    custom_extent_hooks_t custom_hooks_;
 };
 
 class MM {
