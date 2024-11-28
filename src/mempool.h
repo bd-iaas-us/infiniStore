@@ -37,6 +37,7 @@ class MemoryPool {
     size_t pool_size_;
     size_t block_size_;
     size_t total_blocks_;
+    size_t last_search_position_;
 
     // TODO: use judy libray to speed up the bitmap?
     std::vector<uint64_t> bitmap_;

@@ -11,7 +11,12 @@
 #include "utils.h"
 
 MemoryPool::MemoryPool(size_t pool_size, size_t block_size, struct ibv_pd* pd)
-    : pool_(nullptr), pool_size_(pool_size), block_size_(block_size), pd_(pd), mr_(nullptr) {
+    : pool_(nullptr),
+      pool_size_(pool_size),
+      block_size_(block_size),
+      pd_(pd),
+      mr_(nullptr),
+      last_search_position_(0) {
     // 计算总的内存块数量
     total_blocks_ = pool_size_ / block_size_;
     assert(pool_size % block_size == 0);
@@ -58,13 +63,13 @@ bool MemoryPool::allocate(size_t size, size_t n, SimpleAllocationCallback callba
     int num_allocated = 0;
     size_t bit_per_word = 64;
 
-    for (size_t word_index = 0; word_index < bitmap_.size(); ++word_index) {
+    for (size_t word_index = last_search_position_; word_index < bitmap_.size(); ++word_index) {
         uint64_t word = bitmap_[word_index];
         if (word == 0xFFFFFFFFFFFFFFFFULL) {
             continue;
         }
 
-        for (size_t bit_index = 0; bit_index < bit_per_word; ++bit_index) {
+        for (size_t bit_index = __builtin_ctzll(~word); bit_index < bit_per_word; ++bit_index) {
             size_t start_block = word_index * bit_per_word + bit_index;
 
             if (start_block + required_blocks > total_blocks_) {
@@ -90,6 +95,7 @@ bool MemoryPool::allocate(size_t size, size_t n, SimpleAllocationCallback callba
                 }
                 void* addr = static_cast<char*>(pool_) + start_block * block_size_;
                 callback(addr, mr_->lkey, mr_->rkey);
+                last_search_position_ = word_index;
                 if (++num_allocated == n) {
                     return true;
                 }
