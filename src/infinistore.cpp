@@ -29,6 +29,7 @@ struct PTR {
     void *ptr;
     size_t size;
     int pool_idx;
+    bool committed;
 };
 
 std::unordered_map<std::string, PTR> kv_map;
@@ -244,14 +245,18 @@ int Client::allocate_rdma(const RemoteMetaRequest *req) {
     std::vector<RemoteBlock> blocks;
     blocks.reserve(req->keys()->size());
 
-    if (!mm->allocate(block_size, req->keys()->size(),
-                      [&](void *addr, uint32_t lkey, uint32_t rkey, int pool_idx) {
-                          auto ptr = PTR{.ptr = addr, .size = block_size, .pool_idx = pool_idx};
-                          const auto *key = req->keys()->Get(key_idx);
-                          kv_map[key->str()] = ptr;
-                          blocks.push_back(RemoteBlock(rkey, (uint64_t)addr));
-                          key_idx++;
-                      })) {
+    if (!mm->allocate(
+            block_size, req->keys()->size(),
+            [&](void *addr, uint32_t lkey, uint32_t rkey, int pool_idx) {
+                // FIXME: rdma write should have a msg to update committed to true
+
+                auto ptr =
+                    PTR{.ptr = addr, .size = block_size, .pool_idx = pool_idx, .committed = true};
+                const auto *key = req->keys()->Get(key_idx);
+                kv_map[key->str()] = ptr;
+                blocks.push_back(RemoteBlock(rkey, (uint64_t)addr));
+                key_idx++;
+            })) {
         ERROR("Failed to allocate memory");
         return SYSTEM_ERROR;
     }
@@ -372,8 +377,10 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
 }
 
 typedef struct {
-    client_t *client;
-    void *d_ptr;
+    client_t *client = NULL;
+    cudaEvent_t event;
+    void *d_ptr = NULL;
+    std::unordered_map<std::string, PTR> *temp_map = NULL;
 } wqueue_data_t;
 
 // FIXME:
@@ -413,16 +420,24 @@ void on_write(uv_write_t *req, int status) {
 
 void wait_for_ipc_close_completion(uv_work_t *req) {
     wqueue_data_t *wqueue_data = (wqueue_data_t *)req->data;
+    CHECK_CUDA(cudaEventSynchronize(wqueue_data->event));
     CHECK_CUDA(cudaIpcCloseMemHandle(wqueue_data->d_ptr));
+    CHECK_CUDA(cudaEventDestroy(wqueue_data->event));
     INFO("wait_for_ipc_close_completion done");
 }
 
 void after_ipc_close_completion(uv_work_t *req, int status) {
     wqueue_data_t *wqueue_data = (wqueue_data_t *)req->data;
     wqueue_data->client->remain_--;
-    INFO("after_ipc_close_completion done");
+    if (wqueue_data->temp_map != NULL) {
+        // for kv_write_cache
+        // merge temp_map into kv_map
+        kv_map.merge(*wqueue_data->temp_map);
+        delete wqueue_data->temp_map;
+    }
     delete wqueue_data;
     delete req;
+    INFO("after_ipc_close_completion done");
 }
 
 int Client::read_cache(const LocalMetaRequest *meta_req) {
@@ -436,14 +451,16 @@ int Client::read_cache(const LocalMetaRequest *meta_req) {
     cudaIpcMemHandle_t ipc_handle = *(cudaIpcMemHandle_t *)meta_req->ipc_handle()->data();
     CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, ipc_handle, cudaIpcMemLazyEnablePeerAccess));
 
+    cudaEvent_t event;
+    CHECK_CUDA(cudaEventCreate(&event));
     size_t block_size = meta_req->block_size();
     for (auto *block : *meta_req->blocks()) {
         auto key = block->key()->str();
         if (kv_map.count(key) == 0) {
             ERROR("Key not found: {}", key);
             CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
-            send_resp(KEY_NOT_FOUND, NULL, 0);
-            return 0;
+            CHECK_CUDA(cudaEventDestroy(event));
+            return KEY_NOT_FOUND;
         }
         void *h_src = kv_map[key].ptr;
         assert(h_src != NULL);
@@ -454,10 +471,13 @@ int Client::read_cache(const LocalMetaRequest *meta_req) {
                                    cudaMemcpyHostToDevice, cuda_stream_));
     }
 
+    cudaEventRecord(event, cuda_stream_);
+
     remain_++;
     wqueue_data_t *wqueue_data = new wqueue_data_t();
     wqueue_data->client = this;
     wqueue_data->d_ptr = d_ptr;
+    wqueue_data->event = event;
     uv_work_t *req = new uv_work_t();
     req->data = (void *)wqueue_data;
     uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);
@@ -477,9 +497,18 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
 
     int key_idx = 0;
     size_t block_size = meta_req->block_size();
+    INFO("do write_cache..., num of blocks: {}", meta_req->blocks()->size());
     size_t num_of_blocks = meta_req->blocks()->size();
 
-    mm->allocate(
+    // create an event to sync with the stream
+    cudaEvent_t event;
+    CHECK_CUDA(cudaEventCreate(&event));
+
+    std::unordered_map<std::string, PTR> *temp_map = new std::unordered_map<std::string, PTR>;
+
+    auto start = std::chrono::high_resolution_clock::now();
+
+    bool ret = mm->allocate(
         block_size, num_of_blocks, [&](void *addr, uint32_t lkey, uint32_t rkey, int pool_idx) {
             auto block = meta_req->blocks()->Get(key_idx);
 
@@ -488,19 +517,35 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
             // pull data from local device to CPU host
             CHECK_CUDA(cudaMemcpyAsync(addr, (char *)d_ptr + block->offset(), block_size,
                                        cudaMemcpyDeviceToHost, cuda_stream_));
-            kv_map[block->key()->str()] = {.ptr = addr, .size = block_size, .pool_idx = pool_idx};
+            temp_map->emplace(
+                block->key()->str(),
+                PTR{.ptr = addr, .size = block_size, .pool_idx = pool_idx, .committed = true});
             key_idx++;
         });
+
+    INFO("allocate_rdma time: {} micro seconds",
+         std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::high_resolution_clock::now() - start)
+             .count());
+    CHECK_CUDA(cudaEventRecord(event, cuda_stream_));
+
+    int return_code = TASK_ACCEPTED;
+    if (!ret) {
+        ERROR("Failed to allocate memory");
+        return_code = OUT_OF_MEMORY;
+    }
 
     remain_++;
     wqueue_data_t *wqueue_data = new wqueue_data_t();
     wqueue_data->client = this;
     wqueue_data->d_ptr = d_ptr;
+    wqueue_data->event = event;
+    wqueue_data->temp_map = temp_map;
     uv_work_t *req = new uv_work_t();
     req->data = (void *)wqueue_data;
     uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);
 
-    send_resp(TASK_ACCEPTED, NULL, 0);
+    send_resp(return_code, NULL, 0);
 
     reset_client_read_state();
     return 0;
@@ -630,7 +675,7 @@ int Client::rdma_exchange() {
     // get gid
     if (gidx != -1 && ibv_query_gid(ib_ctx, 1, gidx, &gid)) {
         ERROR("Failed to get GID");
-        return -1;
+        return SYSTEM_ERROR;
     }
 
     local_info_.qpn = qp_->qp_num;
@@ -722,12 +767,12 @@ int Client::rdma_exchange() {
     // ready to receive RDMA_SEND
     if (prepare_recv_rdma_request() < 0) {
         ERROR("Failed to prepare recv rdma request");
-        return -1;
+        return SYSTEM_ERROR;
     }
 
     if (ibv_req_notify_cq(cq_, 0)) {
         ERROR("Failed to request notify for CQ");
-        return -1;
+        return SYSTEM_ERROR;
     }
 
     uv_poll_init(loop, &poll_handle_, comp_channel->fd);
@@ -768,7 +813,15 @@ int Client::sync_stream() {
 }
 
 int Client::check_key(const std::string &key_to_check) {
-    int ret = kv_map.count(key_to_check) ? 0 : 1;
+    int ret;
+    // check if the key exists and committed
+    if (kv_map.count(key_to_check) > 0 && kv_map[key_to_check].committed) {
+        ret = 0;
+    }
+    else {
+        ret = 1;
+    }
+
     send_resp(FINISH, &ret, sizeof(ret));
     reset_client_read_state();
     return 0;
@@ -846,7 +899,9 @@ void handle_request(uv_stream_t *stream, client_t *client) {
 
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> elapsed = end - start;
-    INFO("handle request {} runtime: {} ms", op_name(op), elapsed.count());
+    // skip print sync log
+    if (op != OP_SYNC)
+        INFO("handle request {} runtime: {} ms", op_name(op), elapsed.count());
 }
 
 void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
@@ -974,6 +1029,8 @@ int register_server(unsigned long loop_ptr, server_config_t config) {
     signal(SIGSEGV, signal_handler);
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
+
+    setenv("UV_THREADPOOL_SIZE", "32", 1);
 
     loop = (uv_loop_t *)loop_ptr;
     assert(loop != NULL);

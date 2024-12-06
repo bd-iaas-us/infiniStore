@@ -234,7 +234,6 @@ class InfinityConnection:
         self._verify(cache)
         ptr = cache.data_ptr()
         element_size = cache.element_size()
-        torch.cuda.synchronize()
         assert self.local_connected
         blocks_in_bytes = [(key, offset * element_size) for key, offset in blocks]
 
@@ -256,7 +255,6 @@ class InfinityConnection:
 
         # each offset should multiply by the element size
         offsets_in_bytes = [offset * element_size for offset in offsets]
-
         ret = _infinistore.w_rdma(
             self.conn,
             offsets_in_bytes,

@@ -62,6 +62,7 @@ bool MemoryPool::allocate(size_t size, size_t n, SimpleAllocationCallback callba
 
     int num_allocated = 0;
     size_t bit_per_word = 64;
+    size_t shift = 6;
 
     for (size_t word_index = last_search_position_; word_index < bitmap_.size(); ++word_index) {
         uint64_t word = bitmap_[word_index];
@@ -70,7 +71,7 @@ bool MemoryPool::allocate(size_t size, size_t n, SimpleAllocationCallback callba
         }
 
         for (size_t bit_index = __builtin_ctzll(~word); bit_index < bit_per_word; ++bit_index) {
-            size_t start_block = word_index * bit_per_word + bit_index;
+            size_t start_block = (word_index << shift) + bit_index;
 
             if (start_block + required_blocks > total_blocks_) {
                 return false;
@@ -78,8 +79,8 @@ bool MemoryPool::allocate(size_t size, size_t n, SimpleAllocationCallback callba
 
             bool found = true;
             for (size_t j = 0; j < required_blocks; ++j) {
-                size_t idx = (start_block + j) / bit_per_word;
-                size_t bit = (start_block + j) % bit_per_word;
+                size_t idx = (start_block + j) >> shift;
+                size_t bit = (start_block + j) & (bit_per_word - 1);
                 if (bitmap_[idx] & (1ULL << bit)) {
                     found = false;
                     bit_index += j;  // skip all the blocks we already checked
@@ -89,8 +90,8 @@ bool MemoryPool::allocate(size_t size, size_t n, SimpleAllocationCallback callba
 
             if (found) {
                 for (size_t j = 0; j < required_blocks; ++j) {
-                    size_t idx = (start_block + j) / bit_per_word;
-                    size_t bit = (start_block + j) % bit_per_word;
+                    size_t idx = (start_block + j) >> shift;
+                    size_t bit = (start_block + j) & (bit_per_word - 1);
                     bitmap_[idx] |= (1ULL << bit);
                 }
                 void* addr = static_cast<char*>(pool_) + start_block * block_size_;

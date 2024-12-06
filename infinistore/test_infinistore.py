@@ -77,6 +77,7 @@ def test_basic_read_write_cache(server, dtype, new_connection, local):
     with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
         src_tensor = torch.tensor(src, device="cuda:0", dtype=dtype)
 
+    torch.cuda.synchronize(src_tensor.device)
     if not local:
         conn.register_mr(src_tensor)
         element_size = torch._utils._element_size(dtype)
@@ -136,6 +137,7 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
     blocks = [(keys[i], i * block_size) for i in range(num_of_blocks)]
     with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
         src_tensor = torch.tensor(src, device=src_device, dtype=torch.float32)
+    torch.cuda.synchronize(src_tensor.device)
     if not local:
         conn.register_mr(src_tensor)
         remote_addrs = conn.allocate_rdma(keys, block_size * 4)
@@ -178,7 +180,8 @@ def test_key_check(server):
     conn.register_mr(src)
     remote_addrs = conn.allocate_rdma([key], 4096 * 4)
 
-    # conn.write_cache(src, [(key, 0)], 4096)
+    torch.cuda.synchronize(src.device)
+
     conn.rdma_write_cache(src, [0], 4096, remote_addrs)
     conn.sync()
     assert conn.check_exist(key)
@@ -197,5 +200,26 @@ def test_get_match_last_index(server):
     src = torch.randn(4096, device="cuda", dtype=torch.float32)
     conn.register_mr(src)
     remote_addrs = conn.allocate_rdma(["key1", "key2", "key3"], 4096 * 4)
+
+    torch.cuda.synchronize(src.device)
+
     conn.rdma_write_cache(src, [0, 1024, 2048], 4096, remote_addrs)
     assert conn.get_match_last_index(["A", "B", "C", "key1", "D", "E"]) == 3
+
+
+def test_key_not_found(server):
+    config = infinistore.ClientConfig(
+        host_addr="127.0.0.1",
+        service_port=92345,
+        link_type=infinistore.LINK_ETHERNET,
+        dev_name="mlx5_2",
+        connection_type=infinistore.TYPE_LOCAL_GPU,
+    )
+    conn = infinistore.InfinityConnection(config)
+
+    conn.connect()
+    key = "not_exist_key"
+    src = torch.randn(4096, device="cuda", dtype=torch.float32)
+    # expect raise exception
+    with pytest.raises(Exception):
+        conn.read_cache(src, [(key, 0)], 4096)

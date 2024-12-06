@@ -904,6 +904,7 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, in
     }
 
     if (return_code != FINISH && return_code != TASK_ACCEPTED) {
+        ERROR("return code: {}", return_code);
         return -1;
     }
     return 0;
