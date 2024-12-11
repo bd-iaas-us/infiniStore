@@ -18,12 +18,12 @@ extern int register_server(unsigned long loop_ptr, server_config_t config);
 
 int rw_local_wrapper(connection_t *conn, char op,
                      const std::vector<std::tuple<std::string, unsigned long>> &blocks,
-                     int block_size, uintptr_t ptr) {
+                     int block_size, uintptr_t ptr, int device_id) {
     std::vector<block_t> c_blocks;
     for (const auto &block : blocks) {
         c_blocks.push_back(block_t{std::get<0>(block), std::get<1>(block)});
     }
-    return rw_local(conn, op, c_blocks, block_size, (void *)ptr);
+    return rw_local(conn, op, c_blocks, block_size, (void *)ptr, device_id);
 }
 
 int r_rdma_wrapper(connection_t *conn,
@@ -119,7 +119,8 @@ PYBIND11_MODULE(_infinistore, m) {
         .def_readwrite("ib_port", &ServerConfig::ib_port)
         .def_readwrite("link_type", &ServerConfig::link_type)
         .def_readwrite("prealloc_size", &ServerConfig::prealloc_size)
-        .def_readwrite("minimal_allocate_size", &ServerConfig::minimal_allocate_size);
+        .def_readwrite("minimal_allocate_size", &ServerConfig::minimal_allocate_size)
+        .def_readwrite("num_stream", &ServerConfig::num_stream);
     m.def("get_kvmap_len", &get_kvmap_len, "get kv map size");
     m.def("register_server", &register_server, "register the server");
 

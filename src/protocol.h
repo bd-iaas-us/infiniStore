@@ -46,11 +46,12 @@ std::string op_name(char op);
 #define KEY_NOT_FOUND 404
 #define RETRY 408
 #define SYSTEM_ERROR 503
+#define OUT_OF_MEMORY 507
 
 #define RETURN_CODE_SIZE sizeof(int)
 
 #define PROTOCOL_BUFFER_SIZE \
-    (300 << 10)  // 300KB could be enough for (4096 blocks and 64byte key name)
+    (4 << 20)  // 4M could be enough
 
 typedef struct __attribute__((packed)) {
     unsigned int magic;

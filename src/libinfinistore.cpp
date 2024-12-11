@@ -60,6 +60,20 @@ Connection::~Connection() {
         ibv_dereg_mr(it->second);
     }
     local_mr.clear();
+
+    if (send_mr) {
+        ibv_dereg_mr(send_mr);
+    }
+    if (recv_mr) {
+        ibv_dereg_mr(recv_mr);
+    }
+    if (send_buffer) {
+        free(send_buffer);
+    }
+    if (recv_buffer) {
+        free(recv_buffer);
+    }
+
     if (qp) {
         struct ibv_qp_attr attr;
         memset(&attr, 0, sizeof(attr));
@@ -846,7 +860,7 @@ int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, voi
 }
 
 int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, int block_size,
-             void *ptr) {
+             void *ptr, int device_id) {
     assert(conn != NULL);
     assert(ptr != NULL);
 
@@ -870,7 +884,8 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, in
             CreateBlock(builder, builder.CreateString(block.key), block.offset));
     }
 
-    auto req = CreateLocalMetaRequestDirect(builder, &ipc_handle, block_size, &block_offsets);
+    auto req =
+        CreateLocalMetaRequestDirect(builder, device_id, &ipc_handle, block_size, &block_offsets);
 
     builder.Finish(req);
 
@@ -904,6 +919,7 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, in
     }
 
     if (return_code != FINISH && return_code != TASK_ACCEPTED) {
+        ERROR("return code: {}", return_code);
         return -1;
     }
     return 0;
@@ -918,7 +934,7 @@ int register_mr(connection_t *conn, void *base_ptr, size_t ptr_region_size) {
     mr = ibv_reg_mr(conn->pd, base_ptr, ptr_region_size,
                     IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
     if (!mr) {
-        ERROR("Failed to register memory region");
+        ERROR("Failed to register memory regions, size: {}", ptr_region_size);
         return -1;
     }
     INFO("register mr done for base_ptr: {}, size: {}", (uintptr_t)base_ptr, ptr_region_size);

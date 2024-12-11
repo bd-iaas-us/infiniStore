@@ -3,7 +3,7 @@ CXXFLAGS = -std=c++17 -Wall -O3 -g
 
 INCLUDES = -I/usr/local/cuda/include
 LDFLAGS = -L/usr/local/cuda/lib64
-LIBS = -lcudart -luv -libverbs
+LIBS = -lcudart -luv -libverbs -lfmt
 PYTHON=python3
 PYBIND11_INCLUDES = $(shell $(PYTHON) -m pybind11 --includes)
 PYTHON_EXTENSION_SUFFIX = $(shell $(PYTHON)-config --extension-suffix)

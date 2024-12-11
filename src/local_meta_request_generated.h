@@ -62,10 +62,12 @@ inline flatbuffers::Offset<Block> CreateBlockDirect(flatbuffers::FlatBufferBuild
 struct LocalMetaRequest FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
     typedef LocalMetaRequestBuilder Builder;
     enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
-        VT_IPC_HANDLE = 4,
-        VT_BLOCK_SIZE = 6,
-        VT_BLOCKS = 8
+        VT_DEVICE = 4,
+        VT_IPC_HANDLE = 6,
+        VT_BLOCK_SIZE = 8,
+        VT_BLOCKS = 10
     };
+    int32_t device() const { return GetField<int32_t>(VT_DEVICE, 0); }
     const flatbuffers::Vector<uint8_t> *ipc_handle() const {
         return GetPointer<const flatbuffers::Vector<uint8_t> *>(VT_IPC_HANDLE);
     }
@@ -74,8 +76,8 @@ struct LocalMetaRequest FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
         return GetPointer<const flatbuffers::Vector<flatbuffers::Offset<Block>> *>(VT_BLOCKS);
     }
     bool Verify(flatbuffers::Verifier &verifier) const {
-        return VerifyTableStart(verifier) && VerifyOffset(verifier, VT_IPC_HANDLE) &&
-               verifier.VerifyVector(ipc_handle()) &&
+        return VerifyTableStart(verifier) && VerifyField<int32_t>(verifier, VT_DEVICE) &&
+               VerifyOffset(verifier, VT_IPC_HANDLE) && verifier.VerifyVector(ipc_handle()) &&
                VerifyField<int32_t>(verifier, VT_BLOCK_SIZE) && VerifyOffset(verifier, VT_BLOCKS) &&
                verifier.VerifyVector(blocks()) && verifier.VerifyVectorOfTables(blocks()) &&
                verifier.EndTable();
@@ -86,6 +88,9 @@ struct LocalMetaRequestBuilder {
     typedef LocalMetaRequest Table;
     flatbuffers::FlatBufferBuilder &fbb_;
     flatbuffers::uoffset_t start_;
+    void add_device(int32_t device) {
+        fbb_.AddElement<int32_t>(LocalMetaRequest::VT_DEVICE, device, 0);
+    }
     void add_ipc_handle(flatbuffers::Offset<flatbuffers::Vector<uint8_t>> ipc_handle) {
         fbb_.AddOffset(LocalMetaRequest::VT_IPC_HANDLE, ipc_handle);
     }
@@ -106,22 +111,24 @@ struct LocalMetaRequestBuilder {
 };
 
 inline flatbuffers::Offset<LocalMetaRequest> CreateLocalMetaRequest(
-    flatbuffers::FlatBufferBuilder &_fbb,
+    flatbuffers::FlatBufferBuilder &_fbb, int32_t device = 0,
     flatbuffers::Offset<flatbuffers::Vector<uint8_t>> ipc_handle = 0, int32_t block_size = 0,
     flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<Block>>> blocks = 0) {
     LocalMetaRequestBuilder builder_(_fbb);
     builder_.add_blocks(blocks);
     builder_.add_block_size(block_size);
     builder_.add_ipc_handle(ipc_handle);
+    builder_.add_device(device);
     return builder_.Finish();
 }
 
 inline flatbuffers::Offset<LocalMetaRequest> CreateLocalMetaRequestDirect(
-    flatbuffers::FlatBufferBuilder &_fbb, const std::vector<uint8_t> *ipc_handle = nullptr,
-    int32_t block_size = 0, const std::vector<flatbuffers::Offset<Block>> *blocks = nullptr) {
+    flatbuffers::FlatBufferBuilder &_fbb, int32_t device = 0,
+    const std::vector<uint8_t> *ipc_handle = nullptr, int32_t block_size = 0,
+    const std::vector<flatbuffers::Offset<Block>> *blocks = nullptr) {
     auto ipc_handle__ = ipc_handle ? _fbb.CreateVector<uint8_t>(*ipc_handle) : 0;
     auto blocks__ = blocks ? _fbb.CreateVector<flatbuffers::Offset<Block>>(*blocks) : 0;
-    return CreateLocalMetaRequest(_fbb, ipc_handle__, block_size, blocks__);
+    return CreateLocalMetaRequest(_fbb, device, ipc_handle__, block_size, blocks__);
 }
 
 inline const LocalMetaRequest *GetLocalMetaRequest(const void *buf) {

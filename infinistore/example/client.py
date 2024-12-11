@@ -72,9 +72,9 @@ if __name__ == "__main__":
         link_type=infinistore.LINK_ETHERNET,
         dev_name="mlx5_0",
     )
-    rdma_conn = InfinityConnection(config)
-    rdma_conn.connect()
-    run(rdma_conn)
+    # rdma_conn = InfinityConnection(config)
+    # rdma_conn.connect()
+    # run(rdma_conn)
 
     config.connection_type = infinistore.TYPE_LOCAL_GPU
     local_conn = InfinityConnection(config)

@@ -117,7 +117,7 @@ def run(args):
 
     block_size = args.block_size * 1024 // 4
     num_of_blocks = args.size * 1024 * 1024 // (args.block_size * 1024)
-    keys = [generate_random_string(10) for i in range(num_of_blocks)]
+    keys = [generate_random_string(250) for i in range(num_of_blocks)]
     with infinistore.DisableTorchCaching():
         src_tensor = torch.rand(
             num_of_blocks * block_size, device=src_device, dtype=torch.float32
@@ -140,16 +140,20 @@ def run(args):
     # blocks = [(keys[i], offset_blocks[i]) for i in range(num_of_blocks)]
     write_sum = 0.0
     read_sum = 0.0
+    if args.rdma:
+        remote_addrs = conn.allocate_rdma(keys, block_size * 4)
 
     for _ in range(args.iteration):
         start = time.time()
         if args.rdma:
-            remote_addrs = conn.allocate_rdma(keys, block_size * 4)
             conn.rdma_write_cache(src_tensor, offset_blocks, block_size, remote_addrs)
         else:
             conn.local_gpu_write_cache(src_tensor, blocks, block_size)
 
+        print(f"write_cache takes {time.time() - start} seconds")
+        start_before_sync = time.time()
         conn.sync()
+        print(f"write sync takes {time.time() - start_before_sync} seconds")
         mid = time.time()
         write_sum += mid - start
 
