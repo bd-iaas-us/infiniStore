@@ -60,6 +60,21 @@ Connection::~Connection() {
         ibv_dereg_mr(it->second);
     }
     local_mr.clear();
+
+
+    if (send_mr) {
+        ibv_dereg_mr(send_mr);
+    }
+    if (recv_mr) {
+        ibv_dereg_mr(recv_mr);
+    }
+    if (send_buffer) {
+        free(send_buffer);
+    }
+    if (recv_buffer) {
+        free(recv_buffer);
+    }
+
     if (qp) {
         struct ibv_qp_attr attr;
         memset(&attr, 0, sizeof(attr));
@@ -919,7 +934,7 @@ int register_mr(connection_t *conn, void *base_ptr, size_t ptr_region_size) {
     mr = ibv_reg_mr(conn->pd, base_ptr, ptr_region_size,
                     IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
     if (!mr) {
-        ERROR("Failed to register memory region");
+        ERROR("Failed to register memory regions, size: {}", ptr_region_size);
         return -1;
     }
     INFO("register mr done for base_ptr: {}, size: {}", (uintptr_t)base_ptr, ptr_region_size);

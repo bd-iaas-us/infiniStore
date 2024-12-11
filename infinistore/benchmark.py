@@ -140,11 +140,12 @@ def run(args):
     # blocks = [(keys[i], offset_blocks[i]) for i in range(num_of_blocks)]
     write_sum = 0.0
     read_sum = 0.0
+    if args.rdma:
+        remote_addrs = conn.allocate_rdma(keys, block_size * 4)
 
     for _ in range(args.iteration):
         start = time.time()
         if args.rdma:
-            remote_addrs = conn.allocate_rdma(keys, block_size * 4)
             conn.rdma_write_cache(src_tensor, offset_blocks, block_size, remote_addrs)
         else:
             conn.local_gpu_write_cache(src_tensor, blocks, block_size)

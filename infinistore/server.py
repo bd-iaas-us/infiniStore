@@ -100,6 +100,13 @@ def parse_args():
         help="minimal allocate size, default 64, unit: KB",
         type=int,
     )
+    parser.add_argument(
+        "--num-stream",
+        required=False,
+        default=1,
+        help="number of streams, default 1, can only be 1, 2, 4",
+        type=int,
+    )
     return parser.parse_args()
 
 
@@ -114,6 +121,7 @@ def main():
         ib_port=args.ib_port,
         link_type=args.link_type,
         minimal_allocate_size=args.minimal_allocate_size,
+        num_stream=args.num_stream,
     )
     config.verify()
     check_p2p_access()

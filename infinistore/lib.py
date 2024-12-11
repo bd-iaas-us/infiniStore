@@ -63,13 +63,15 @@ class ServerConfig(_infinistore.ServerConfig):
         self.link_type = kwargs.get("link_type", "IB")
         self.prealloc_size = kwargs.get("prealloc_size", 16)
         self.minimal_allocate_size = kwargs.get("minimal_allocate_size", 64)
+        self.num_stream = kwargs.get("num_stream", 1)
 
     def __repr__(self):
         return (
-            f"ServerConfig(service_port={self.service_port}, manage_port={self.manage_port}, "
-            f"log_level='{self.log_level}')"
+            f"ServerConfig: service_port={self.service_port}, manage_port={self.manage_port}, "
+            f"log_level='{self.log_level}', "
             f"dev_name='{self.dev_name}', ib_port={self.ib_port}, link_type='{self.link_type}', "
-            f"prealloc_size={self.prealloc_size}, minimal_allocate_size={self.minimal_allocate_size}"
+            f"prealloc_size={self.prealloc_size}, minimal_allocate_size={self.minimal_allocate_size}, "
+            f"num_stream={self.num_stream}"
         )
 
     def verify(self):
