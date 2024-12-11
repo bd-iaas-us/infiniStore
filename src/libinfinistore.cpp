@@ -61,7 +61,6 @@ Connection::~Connection() {
     }
     local_mr.clear();
 
-
     if (send_mr) {
         ibv_dereg_mr(send_mr);
     }
@@ -861,7 +860,7 @@ int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, voi
 }
 
 int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, int block_size,
-             void *ptr) {
+             void *ptr, int device_id) {
     assert(conn != NULL);
     assert(ptr != NULL);
 
@@ -885,7 +884,8 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, in
             CreateBlock(builder, builder.CreateString(block.key), block.offset));
     }
 
-    auto req = CreateLocalMetaRequestDirect(builder, &ipc_handle, block_size, &block_offsets);
+    auto req =
+        CreateLocalMetaRequestDirect(builder, device_id, &ipc_handle, block_size, &block_offsets);
 
     builder.Finish(req);
 

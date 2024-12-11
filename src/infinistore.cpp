@@ -79,8 +79,6 @@ struct Client {
     char *tcp_send_buffer_ = NULL;
     char *tcp_recv_buffer_ = NULL;
 
-    cudaStream_t *cuda_stream_;
-
     rdma_conn_info_t remote_info_;
     rdma_conn_info_t local_info_;
 
@@ -154,12 +152,6 @@ Client::~Client() {
         free(tcp_recv_buffer_);
         tcp_recv_buffer_ = NULL;
     }
-
-    // cudaStreamDestroy(cuda_stream_);
-    for (int i = 0; i < global_config.num_stream; i++) {
-        cudaStreamDestroy(cuda_stream_[i]);
-    }
-    delete [] cuda_stream_;
 
     INFO("destroy cuda stream");
     if (qp_) {
@@ -400,11 +392,13 @@ typedef struct {
     client_t *client = NULL;
     void *d_ptr = NULL;
     std::vector<CUDA_TASK> *tasks = NULL;
-    // a pointer to variable, when finished equals to global_config.num_stream, we can close the ipc handle
+    // a pointer to variable, when finished equals to global_config.num_stream, we can close the ipc
+    // handle
     std::atomic<int> *finished = NULL;
-    cudaStream_t stream;
+    cudaStream_t stream = NULL;
+    int device = -1;
     int task_id = -1;
-    cudaEvent_t event;
+    cudaEvent_t event = NULL;
 } wqueue_data_t;
 
 // FIXME:
@@ -444,8 +438,11 @@ void on_write(uv_write_t *req, int status) {
 
 void wait_for_ipc_close_completion(uv_work_t *req) {
     wqueue_data_t *wqueue_data = (wqueue_data_t *)req->data;
+
+    CHECK_CUDA(cudaSetDevice(wqueue_data->device));
     CHECK_CUDA(cudaEventSynchronize(wqueue_data->event));
     CHECK_CUDA(cudaEventDestroy(wqueue_data->event));
+    CHECK_CUDA(cudaStreamDestroy(wqueue_data->stream));
 
     if (wqueue_data->finished->fetch_add(1) == global_config.num_stream) {
         // closing ipc handle is slow, so we put it here
@@ -478,17 +475,24 @@ void after_ipc_close_completion(uv_work_t *req, int status) {
 
 int Client::read_cache(const LocalMetaRequest *meta_req) {
     INFO("do read_cache...");
+
     const header_t *header = &this->header_;
     void *d_ptr;
 
     assert(header != NULL);
     // TODO: check device_id
 
-    cudaEvent_t events[global_config.num_stream];
+    CHECK_CUDA(cudaSetDevice(meta_req->device()));
 
+    cudaEvent_t events[global_config.num_stream];
     // create events
     for (int i = 0; i < global_config.num_stream; i++) {
         CHECK_CUDA(cudaEventCreate(&events[i]));
+    }
+
+    cudaStream_t cuda_streams[global_config.num_stream];
+    for (int i = 0; i < global_config.num_stream; i++) {
+        CHECK_CUDA(cudaStreamCreate(&cuda_streams[i]));
     }
 
     cudaIpcMemHandle_t ipc_handle = *(cudaIpcMemHandle_t *)meta_req->ipc_handle()->data();
@@ -502,6 +506,10 @@ int Client::read_cache(const LocalMetaRequest *meta_req) {
             ERROR("Key not found: {}", key);
             // FIXME: crash happens here
             CHECK_CUDA(cudaIpcCloseMemHandle(d_ptr));
+            for (int i = 0; i < global_config.num_stream; i++) {
+                CHECK_CUDA(cudaEventDestroy(events[i]));
+                CHECK_CUDA(cudaStreamDestroy(cuda_streams[i]));
+            }
             return KEY_NOT_FOUND;
         }
         void *h_src = kv_map[key].ptr;
@@ -511,13 +519,13 @@ int Client::read_cache(const LocalMetaRequest *meta_req) {
 
         int stream_idx = idx % global_config.num_stream;
         CHECK_CUDA(cudaMemcpyAsync((void *)((char *)d_ptr + block->offset()), h_src, block_size,
-                                   cudaMemcpyHostToDevice, cuda_stream_[stream_idx]));
+                                   cudaMemcpyHostToDevice, cuda_streams[stream_idx]));
 
         idx++;
     }
 
     for (int i = 0; i < global_config.num_stream; i++) {
-        CHECK_CUDA(cudaEventRecord(events[i], cuda_stream_[i]));
+        CHECK_CUDA(cudaEventRecord(events[i], cuda_streams[i]));
     }
 
     remain_++;
@@ -531,16 +539,19 @@ int Client::read_cache(const LocalMetaRequest *meta_req) {
         wqueue_data->d_ptr = d_ptr;
         wqueue_data->tasks = NULL;
         wqueue_data->finished = finished;
-        wqueue_data->stream = cuda_stream_[i];
+        wqueue_data->stream = cuda_streams[i];
         wqueue_data->task_id = i;
         wqueue_data->event = events[i];
+        wqueue_data->device = meta_req->device();
         uv_work_t *req = new uv_work_t();
         req->data = (void *)wqueue_data;
         uv_queue_work(loop, req, wait_for_ipc_close_completion, after_ipc_close_completion);
     }
 
     send_resp(TASK_ACCEPTED, NULL, 0);
+
     reset_client_read_state();
+
     return 0;
 }
 
@@ -550,6 +561,8 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
 
     void *d_ptr;
     cudaIpcMemHandle_t ipc_handle = *(cudaIpcMemHandle_t *)meta_req->ipc_handle()->data();
+
+    CHECK_CUDA(cudaSetDevice(meta_req->device()));
 
     CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, ipc_handle, cudaIpcMemLazyEnablePeerAccess));
 
@@ -568,6 +581,12 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
         CHECK_CUDA(cudaEventCreate(&events[i]));
     }
 
+    // create streams per request.
+    cudaStream_t cuda_streams[global_config.num_stream];
+    for (int i = 0; i < global_config.num_stream; i++) {
+        CHECK_CUDA(cudaStreamCreate(&cuda_streams[i]));
+    }
+
     // allocate host memory
     bool ret = mm->allocate(
         block_size, num_of_blocks, [&](void *addr, uint32_t lkey, uint32_t rkey, int pool_idx) {
@@ -579,7 +598,7 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
             int stream_idx = key_idx % global_config.num_stream;
             CHECK_CUDA(cudaMemcpyAsync((void *)addr, (void *)((char *)d_ptr + block->offset()),
                                        block_size, cudaMemcpyDeviceToHost,
-                                       cuda_stream_[stream_idx]));
+                                       cuda_streams[stream_idx]));
             tasks->push_back({
                 .ptr = PTR{.ptr = (void *)addr,
                            .size = block_size,
@@ -592,7 +611,7 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
         });
 
     for (int i = 0; i < global_config.num_stream; i++) {
-        CHECK_CUDA(cudaEventRecord(events[i], cuda_stream_[i]));
+        CHECK_CUDA(cudaEventRecord(events[i], cuda_streams[i]));
     }
 
     INFO("allocate_rdma time: {} micro seconds",
@@ -617,9 +636,10 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
         wqueue_data->d_ptr = d_ptr;
         wqueue_data->tasks = tasks;
         wqueue_data->finished = finished;
-        wqueue_data->stream = cuda_stream_[i];
         wqueue_data->task_id = i;
+        wqueue_data->stream = cuda_streams[i];
         wqueue_data->event = events[i];
+        wqueue_data->device = meta_req->device();
 
         uv_work_t *req = new uv_work_t();
         req->data = (void *)wqueue_data;
@@ -629,6 +649,7 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
     send_resp(return_code, NULL, 0);
 
     reset_client_read_state();
+
     return 0;
 }
 
@@ -1063,16 +1084,12 @@ void on_new_connection(uv_stream_t *server, int status) {
     uv_tcp_init(loop, client_handle);
     if (uv_accept(server, (uv_stream_t *)client_handle) == 0) {
         client_t *client = new client_t();
-        //TODO: use constructor
-        client->cuda_stream_ = new cudaStream_t[global_config.num_stream];
+        // TODO: use constructor
         client->handle_ = client_handle;
         client_handle->data = client;
         client->state_ = READ_HEADER;
         client->bytes_read_ = 0;
         client->expected_bytes_ = FIXED_HEADER_SIZE;
-        for (int i = 0; i < global_config.num_stream; i++) {
-            CHECK_CUDA(cudaStreamCreate(&client->cuda_stream_[i]));
-        }
         uv_read_start((uv_stream_t *)client_handle, alloc_buffer, on_read);
     }
     else {
@@ -1117,9 +1134,10 @@ int register_server(unsigned long loop_ptr, server_config_t config) {
 
     setenv("UV_THREADPOOL_SIZE", "64", 1);
 
-    //verfication 
-    assert(config.num_stream > 0 && (config.num_stream == 1 || config.num_stream == 2 || config.num_stream == 4));
-    
+    // verfication
+    assert(config.num_stream > 0 &&
+           (config.num_stream == 1 || config.num_stream == 2 || config.num_stream == 4));
+
     global_config = config;
 
     loop = uv_default_loop();

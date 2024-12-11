@@ -238,9 +238,13 @@ class InfinityConnection:
         element_size = cache.element_size()
         assert self.local_connected
         blocks_in_bytes = [(key, offset * element_size) for key, offset in blocks]
-
         ret = _infinistore.rw_local(
-            self.conn, self.OP_W, blocks_in_bytes, page_size * element_size, ptr
+            self.conn,
+            self.OP_W,
+            blocks_in_bytes,
+            page_size * element_size,
+            ptr,
+            cache.device.index,
         )
         if ret < 0:
             raise Exception(f"Failed to write to infinistore, ret = {ret}")
@@ -290,7 +294,12 @@ class InfinityConnection:
         blocks_in_bytes = [(key, offset * element_size) for key, offset in blocks]
         if self.local_connected:
             ret = _infinistore.rw_local(
-                self.conn, self.OP_R, blocks_in_bytes, page_size * element_size, ptr
+                self.conn,
+                self.OP_R,
+                blocks_in_bytes,
+                page_size * element_size,
+                ptr,
+                cache.device.index,
             )
             if ret < 0:
                 raise Exception(f"Failed to read to infinistore, ret = {ret}")
@@ -329,7 +338,7 @@ class InfinityConnection:
                     # print(f"waiting for {ret} inflight requests")
                     if n > timeout * 10000:
                         raise Exception("Timeout waiting for inflight requests")
-                    time.sleep(ret * 0.0001)
+                    time.sleep(ret * 0.0005)
                 else:
                     return
         elif self.rdma_connected:

@@ -4,6 +4,7 @@ table Block {
 }
 
 table LocalMetaRequest {
+  device: int;
   ipc_handle: [ubyte];
   block_size: int;
   blocks: [Block];
