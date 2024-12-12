@@ -29,7 +29,6 @@ using namespace flatbuffers;
 #define OP_SYNC 'S'
 #define OP_RDMA_EXCHANGE 'E'
 #define OP_RDMA_ALLOCATE 'D'
-#define OP_RDMA_WRITE 'B'  // FIXME
 #define OP_RDMA_READ 'A'
 #define OP_CHECK_EXIST 'C'
 #define OP_GET_MATCH_LAST_IDX 'M'
@@ -50,8 +49,7 @@ std::string op_name(char op);
 
 #define RETURN_CODE_SIZE sizeof(int)
 
-#define PROTOCOL_BUFFER_SIZE \
-    (4 << 20)  // 4M could be enough
+#define PROTOCOL_BUFFER_SIZE (4 << 20)  // 4M could be enough
 
 typedef struct __attribute__((packed)) {
     unsigned int magic;

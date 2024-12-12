@@ -130,39 +130,42 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
     conn.connect()
 
     num_of_blocks = 10
-    keys = [generate_random_string(num_of_blocks) for i in range(10)]
     block_size = 4096
     src = [i for i in range(num_of_blocks * block_size)]
 
-    blocks = [(keys[i], i * block_size) for i in range(num_of_blocks)]
     with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
         src_tensor = torch.tensor(src, device=src_device, dtype=torch.float32)
     torch.cuda.synchronize(src_tensor.device)
-    if not local:
-        conn.register_mr(src_tensor)
-        remote_addrs = conn.allocate_rdma(keys, block_size * 4)
-        conn.rdma_write_cache(
-            src_tensor,
-            [i * block_size for i in range(num_of_blocks)],
-            block_size,
-            remote_addrs,
-        )
-    else:
-        conn.local_gpu_write_cache(src_tensor, blocks, block_size)
 
-    conn.sync()
+    # write/read 3 times
+    for i in range(3):
+        keys = [generate_random_string(num_of_blocks) for i in range(10)]
+        blocks = [(keys[i], i * block_size) for i in range(num_of_blocks)]
+        if not local:
+            conn.register_mr(src_tensor)
+            remote_addrs = conn.allocate_rdma(keys, block_size * 4)
+            conn.rdma_write_cache(
+                src_tensor,
+                [i * block_size for i in range(num_of_blocks)],
+                block_size,
+                remote_addrs,
+            )
+        else:
+            conn.local_gpu_write_cache(src_tensor, blocks, block_size)
 
-    with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
-        dst = torch.zeros(
-            num_of_blocks * block_size, device=dst_device, dtype=torch.float32
-        )
+        conn.sync()
 
-    if not local:
-        conn.register_mr(dst)
-    conn.read_cache(dst, blocks, block_size)
-    conn.sync()
-    # import pdb; pdb.set_trace()
-    assert torch.equal(src_tensor.cpu(), dst.cpu())
+        with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
+            dst = torch.zeros(
+                num_of_blocks * block_size, device=dst_device, dtype=torch.float32
+            )
+
+        if not local:
+            conn.register_mr(dst)
+        conn.read_cache(dst, blocks, block_size)
+        conn.sync()
+        # import pdb; pdb.set_trace()
+        assert torch.equal(src_tensor.cpu(), dst.cpu())
 
 
 def test_key_check(server):

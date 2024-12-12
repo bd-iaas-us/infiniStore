@@ -197,7 +197,6 @@ class InfinityConnection:
     OP_R = "R"
     OP_W = "W"
     OP_SYNC = "S"
-    OP_RDMA_WRITE = "D"
     OP_RDMA_READ = "A"
 
     def __init__(self, config: ClientConfig):

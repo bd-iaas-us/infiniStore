@@ -220,11 +220,6 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                                  .count());
                         break;
                     }
-                    case OP_RDMA_WRITE: {
-                        ERROR("Unexpected request op: {}", request->op());
-                        assert(false);
-                        break;
-                    }
                     default:
                         ERROR("Unexpected request op: {}", request->op());
                         break;
@@ -242,6 +237,11 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
             else if (wc.opcode ==
                      IBV_WC_RECV_RDMA_WITH_IMM) {  // write cache: we alreay have all data now.
                 INFO("write cache completed successfully, #keys {} saved", wc.imm_data);
+                INFO("ready for next request");
+                if (prepare_recv_rdma_request() < 0) {
+                    ERROR("Failed to prepare recv rdma request");
+                    return;
+                }
             }
             else {
                 ERROR("Unexpected wc opcode: {}", (int)wc.opcode);
@@ -304,11 +304,6 @@ int Client::allocate_rdma(const RemoteMetaRequest *req) {
         return -1;
     }
 
-    // put a recv wr to receive the WRITE_IMM for rdma write
-    if (prepare_recv_rdma_request() < 0) {
-        ERROR("Failed to prepare recv rdma request");
-        return -1;
-    }
     return 0;
 }
 
