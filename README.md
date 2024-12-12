@@ -29,7 +29,7 @@ python -m infinistore.server
 ```
 apt install libuv1-dev
 apt install libgtest-dev
-apt insalll libflatbuffers-dev
+apt install libflatbuffers-dev
 apt install libspdlog-dev libfmt-dev
 apt install ibverbs-utils libibverbs-dev
 pip install -e .
