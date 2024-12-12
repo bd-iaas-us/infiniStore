@@ -49,24 +49,20 @@ def run(conn):
 
     input = torch.randn(seq_length, 1, N, device="cuda:0", dtype=torch.float16)
 
-    # now = time.time()
-    # model.forward(input)
-    # print("Origin Time taken for 32 layers linear layers: ", time.time() - now)
     torch.cuda.synchronize(0)
     now1 = time.time()
 
     output = input
-    # stream = torch.cuda.current_stream(output.device)
 
     upload_queue = queue.Queue()
 
     def upload_worker():
         while True:
-            layer_idx, event, data = upload_queue.get()  # 获取任务
-            event.synchronize()  # 等待事件完成
+            layer_idx, event, data = upload_queue.get()
+            event.synchronize()
             blocks = [(f"key{i}_{j}", j * 4096) for j in range(5000)]
             conn.local_gpu_write_cache(output, blocks, 4096)
-            upload_queue.task_done()  # 标记任务完成
+            upload_queue.task_done() 
 
     upload_thread = threading.Thread(target=upload_worker, daemon=True)
     upload_thread.start()
@@ -76,17 +72,22 @@ def run(conn):
     for i, layer in enumerate(model):
         output = layer(output)
         events[i].record()
-        outputs.append(output)
+        # old approach
+        # outputs.append(output)
         upload_queue.put((i, events[i], output))
 
-    torch.cuda.synchronize()
 
+
+    # Old approach: upload kvcache after computation
+
+    # torch.cuda.synchronize()
     # for i, output in enumerate(outputs):
     #     # split output into 1000 blocks
     #     blocks = [(f"key{i}_{j}", j*4096) for j in range(5000)]
     #     conn.local_gpu_write_cache(output, blocks, 4096)
 
     conn.sync()
+
     print("Time taken for linear layers: ", time.time() - now1)
 
 
