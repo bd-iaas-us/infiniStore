@@ -1,4 +1,10 @@
-from .lib import register_server, check_supported, ServerConfig, Logger
+from .lib import (
+    register_server,
+    check_supported,
+    ServerConfig,
+    Logger,
+)
+
 from ._infinistore import get_kvmap_len
 
 import asyncio
@@ -7,9 +13,11 @@ from fastapi import FastAPI
 import uvicorn
 import torch
 import argparse
-
 import logging
+import subprocess
 
+
+# disable standard logging, we will use our own logger
 logging.disable(logging.INFO)
 
 app = FastAPI()
@@ -107,6 +115,13 @@ def parse_args():
         help="number of streams, default 1, can only be 1, 2, 4",
         type=int,
     )
+    parser.add_argument(
+        "--warmup",
+        required=False,
+        default=False,
+        action="store_true",
+    )
+
     return parser.parse_args()
 
 
@@ -136,12 +151,27 @@ def main():
     # TODO: find the minimum size for pinning memory and ib_reg_mr
     register_server(loop, config)
 
+    if args.warmup:
+        Logger.info("Starting warm up all cuda devices, it may take a while...")
+        subprocess.Popen(
+            [
+                "python",
+                "-m",
+                "infinistore.warmup",
+                "--service-port",
+                str(config.service_port),
+                "--start-delay",
+                "2",
+            ]
+        )
+
     http_config = uvicorn.Config(
         app, host="0.0.0.0", port=config.manage_port, loop="uvloop"
     )
 
     server = uvicorn.Server(http_config)
 
+    Logger.info("server started")
     loop.run_until_complete(server.serve())
 
 
