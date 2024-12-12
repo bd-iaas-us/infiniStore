@@ -168,7 +168,7 @@ def run(args):
         )
     )
     print(
-        "write cache: {} MB/s, read cache: {} MB/s".format(
+        "write cache: {:.2f} MB/s, read cache: {:.2f} MB/s".format(
             args.size * args.iteration / write_sum,
             args.size * args.iteration / read_sum,
         )

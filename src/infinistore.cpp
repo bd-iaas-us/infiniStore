@@ -614,7 +614,7 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
         CHECK_CUDA(cudaEventRecord(events[i], cuda_streams[i]));
     }
 
-    INFO("allocate_rdma time: {} micro seconds",
+    INFO("allocate memory time: {} micro seconds",
          std::chrono::duration_cast<std::chrono::microseconds>(
              std::chrono::high_resolution_clock::now() - start)
              .count());
