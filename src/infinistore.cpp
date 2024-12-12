@@ -32,9 +32,16 @@ struct PTR {
     bool committed;
 };
 
-struct CUDA_TASK {
+// when cuda write is finished, we merge vecto<CUDA_WRITE_TASK> into kv_map
+struct CUDA_WRITE_TASK {
     PTR ptr;
     std::string key;
+};
+
+struct CUDA_READ_TASK {
+    uintptr_t src;
+    uintptr_t dst;
+    int stream_idx;
 };
 
 server_config_t global_config;
@@ -391,7 +398,7 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
 typedef struct {
     client_t *client = NULL;
     void *d_ptr = NULL;
-    std::vector<CUDA_TASK> *tasks = NULL;
+    std::vector<CUDA_WRITE_TASK> *tasks = NULL;
     // a pointer to variable, when finished equals to global_config.num_stream, we can close the ipc
     // handle
     std::atomic<int> *finished = NULL;
@@ -500,6 +507,10 @@ int Client::read_cache(const LocalMetaRequest *meta_req) {
 
     size_t block_size = meta_req->block_size();
     int idx = 0;
+
+    std::vector<CUDA_READ_TASK> tasks;
+    tasks.reserve(meta_req->blocks()->size());
+
     for (auto *block : *meta_req->blocks()) {
         auto key = block->key()->str();
         if (kv_map.count(key) == 0) {
@@ -518,10 +529,17 @@ int Client::read_cache(const LocalMetaRequest *meta_req) {
         DEBUG("key: {}, local_addr: {}, size : {}", key, (uintptr_t)h_src, block_size);
 
         int stream_idx = idx % global_config.num_stream;
-        CHECK_CUDA(cudaMemcpyAsync((void *)((char *)d_ptr + block->offset()), h_src, block_size,
-                                   cudaMemcpyHostToDevice, cuda_streams[stream_idx]));
+
+        tasks.push_back({.src = (uintptr_t)h_src,
+                         .dst = (uintptr_t)((char *)d_ptr + block->offset()),
+                         .stream_idx = stream_idx});
 
         idx++;
+    }
+
+    for (auto &task : tasks) {
+        CHECK_CUDA(cudaMemcpyAsync((void *)task.dst, (void *)task.src, block_size,
+                                   cudaMemcpyHostToDevice, cuda_streams[task.stream_idx]));
     }
 
     for (int i = 0; i < global_config.num_stream; i++) {
@@ -570,7 +588,7 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
     size_t block_size = meta_req->block_size();
     size_t num_of_blocks = meta_req->blocks()->size();
 
-    auto tasks = new std::vector<CUDA_TASK>;
+    auto tasks = new std::vector<CUDA_WRITE_TASK>;
 
     auto start = std::chrono::high_resolution_clock::now();
 
