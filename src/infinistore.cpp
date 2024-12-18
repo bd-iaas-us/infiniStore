@@ -38,7 +38,7 @@ uv_tcp_t server;
 // global ibv context
 struct ibv_context *ib_ctx;
 struct ibv_pd *pd;
-struct ibv_comp_channel *comp_channel;
+// struct ibv_comp_channel *comp_channel;
 MM *mm;
 
 int gidx = 0;
@@ -80,6 +80,7 @@ struct Client {
     struct ibv_cq *cq_ = NULL;
     struct ibv_qp *qp_ = NULL;
     bool rdma_connected_ = false;
+    struct ibv_comp_channel *comp_channel = NULL;
 
     int remain_;
 
@@ -168,7 +169,7 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
     struct ibv_cq *cq;
     void *cq_context;
 
-    if (ibv_get_cq_event(comp_channel, &cq, &cq_context) != 0) {
+    if (ibv_get_cq_event(this->comp_channel, &cq, &cq_context) != 0) {
         ERROR("Failed to get CQ event");
         return;
     }
@@ -613,11 +614,7 @@ int init_rdma_context(server_config_t config) {
         ERROR("Failed to allocate PD");
         return -1;
     }
-    comp_channel = ibv_create_comp_channel(ib_ctx);
-    if (!comp_channel) {
-        ERROR("Failed to create completion channel");
-        return -1;
-    }
+
     return 0;
 }
 
@@ -631,10 +628,16 @@ int Client::rdma_exchange() {
         return SYSTEM_ERROR;
     }
 
-    // RDMA setup if not already done
-    assert(comp_channel != NULL);
+    this->comp_channel = ibv_create_comp_channel(ib_ctx);
+    if (!this->comp_channel) {
+        ERROR("Failed to create completion channel");
+        return -1;
+    }    
 
-    cq_ = ibv_create_cq(ib_ctx, MAX_WR * 2, NULL, comp_channel, 0);
+    // RDMA setup if not already done
+    assert(this->comp_channel != NULL);
+
+    cq_ = ibv_create_cq(ib_ctx, MAX_WR * 2, NULL, this->comp_channel, 0);
     if (!cq_) {
         ERROR("Failed to create CQ");
         return SYSTEM_ERROR;
@@ -775,7 +778,7 @@ int Client::rdma_exchange() {
         return SYSTEM_ERROR;
     }
 
-    uv_poll_init(loop, &poll_handle_, comp_channel->fd);
+    uv_poll_init(loop, &poll_handle_, this->comp_channel->fd);
     poll_handle_.data = this;
     uv_poll_start(&poll_handle_, UV_READABLE | UV_WRITABLE,
                   [](uv_poll_t *handle, int status, int events) {
