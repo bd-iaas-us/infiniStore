@@ -91,7 +91,7 @@ struct Client {
     struct ibv_cq *cq_ = NULL;
     struct ibv_qp *qp_ = NULL;
     bool rdma_connected_ = false;
-    struct ibv_comp_channel *comp_channel = NULL;
+    struct ibv_comp_channel *comp_channel_ = NULL;
 
     int remain_;
 
@@ -160,6 +160,11 @@ Client::~Client() {
         tcp_recv_buffer_ = NULL;
     }
 
+    if (comp_channel_) {
+        free(comp_channel_);
+        comp_channel_ = NULL;
+    }
+
     INFO("destroy cuda stream");
     if (qp_) {
         struct ibv_qp_attr attr;
@@ -187,7 +192,7 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
     struct ibv_cq *cq;
     void *cq_context;
 
-    if (ibv_get_cq_event(this->comp_channel, &cq, &cq_context) != 0) {
+    if (ibv_get_cq_event(this->comp_channel_, &cq, &cq_context) != 0) {
         ERROR("Failed to get CQ event");
         return;
     }
@@ -742,16 +747,16 @@ int Client::rdma_exchange() {
         return SYSTEM_ERROR;
     }
 
-    this->comp_channel = ibv_create_comp_channel(ib_ctx);
-    if (!this->comp_channel) {
+    this->comp_channel_ = ibv_create_comp_channel(ib_ctx);
+    if (!this->comp_channel_) {
         ERROR("Failed to create completion channel");
         return -1;
-    }    
+    }
 
     // RDMA setup if not already done
-    assert(this->comp_channel != NULL);
+    assert(this->comp_channel_ != NULL);
 
-    cq_ = ibv_create_cq(ib_ctx, MAX_WR * 2, NULL, this->comp_channel, 0);
+    cq_ = ibv_create_cq(ib_ctx, MAX_WR * 2, NULL, this->comp_channel_, 0);
     if (!cq_) {
         ERROR("Failed to create CQ");
         return SYSTEM_ERROR;
@@ -892,7 +897,7 @@ int Client::rdma_exchange() {
         return SYSTEM_ERROR;
     }
 
-    uv_poll_init(loop, &poll_handle_, this->comp_channel->fd);
+    uv_poll_init(loop, &poll_handle_, this->comp_channel_->fd);
     poll_handle_.data = this;
     uv_poll_start(&poll_handle_, UV_READABLE | UV_WRITABLE,
                   [](uv_poll_t *handle, int status, int events) {
