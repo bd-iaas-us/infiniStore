@@ -8,6 +8,7 @@ import subprocess
 import random
 import string
 import contextlib
+from multiprocessing import Process
 
 
 # Fixture to start the TCzpserver before running tests
@@ -166,6 +167,64 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
         conn.sync()
         # import pdb; pdb.set_trace()
         assert torch.equal(src_tensor.cpu(), dst.cpu())
+
+
+@pytest.mark.parametrize("num_clients", [2])
+@pytest.mark.parametrize("local", [True, False])
+def test_multiple_clients(num_clients, local):
+    def run():
+        config = infinistore.ClientConfig(
+            host_addr="127.0.0.1",
+            service_port=92345,
+            link_type=infinistore.LINK_ETHERNET,
+            dev_name="mlx5_2",
+        )
+
+        config.connection_type = (
+            infinistore.TYPE_LOCAL_GPU if local else infinistore.TYPE_RDMA
+        )
+
+        conn = infinistore.InfinityConnection(config)
+        conn.connect()
+
+        # key is random string
+        key = generate_random_string(10)
+        src = [i for i in range(4096)]
+
+        # local GPU write is tricky, we need to disable the pytorch allocator's caching
+        with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
+            src_tensor = torch.tensor(src, device="cuda:0", dtype=torch.float32)
+
+        torch.cuda.synchronize(src_tensor.device)
+        if not local:
+            conn.register_mr(src_tensor)
+            element_size = torch._utils._element_size(torch.float32)
+
+            remote_addrs = conn.allocate_rdma([key], 4096 * element_size)
+            conn.rdma_write_cache(src_tensor, [0], 4096, remote_addrs)
+        else:
+            conn.local_gpu_write_cache(src_tensor, [(key, 0)], 4096)
+
+        conn.sync()
+
+        conn = infinistore.InfinityConnection(config)
+        conn.connect()
+
+        with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
+            dst = torch.zeros(4096, device="cuda:0", dtype=torch.float32)
+        if not local:
+            conn.register_mr(dst)
+        conn.read_cache(dst, [(key, 0)], 4096)
+        conn.sync()
+        assert torch.equal(src_tensor, dst)
+
+    processes = []
+    for _ in range(num_clients):
+        p = Process(target=run)
+        p.start()
+        processes.append(p)
+    for i in range(num_clients):
+        processes[i].join()
 
 
 def test_key_check(server):
