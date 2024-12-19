@@ -83,8 +83,8 @@ class ServerConfig(_infinistore.ServerConfig):
             raise Exception("ib port of device should be greater than 0")
         if self.link_type not in ["IB", "Ethernet"]:
             raise Exception("link type should be IB or Ethernet")
-        if self.minimal_allocate_size < 64:
-            raise Exception("minimal allocate size should be greater than 64")
+        if self.minimal_allocate_size < 16:
+            raise Exception("minimal allocate size should be greater than 16")
 
 
 class Logger:
