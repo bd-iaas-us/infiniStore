@@ -18,7 +18,7 @@ typedef struct ServerConfig {
     int ib_port;
     std::string link_type;
     int minimal_allocate_size;  // unit: KB
-    int num_stream; // can only be 1,2,4, number of stream for each client
+    int num_stream;             // can only be 1,2,4, number of stream for each client
 } server_config_t;
 
 typedef struct ClientConfig {
