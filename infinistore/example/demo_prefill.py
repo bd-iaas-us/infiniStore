@@ -62,12 +62,12 @@ def run(conn):
             event.synchronize()
             blocks = [(f"key{i}_{j}", j * 4096) for j in range(5000)]
             conn.local_gpu_write_cache(output, blocks, 4096)
-            upload_queue.task_done() 
+            upload_queue.task_done()
 
     upload_thread = threading.Thread(target=upload_worker, daemon=True)
     upload_thread.start()
     events = [torch.cuda.Event() for _ in range(len(model))]
-    outputs = []
+    # outputs = []
 
     for i, layer in enumerate(model):
         output = layer(output)
@@ -75,8 +75,6 @@ def run(conn):
         # old approach
         # outputs.append(output)
         upload_queue.put((i, events[i], output))
-
-
 
     # Old approach: upload kvcache after computation
 
