@@ -44,6 +44,7 @@ def run(conn):
 
     before_sync = time.time()
     conn.sync()
+    time.sleep(1)
     print(f"sync elapse time is {time.time() - before_sync}")
 
     with DisableTorchCaching():
@@ -55,7 +56,8 @@ def run(conn):
 
     conn.read_cache(dst_tensor, [("key1", 0), ("key2", 1024)], 1024)
 
-    conn.sync()
+    # conn.sync()
+    time.sleep(1)
     print(f"read elapse time is {time.time() - now}")
 
     assert torch.equal(src_tensor[0:1024].cpu(), dst_tensor[0:1024].cpu())
@@ -72,11 +74,11 @@ if __name__ == "__main__":
         link_type=infinistore.LINK_ETHERNET,
         dev_name="mlx5_0",
     )
-    # rdma_conn = InfinityConnection(config)
-    # rdma_conn.connect()
-    # run(rdma_conn)
+    rdma_conn = InfinityConnection(config)
+    rdma_conn.connect()
+    run(rdma_conn)
 
-    config.connection_type = infinistore.TYPE_LOCAL_GPU
-    local_conn = InfinityConnection(config)
-    local_conn.connect()
-    run(local_conn)
+    # config.connection_type = infinistore.TYPE_LOCAL_GPU
+    # local_conn = InfinityConnection(config)
+    # local_conn.connect()
+    # run(local_conn)

@@ -10,6 +10,7 @@
 
 #include <future>
 #include <map>
+#include <optional>
 
 #include "config.h"
 #include "log.h"
@@ -49,6 +50,8 @@ struct Connection {
     std::mutex mutex;
     std::condition_variable cv;
     std::condition_variable allocater_cv;
+
+    std::optional<std::string> txn_id_inflight = std::nullopt;
 
     Connection() = default;
     Connection(const Connection &) = delete;

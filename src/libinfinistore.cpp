@@ -11,6 +11,7 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#include <uuid/uuid.h>
 
 #include <vector>
 
@@ -256,9 +257,44 @@ int modify_qp_to_init(connection_t *conn) {
 }
 
 int sync_rdma(connection_t *conn) {
-    std::unique_lock<std::mutex> lock(conn->mutex);
-    conn->cv.wait_for(lock, std::chrono::seconds(5),
-                      [&conn] { return conn->rdma_inflight_count == 0; });
+    // wait all previous rdma write done
+    {
+        std::unique_lock<std::mutex> lock(conn->mutex);
+        conn->cv.wait_for(lock, std::chrono::seconds(5),
+                          [&conn] { return conn->rdma_inflight_count == 0; });
+    }
+
+    // send sync request to server for commit
+    if (conn->txn_id_inflight.has_value()) {
+        FixedBufferAllocator allocator(conn->send_buffer, PROTOCOL_BUFFER_SIZE);
+        FlatBufferBuilder builder(64 << 10, &allocator);
+        auto txn_id_offset = builder.CreateString(conn->txn_id_inflight.value());
+
+        auto req =
+            CreateRemoteMetaRequest(builder, 0, 0, 0, 0, OP_RDMA_WRITE_COMMIT, txn_id_offset);
+        builder.Finish(req);
+
+        // send RDMA request
+        struct ibv_sge sge = {0};
+        struct ibv_send_wr wr = {0};
+        struct ibv_send_wr *bad_wr = NULL;
+
+        sge.addr = (uintptr_t)builder.GetBufferPointer();
+        sge.length = builder.GetSize();
+        sge.lkey = conn->send_mr->lkey;
+
+        wr.wr_id = 0;
+        wr.opcode = IBV_WR_SEND;
+        wr.sg_list = &sge;
+        wr.num_sge = 1;
+
+        int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
+        if (ret) {
+            ERROR("Failed to post RDMA send :{} in sync", strerror(ret));
+            return -1;
+        }
+        conn->txn_id_inflight.reset();
+    }
     return 0;
 }
 
@@ -638,6 +674,14 @@ int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
     return last_index;
 }
 
+std::string uuid() {
+    char buf[64];
+    uuid_t uuid;
+    uuid_generate(uuid);
+    uuid_unparse_lower(uuid, buf);
+    return std::string(buf);
+}
+
 // send a message to allocate memory and return the address
 int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_size,
                   std::vector<remote_block_t> &blocks) {
@@ -647,14 +691,28 @@ int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_
         .keys = keys,
         .block_size = block_size,
         .op = OP_RDMA_ALLOCATE,
+        .txn_id = uuid(),
     }
     */
+
+    if (conn->txn_id_inflight.has_value()) {
+        ERROR(
+            "the previous transaction is not finished, use conn.rdma_write_cache +conn.sync() to "
+            "write data. or memory leak will happen");
+        return -1;
+    }
 
     FixedBufferAllocator allocator(conn->send_buffer, PROTOCOL_BUFFER_SIZE);
     FlatBufferBuilder builder(64 << 10, &allocator);
     auto keys_offset = builder.CreateVectorOfStrings(keys);
 
-    auto req = CreateRemoteMetaRequest(builder, keys_offset, block_size, 0, 0, OP_RDMA_ALLOCATE);
+    std::string txn_id = uuid();
+
+    auto txn_id_offset = builder.CreateString(txn_id);
+    conn->txn_id_inflight = std::move(txn_id);
+
+    auto req = CreateRemoteMetaRequest(builder, keys_offset, block_size, 0, 0, OP_RDMA_ALLOCATE,
+                                       txn_id_offset);
 
     builder.Finish(req);
 
@@ -667,7 +725,6 @@ int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_
     sge.length = builder.GetSize();
     sge.lkey = conn->send_mr->lkey;
 
-    // FIXME:
     wr.wr_id = 0;
     wr.opcode = IBV_WR_SEND;
     wr.sg_list = &sge;

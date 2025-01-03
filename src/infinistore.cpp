@@ -29,7 +29,6 @@ struct PTR {
     void *ptr;
     size_t size;
     int pool_idx;
-    bool committed;
 };
 
 // when cuda write is finished, we merge vecto<CUDA_WRITE_TASK> into kv_map
@@ -46,7 +45,20 @@ struct CUDA_READ_TASK {
 
 server_config_t global_config;
 
-std::unordered_map<std::string, PTR> kv_map;
+using kv_map_t = std::unordered_map<std::string, PTR>;
+
+/*
+global map to store key-value pairs, all PTR in this map is
+completed, which means the data is ready to be read by client
+*/
+kv_map_t kv_map;
+
+/*
+only used for RDMA write. when memory is allocated, we same PTR struct into this map first,
+then when RDMA write is finished, we merge this map into kv_map
+*/
+std::unordered_map<std::string, kv_map_t> inflight_rdma_kv_map;
+
 uv_loop_t *loop;
 uv_tcp_t server;
 // global ibv context
@@ -209,13 +221,14 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                 INFO("RDMA Send completed successfully, recved {}", wc.byte_len);
                 const RemoteMetaRequest *request = GetRemoteMetaRequest(recv_buffer_);
 
-                INFO("Received remote meta request, #keys: {}, OP {}", request->keys()->size(),
-                     op_name(request->op()));
+                // INFO("Received remote meta request, #keys: {}, OP {}", request->keys()->size(),
+                //      op_name(request->op()));
 
                 switch (request->op()) {
-                    case OP_RDMA_READ:
+                    case OP_RDMA_READ: {
                         read_rdma_cache(request);
                         break;
+                    }
                     case OP_RDMA_ALLOCATE: {
                         auto start = std::chrono::high_resolution_clock::now();
                         allocate_rdma(request);
@@ -223,6 +236,27 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                              std::chrono::duration_cast<std::chrono::microseconds>(
                                  std::chrono::high_resolution_clock::now() - start)
                                  .count());
+                        break;
+                    }
+                    case OP_RDMA_WRITE_COMMIT:
+
+                    {
+                        INFO("OP_RDMA_WRITE_COMMIT");
+
+                        // mark all keys as committed
+                        const std::string &txn_id = request->txn_id()->str();
+
+                        auto it = inflight_rdma_kv_map.find(txn_id);
+                        if (it == inflight_rdma_kv_map.end()) {
+                            ERROR("can not find txn_id {} for rdma sync", txn_id);
+                            break;
+                        }
+                        // merge temp_kv_map's element into kv_map
+                        INFO("merge temp_kv_map into kv_map for {}", txn_id);
+                        auto &temp_kv_map = it->second;
+                        for (auto &kv : temp_kv_map) {
+                            kv_map[kv.first] = kv.second;
+                        }
                         break;
                     }
                     default:
@@ -241,7 +275,7 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
             }
             else if (wc.opcode ==
                      IBV_WC_RECV_RDMA_WITH_IMM) {  // write cache: we alreay have all data now.
-                INFO("write cache completed successfully, #keys {} saved", wc.imm_data);
+                INFO("write cache completed successfully, imm_data {} ", wc.imm_data);
                 INFO("ready for next request");
                 if (prepare_recv_rdma_request() < 0) {
                     ERROR("Failed to prepare recv rdma request");
@@ -269,19 +303,32 @@ int Client::allocate_rdma(const RemoteMetaRequest *req) {
     std::vector<RemoteBlock> blocks;
     blocks.reserve(req->keys()->size());
 
-    if (!mm->allocate(
-            block_size, req->keys()->size(),
-            [&](void *addr, uint32_t lkey, uint32_t rkey, int pool_idx) {
-                // FIXME: rdma write should have a msg to update committed to true
+    std::string txn_id = req->txn_id()->str();
 
-                auto ptr =
-                    PTR{.ptr = addr, .size = block_size, .pool_idx = pool_idx, .committed = true};
-                const auto *key = req->keys()->Get(key_idx);
-                kv_map[key->str()] = ptr;
-                blocks.push_back(RemoteBlock(rkey, (uint64_t)addr));
-                key_idx++;
-            })) {
+    // deduplicate inflight txn_id
+    if (inflight_rdma_kv_map.find(txn_id) != inflight_rdma_kv_map.end()) {
+        ERROR("txn_id {} already exists", txn_id);
+        return SYSTEM_ERROR;
+    }
+
+    inflight_rdma_kv_map[txn_id] = std::unordered_map<std::string, PTR>();
+    kv_map_t &temp_kv_map = inflight_rdma_kv_map[txn_id];
+
+    if (!mm->allocate(block_size, req->keys()->size(),
+                      [&](void *addr, uint32_t lkey, uint32_t rkey, int pool_idx) {
+                          // FIXME: rdma write should have a msg to update committed to true
+
+                          auto ptr = PTR{.ptr = addr, .size = block_size, .pool_idx = pool_idx};
+                          const auto *key = req->keys()->Get(key_idx);
+
+                          //
+                          temp_kv_map[key->str()] = ptr;
+                          blocks.push_back(RemoteBlock(rkey, (uint64_t)addr));
+                          key_idx++;
+                      })) {
         ERROR("Failed to allocate memory");
+        // remove the temp_kv_map
+        inflight_rdma_kv_map.erase(txn_id);
         return SYSTEM_ERROR;
     }
 
@@ -348,6 +395,7 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
             ERROR("Key not found: {}", key->str());
             return -1;
         }
+
         const PTR &ptr = it->second;
 
         DEBUG("rkey: {}, local_addr: {}, size : {}", mm->get_lkey(ptr.pool_idx), (uintptr_t)ptr.ptr,
@@ -618,10 +666,12 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
                                        block_size, cudaMemcpyDeviceToHost,
                                        cuda_streams[stream_idx]));
             tasks->push_back({
-                .ptr = PTR{.ptr = (void *)addr,
-                           .size = block_size,
-                           .pool_idx = pool_idx,
-                           .committed = true},
+                .ptr =
+                    PTR{
+                        .ptr = (void *)addr,
+                        .size = block_size,
+                        .pool_idx = pool_idx,
+                    },
                 .key = block->key()->str(),
             });
 
@@ -937,7 +987,7 @@ int Client::sync_stream() {
 int Client::check_key(const std::string &key_to_check) {
     int ret;
     // check if the key exists and committed
-    if (kv_map.count(key_to_check) > 0 && kv_map[key_to_check].committed) {
+    if (kv_map.count(key_to_check) > 0) {
         ret = 0;
     }
     else {

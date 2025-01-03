@@ -32,6 +32,7 @@ apt install libgtest-dev
 apt install libflatbuffers-dev
 apt install libspdlog-dev libfmt-dev
 apt install ibverbs-utils libibverbs-dev
+apt install uuid-dev
 pip install -e .
 pip install pre-commit
 pre-commit install

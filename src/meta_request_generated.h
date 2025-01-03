@@ -15,7 +15,8 @@ struct RemoteMetaRequest FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
         VT_BLOCK_SIZE = 6,
         VT_RKEY = 8,
         VT_REMOTE_ADDRS = 10,
-        VT_OP = 12
+        VT_OP = 12,
+        VT_TXN_ID = 14
     };
     const flatbuffers::Vector<flatbuffers::Offset<flatbuffers::String>> *keys() const {
         return GetPointer<const flatbuffers::Vector<flatbuffers::Offset<flatbuffers::String>> *>(
@@ -27,13 +28,17 @@ struct RemoteMetaRequest FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
         return GetPointer<const flatbuffers::Vector<uint64_t> *>(VT_REMOTE_ADDRS);
     }
     int8_t op() const { return GetField<int8_t>(VT_OP, 0); }
+    const flatbuffers::String *txn_id() const {
+        return GetPointer<const flatbuffers::String *>(VT_TXN_ID);
+    }
     bool Verify(flatbuffers::Verifier &verifier) const {
         return VerifyTableStart(verifier) && VerifyOffset(verifier, VT_KEYS) &&
                verifier.VerifyVector(keys()) && verifier.VerifyVectorOfStrings(keys()) &&
                VerifyField<int32_t>(verifier, VT_BLOCK_SIZE) &&
                VerifyField<uint32_t>(verifier, VT_RKEY) &&
                VerifyOffset(verifier, VT_REMOTE_ADDRS) && verifier.VerifyVector(remote_addrs()) &&
-               VerifyField<int8_t>(verifier, VT_OP) && verifier.EndTable();
+               VerifyField<int8_t>(verifier, VT_OP) && VerifyOffset(verifier, VT_TXN_ID) &&
+               verifier.VerifyString(txn_id()) && verifier.EndTable();
     }
 };
 
@@ -53,6 +58,9 @@ struct RemoteMetaRequestBuilder {
         fbb_.AddOffset(RemoteMetaRequest::VT_REMOTE_ADDRS, remote_addrs);
     }
     void add_op(int8_t op) { fbb_.AddElement<int8_t>(RemoteMetaRequest::VT_OP, op, 0); }
+    void add_txn_id(flatbuffers::Offset<flatbuffers::String> txn_id) {
+        fbb_.AddOffset(RemoteMetaRequest::VT_TXN_ID, txn_id);
+    }
     explicit RemoteMetaRequestBuilder(flatbuffers::FlatBufferBuilder &_fbb) : fbb_(_fbb) {
         start_ = fbb_.StartTable();
     }
@@ -67,8 +75,10 @@ inline flatbuffers::Offset<RemoteMetaRequest> CreateRemoteMetaRequest(
     flatbuffers::FlatBufferBuilder &_fbb,
     flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<flatbuffers::String>>> keys = 0,
     int32_t block_size = 0, uint32_t rkey = 0,
-    flatbuffers::Offset<flatbuffers::Vector<uint64_t>> remote_addrs = 0, int8_t op = 0) {
+    flatbuffers::Offset<flatbuffers::Vector<uint64_t>> remote_addrs = 0, int8_t op = 0,
+    flatbuffers::Offset<flatbuffers::String> txn_id = 0) {
     RemoteMetaRequestBuilder builder_(_fbb);
+    builder_.add_txn_id(txn_id);
     builder_.add_remote_addrs(remote_addrs);
     builder_.add_rkey(rkey);
     builder_.add_block_size(block_size);
@@ -81,10 +91,11 @@ inline flatbuffers::Offset<RemoteMetaRequest> CreateRemoteMetaRequestDirect(
     flatbuffers::FlatBufferBuilder &_fbb,
     const std::vector<flatbuffers::Offset<flatbuffers::String>> *keys = nullptr,
     int32_t block_size = 0, uint32_t rkey = 0, const std::vector<uint64_t> *remote_addrs = nullptr,
-    int8_t op = 0) {
+    int8_t op = 0, const char *txn_id = nullptr) {
     auto keys__ = keys ? _fbb.CreateVector<flatbuffers::Offset<flatbuffers::String>>(*keys) : 0;
     auto remote_addrs__ = remote_addrs ? _fbb.CreateVector<uint64_t>(*remote_addrs) : 0;
-    return CreateRemoteMetaRequest(_fbb, keys__, block_size, rkey, remote_addrs__, op);
+    auto txn_id__ = txn_id ? _fbb.CreateString(txn_id) : 0;
+    return CreateRemoteMetaRequest(_fbb, keys__, block_size, rkey, remote_addrs__, op, txn_id__);
 }
 
 inline const RemoteMetaRequest *GetRemoteMetaRequest(const void *buf) {
