@@ -9,11 +9,13 @@ from .lib import (
     check_supported,
     LINK_ETHERNET,
     LINK_IB,
+    register_server,
 )
 
 __all__ = [
     "InfinityConnection",
     "DisableTorchCaching",
+    "register_server",
     "ClientConfig",
     "ServerConfig",
     "TYPE_RDMA",
