@@ -30,6 +30,7 @@ using namespace flatbuffers;
 #define OP_RDMA_EXCHANGE 'E'
 #define OP_RDMA_ALLOCATE 'D'
 #define OP_RDMA_READ 'A'
+#define OP_RDMA_WRITE_COMMIT 'T'
 #define OP_CHECK_EXIST 'C'
 #define OP_GET_MATCH_LAST_IDX 'M'
 #define OP_SIZE 1
