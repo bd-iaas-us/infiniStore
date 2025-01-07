@@ -1,0 +1,7 @@
+infinistore
+===========
+
+.. toctree::
+   :maxdepth: 4
+
+   infinistore

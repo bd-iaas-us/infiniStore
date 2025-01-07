@@ -1,0 +1,8 @@
+infinistore package
+===================
+
+Module contents
+---------------
+
+.. automodule:: infinistore
+   :members:
