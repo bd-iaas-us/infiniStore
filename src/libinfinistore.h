@@ -40,17 +40,27 @@ struct Connection {
     void *recv_buffer = NULL;
     struct ibv_mr *recv_mr = NULL;
 
+    // this buffer is used for cq_handler thread to send RDMA COMMIT msg only.
+    void *cq_send_buffer = NULL;
+    struct ibv_mr *cq_send_mr = NULL;
+
     struct ibv_comp_channel *comp_channel = NULL;
     std::future<void> cq_future;  // cq thread
     std::atomic<int> rdma_inflight_count{0};
     std::atomic<int> rdma_allocate_count{0};  // TODO: modify allocate_rdma to async API;
 
     std::atomic<bool> stop{false};
+    // protect rdma_inflight_count
     std::mutex mutex;
     std::condition_variable cv;
     std::condition_variable allocater_cv;
 
+    // protect ibv_post_send
+    std::mutex rdma_post_send_mutex;
+
     Connection() = default;
+    int post_send(struct ibv_send_wr *send_wr, struct ibv_send_wr **bad_wr);
+
     Connection(const Connection &) = delete;
     // destory the connection
     ~Connection();

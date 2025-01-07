@@ -5,6 +5,7 @@ std::unordered_map<char, std::string> op_map = {{OP_R, "READ"},
                                                 {OP_SYNC, "SYNC"},
                                                 {OP_RDMA_EXCHANGE, "RDMA_EXCHANGE"},
                                                 {OP_RDMA_READ, "RDMA_READ"},
+                                                {OP_RDMA_WRITE_COMMIT, "RDMA_WRITE_COMMIT"},
                                                 {OP_RDMA_ALLOCATE, "RDMA_ALLOCATE"},
                                                 {OP_CHECK_EXIST, "CHECK_EXIST"},
                                                 {OP_GET_MATCH_LAST_IDX, "GET_MATCH_LAST_IDX"}};
