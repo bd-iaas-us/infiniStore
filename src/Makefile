@@ -3,7 +3,7 @@ CXXFLAGS = -std=c++17 -Wall -O3 -g
 
 INCLUDES = -I/usr/local/cuda/include
 LDFLAGS = -L/usr/local/cuda/lib64
-LIBS = -lcudart -luv -libverbs
+LIBS = -lcudart -luv -libverbs -lfmt
 PYTHON=python3
 PYBIND11_INCLUDES = $(shell $(PYTHON) -m pybind11 --includes)
 PYTHON_EXTENSION_SUFFIX = $(shell $(PYTHON)-config --extension-suffix)
@@ -17,6 +17,7 @@ all:$(PYBIND_TARGET)
 
 manylinux: PYTHON ?= python3.11
 manylinux: CXXFLAGS = -std=c++17 -g -O3 -Wall
+manylinux: LIBS = -lcudart -luv -libverbs
 manylinux: INCLUDES += -I/usr/local/include -I$(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")/triton/backends/nvidia/include/
 manylinux: LDFLAGS += -L$(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")/nvidia/cuda_runtime/lib/
 manylinux: PYBIND11_INCLUDES = $(shell $(PYTHON) -m pybind11 --includes)
