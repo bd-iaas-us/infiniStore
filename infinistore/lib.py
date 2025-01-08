@@ -179,7 +179,7 @@ def check_supported():
         "nv_peer_mem" not in _kernel_modules()
         and "nvidia_peermem" not in _kernel_modules()  # noqa: W503
     ):
-        raise Exception("nv_peer_mem module is not loaded")
+        Logger.warn("nv_peer_mem or nvidia_peermem module is not loaded")
     _check_rdma_devices_ibv()
 
 

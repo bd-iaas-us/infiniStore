@@ -38,7 +38,7 @@ def check_p2p_access():
                     # print(f"Peer access supported between device {i} and {j}")
                     pass
                 else:
-                    print(f"Peer access NOT supported between device {i} and {j}")
+                    Logger.warn(f"Peer access NOT supported between device {i} and {j}")
 
 
 def parse_args():
