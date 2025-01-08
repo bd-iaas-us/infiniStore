@@ -1,0 +1,184 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.19: https://docutils.sourceforge.io/" />
+
+    <title>Design and Architecture &#8212; infinistore  documentation</title>
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="_static/alabaster.css" />
+    <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
+    <script src="_static/doctools.js"></script>
+    <script src="_static/sphinx_highlight.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="API Reference" href="api.html" />
+    <link rel="prev" title="Welcome to infinistore’s documentation!" href="index.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <section id="design-and-architecture">
+<h1>Design and Architecture<a class="headerlink" href="#design-and-architecture" title="Permalink to this heading">¶</a></h1>
+<section id="introduction">
+<h2>Introduction<a class="headerlink" href="#introduction" title="Permalink to this heading">¶</a></h2>
+<section id="motivation">
+<h3>Motivation<a class="headerlink" href="#motivation" title="Permalink to this heading">¶</a></h3>
+<p>LLM inference is moving to disaggregated architecture.
+LLM inference is moving from single-instance execution to cluster-level disaggregated architecture. Among all the efforts, prefill-decoding disaggregation is probably the most prominent change. The prefill phase requires more computational power, while the decode phase places a greater demand for memory. With this observation, prefill and decode phase disaggregation is an important aspect to improve inference engine performance.
+In addition to prefill-decode disaggregation, distributed KV cache could also increase the prefix KV cache hit rate, leading to higher GPU resource utilization.
+There are various related papers in this field, and some of them are even already in production:</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>Mooncake: Kimi’s production serving platform. A global KV store is made up of distributed DDR and SSD on each GPU host.</p></li>
+<li><p>Splitwise: A prefill-decode disaggregation system, which requires KV cache transfer between different machines.</p></li>
+<li><p>AttentionStore: Similar to Mooncake but it considers multi-turn conversation inference with positional-encoding separation from KV cache on a single node.</p></li>
+<li><p>MemServe: An elastic memory pool managing distributed memory and KV caches across serving instances.</p></li>
+</ul>
+</div></blockquote>
+<p>We identified many innovative or potential improvements in this transition.
+While analyzing the works above, we identified many potential improvements or new techniques to build a high-performance and scale cluster-level inference system, such as:</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>Improvements on the request schedulers to build a more extensible and scalable scheduler,</p></li>
+<li><p>Integrating with specific inference engine features (like extending the existing APC feature in vLLM),</p></li>
+<li><p>Some new algorithms to better scale the memory pool and re-balance the hot sequences,</p></li>
+<li><p>Exploring some new techniques such as de-coupled positional encoding, etc.</p></li>
+</ul>
+</div></blockquote>
+<p>We are trying to build a high-performance open-source implementation to incorporate all the potential innovations mentioned above, so that different customers don’t have to build their own.</p>
+</section>
+</section>
+<section id="features">
+<h2>Features<a class="headerlink" href="#features" title="Permalink to this heading">¶</a></h2>
+<p>Compared to a single instance vLLM, vLLM + InfiniStore supports the following new features:</p>
+<ul class="simple">
+<li><p>Prefill-decoding architecture</p></li>
+<li><p>Historical KV cache in DRAM and SSD: a much larger pool than the current Automatic Prefix Cache (APC) feature in vLLM which is limited to GPU HBM.</p></li>
+<li><p>Cross-host KV cache: one host can reuse the historical KV cache on another host.</p></li>
+</ul>
+</section>
+<section id="architecture">
+<h2>Architecture<a class="headerlink" href="#architecture" title="Permalink to this heading">¶</a></h2>
+<img alt="_images/arch.png" class="align-center" src="_images/arch.png" />
+<ol class="arabic simple">
+<li><p>Infinistore and vLLM are deployed on the same server, reusing the local CPU and memory resources.</p></li>
+<li><p>The memcopy speed within the same machine is significantly faster than RDMA. It is recommended to use local GPU copy when reading and writing to the local Infinistore.</p></li>
+<li><p>Infinistore uses the traditional key-value structure, supporting variable-length keys. This facilitates storing information like model_id, request, and token hash in the key.
+Since RDMA memory registration is very slow, Infinistore pre-registers memory for RDMA during startup and implements memory management using a memory pool.
+The current memory management algorithms support bitmap or jemalloc, with bitmap being the default.</p></li>
+<li><p>Read and Write Process:</p>
+<ol class="loweralpha simple">
+<li><p>Prefill Stage:
+vLLM writes to the kvcache layer by layer during the prefill stage. Communication methods can be either local GPU copy or RDMA.
+Practical experience shows that the layer-by-layer approach parallelizes network communication and GPU computation. Measurements indicate that during the prefill stage, the network overhead increases by no more than 1%.
+For a demo implementation, refer to: demo_prefill.py</p></li>
+<li><p>Decode Stage:
+In the decode stage, a separate thread in vLLM downloads the kvcache and then notifies the scheduler to start the decoding process.
+Unlike the current community implementation of vLLM, to ensure that network operations do not block the GPU during the decode stage, an additional thread is required to download data.</p></li>
+</ol>
+</li>
+</ol>
+</section>
+<section id="communications">
+<h2>Communications<a class="headerlink" href="#communications" title="Permalink to this heading">¶</a></h2>
+<section id="local-gpu-copy">
+<h3>local gpu copy<a class="headerlink" href="#local-gpu-copy" title="Permalink to this heading">¶</a></h3>
+<img alt="_images/local_gpu_cpy.png" class="align-center" src="_images/local_gpu_cpy.png" />
+</section>
+<section id="rdma-write">
+<h3>rdma write<a class="headerlink" href="#rdma-write" title="Permalink to this heading">¶</a></h3>
+<img alt="_images/rdma_write.png" class="align-center" src="_images/rdma_write.png" />
+</section>
+<section id="rdma-read">
+<h3>rdma read<a class="headerlink" href="#rdma-read" title="Permalink to this heading">¶</a></h3>
+<img alt="_images/rdma_read.png" class="align-center" src="_images/rdma_read.png" />
+</section>
+</section>
+</section>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="index.html">infinistore</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<ul class="current">
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Design and Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api.html">API Reference</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="index.html">Documentation overview</a><ul>
+      <li>Previous: <a href="index.html" title="previous chapter">Welcome to infinistore’s documentation!</a></li>
+      <li>Next: <a href="api.html" title="next chapter">API Reference</a></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &#169;2025, deanraccoon@gmail.com.
+      
+      |
+      Powered by <a href="https://www.sphinx-doc.org/">Sphinx 6.2.1</a>
+      &amp; <a href="https://alabaster.readthedocs.io">Alabaster 0.7.16</a>
+      
+      |
+      <a href="_sources/design.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>
