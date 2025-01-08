@@ -32,8 +32,471 @@
 
           <div class="body" role="main">
             
-  <section id="api-reference">
-<h1>API Reference<a class="headerlink" href="#api-reference" title="Permalink to this heading">¶</a></h1>
+  <section id="module-infinistore">
+<span id="api-reference"></span><h1>API Reference<a class="headerlink" href="#module-infinistore" title="Permalink to this heading">¶</a></h1>
+<dl class="py class">
+<dt class="sig sig-object py" id="infinistore.ClientConfig">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">infinistore.</span></span><span class="sig-name descname"><span class="pre">ClientConfig</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.ClientConfig" title="Permalink to this definition">¶</a></dt>
+<dd><p>ClientConfig is a configuration class for the Infinistore client.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.ClientConfig.connection_type">
+<span class="sig-name descname"><span class="pre">connection_type</span></span><a class="headerlink" href="#infinistore.ClientConfig.connection_type" title="Permalink to this definition">¶</a></dt>
+<dd><p>The type of connection to use (e.g., TYPE_LOCAL_GPU, TYPE_RDMA).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>str</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.ClientConfig.host_addr">
+<span class="sig-name descname"><span class="pre">host_addr</span></span><a class="headerlink" href="#infinistore.ClientConfig.host_addr" title="Permalink to this definition">¶</a></dt>
+<dd><p>The address of the host.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>str</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.ClientConfig.dev_name">
+<span class="sig-name descname"><span class="pre">dev_name</span></span><a class="headerlink" href="#infinistore.ClientConfig.dev_name" title="Permalink to this definition">¶</a></dt>
+<dd><p>The name of the device (default is “mlx5_1”).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>str</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.ClientConfig.ib_port">
+<span class="sig-name descname"><span class="pre">ib_port</span></span><a class="headerlink" href="#infinistore.ClientConfig.ib_port" title="Permalink to this definition">¶</a></dt>
+<dd><p>The port number of the InfiniBand device (default is 1).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.ClientConfig.link_type">
+<span class="sig-name descname"><span class="pre">link_type</span></span><a class="headerlink" href="#infinistore.ClientConfig.link_type" title="Permalink to this definition">¶</a></dt>
+<dd><p>The type of link (default is “IB”).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>str</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.ClientConfig.service_port">
+<span class="sig-name descname"><span class="pre">service_port</span></span><a class="headerlink" href="#infinistore.ClientConfig.service_port" title="Permalink to this definition">¶</a></dt>
+<dd><p>The port number of the service.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.ClientConfig.log_level">
+<span class="sig-name descname"><span class="pre">log_level</span></span><a class="headerlink" href="#infinistore.ClientConfig.log_level" title="Permalink to this definition">¶</a></dt>
+<dd><p>The logging level (default is “warning”).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>str</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="infinistore.DisableTorchCaching">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">infinistore.</span></span><span class="sig-name descname"><span class="pre">DisableTorchCaching</span></span><a class="headerlink" href="#infinistore.DisableTorchCaching" title="Permalink to this definition">¶</a></dt>
+<dd><p>Context manager to disable PyTorch CUDA memory caching.</p>
+<p>When this context manager is entered, it sets the environment variable
+“PYTORCH_NO_CUDA_MEMORY_CACHING” to “1”, which disables CUDA memory caching
+in PyTorch. When the context manager is exited, the environment variable is
+deleted, restoring the default behavior.</p>
+<dl class="simple">
+<dt>Usage:</dt><dd><dl class="simple">
+<dt>with DisableTorchCaching():</dt><dd><p># Your code here</p>
+</dd>
+</dl>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="infinistore.InfinityConnection">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">infinistore.</span></span><span class="sig-name descname"><span class="pre">InfinityConnection</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#infinistore.ClientConfig" title="infinistore.lib.ClientConfig"><span class="pre">ClientConfig</span></a></span></em><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.InfinityConnection" title="Permalink to this definition">¶</a></dt>
+<dd><p>A class to manage connections and data transfers with an Infinistore instance using either local or RDMA connections.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.InfinityConnection.conn">
+<span class="sig-name descname"><span class="pre">conn</span></span><a class="headerlink" href="#infinistore.InfinityConnection.conn" title="Permalink to this definition">¶</a></dt>
+<dd><p>The connection object to the Infinistore instance.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>_infinistore.Connection</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.InfinityConnection.local_connected">
+<span class="sig-name descname"><span class="pre">local_connected</span></span><a class="headerlink" href="#infinistore.InfinityConnection.local_connected" title="Permalink to this definition">¶</a></dt>
+<dd><p>Indicates if connected to a local instance.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>bool</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.InfinityConnection.rdma_connected">
+<span class="sig-name descname"><span class="pre">rdma_connected</span></span><a class="headerlink" href="#infinistore.InfinityConnection.rdma_connected" title="Permalink to this definition">¶</a></dt>
+<dd><p>Indicates if connected to a remote instance via RDMA.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>bool</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.InfinityConnection.config">
+<span class="sig-name descname"><span class="pre">config</span></span><a class="headerlink" href="#infinistore.InfinityConnection.config" title="Permalink to this definition">¶</a></dt>
+<dd><p>Configuration object for the connection.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference internal" href="#infinistore.ClientConfig" title="infinistore.ClientConfig">ClientConfig</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="infinistore.InfinityConnection.allocate_rdma">
+<span class="sig-name descname"><span class="pre">allocate_rdma</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keys</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">page_size_in_bytes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.InfinityConnection.allocate_rdma" title="Permalink to this definition">¶</a></dt>
+<dd><p>Allocates RDMA memory for the given keys. For RDMA writes, user must first allocate RDMA memory.
+and then use the allocated RDMA memory address to write data to the remote memory.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>keys</strong> (<em>List</em><em>[</em><em>str</em><em>]</em>) – A list of keys for which RDMA memory is to be allocated.</p></li>
+<li><p><strong>page_size_in_bytes</strong> (<em>int</em>) – The size of each page in bytes.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A list of allocated RDMA memory addresses.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>List</p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><ul class="simple">
+<li><p><strong>Exception</strong> – If RDMA is not connected.</p></li>
+<li><p><strong>Exception</strong> – If memory allocation fails.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="infinistore.InfinityConnection.check_exist">
+<span class="sig-name descname"><span class="pre">check_exist</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">key</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.InfinityConnection.check_exist" title="Permalink to this definition">¶</a></dt>
+<dd><p>Check if a given key exists in the store.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>key</strong> (<em>str</em>) – The key to check for existence.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>True if the key exists, False otherwise.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>bool</p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>Exception</strong> – If there is an error checking the key’s existence.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="infinistore.InfinityConnection.connect">
+<span class="sig-name descname"><span class="pre">connect</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.InfinityConnection.connect" title="Permalink to this definition">¶</a></dt>
+<dd><p>Establishes a connection to the Infinistore instance based on the configuration.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Raises<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>Exception</strong> – If already connected to a local instance.</p></li>
+<li><p><strong>Exception</strong> – If already connected to a remote instance.</p></li>
+<li><p><strong>Exception</strong> – If failed to initialize remote connection.</p></li>
+<li><p><strong>Exception</strong> – If local GPU connection is not to localhost.</p></li>
+<li><p><strong>Exception</strong> – If failed to setup RDMA connection.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="infinistore.InfinityConnection.get_match_last_index">
+<span class="sig-name descname"><span class="pre">get_match_last_index</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keys</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.InfinityConnection.get_match_last_index" title="Permalink to this definition">¶</a></dt>
+<dd><p>Retrieve the last index of a match for the given keys.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>keys</strong> (<em>List</em><em>[</em><em>str</em><em>]</em>) – A list of string keys to search for matches.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>The last index of a match.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>Exception</strong> – If no match is found (i.e., if the return value is negative).</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="infinistore.InfinityConnection.local_gpu_write_cache">
+<span class="sig-name descname"><span class="pre">local_gpu_write_cache</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cache</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">torch.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">blocks</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">page_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.InfinityConnection.local_gpu_write_cache" title="Permalink to this definition">¶</a></dt>
+<dd><p>Writes a tensor to the local GPU cache.
+:param cache: The tensor to be written to the cache.
+:type cache: torch.Tensor
+:param blocks: A list of tuples where each tuple contains a key and an offset.
+:type blocks: List[Tuple[str, int]]
+:param page_size: The size of each page in the cache.
+:type page_size: int</p>
+<dl class="field-list simple">
+<dt class="field-odd">Raises<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>Exception</strong> – If writing to infinistore fails.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Returns 0 on success.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="infinistore.InfinityConnection.rdma_write_cache">
+<span class="sig-name descname"><span class="pre">rdma_write_cache</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cache</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">torch.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">offsets</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">page_size</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">remote_blocks</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.InfinityConnection.rdma_write_cache" title="Permalink to this definition">¶</a></dt>
+<dd><p>Writes the given cache tensor to remote memory using RDMA (Remote Direct Memory Access).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>cache</strong> (<em>torch.Tensor</em>) – The tensor containing the data to be written to remote memory.</p></li>
+<li><p><strong>offsets</strong> (<em>List</em><em>[</em><em>int</em><em>]</em>) – A list of offsets (in elements) where the data should be written.</p></li>
+<li><p><strong>page_size</strong> (<em>int</em>) – The size of each page to be written, in elements.</p></li>
+<li><p><strong>remote_blocks</strong> (<em>List</em>) – A list of remote memory blocks where the data should be written.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><ul class="simple">
+<li><p><strong>AssertionError</strong> – If RDMA is not connected.</p></li>
+<li><p><strong>Exception</strong> – If the RDMA write operation fails.</p></li>
+</ul>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Returns 0 on success.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="infinistore.InfinityConnection.read_cache">
+<span class="sig-name descname"><span class="pre">read_cache</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cache</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">torch.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">blocks</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">page_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.InfinityConnection.read_cache" title="Permalink to this definition">¶</a></dt>
+<dd><p>Reads data from the cache using either local or RDMA connection.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>cache</strong> (<em>torch.Tensor</em>) – The tensor containing the cache data.</p></li>
+<li><p><strong>blocks</strong> (<em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>int</em><em>]</em><em>]</em>) – A list of tuples where each tuple contains a key and an offset.</p></li>
+<li><p><strong>parameter.</strong> (<em>each pair represents a page to be written to. The page is fixed size and is specified by the page_size</em>) – </p></li>
+<li><p><strong>page_size</strong> (<em>int</em>) – The size of the page to read.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>Exception</strong> – If the read operation fails or if not connected to any instance.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="infinistore.InfinityConnection.register_mr">
+<span class="sig-name descname"><span class="pre">register_mr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cache</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">torch.Tensor</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.InfinityConnection.register_mr" title="Permalink to this definition">¶</a></dt>
+<dd><p>Registers a memory region for RDMA (Remote Direct Memory Access) operations.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>cache</strong> (<em>torch.Tensor</em>) – The tensor whose memory region is to be registered.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A positive integer indicating the registration was successful.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>Exception</strong> – If RDMA is not connected or if the memory region registration fails.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="infinistore.InfinityConnection.sync">
+<span class="sig-name descname"><span class="pre">sync</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.InfinityConnection.sync" title="Permalink to this definition">¶</a></dt>
+<dd><p>Synchronizes the current instance with the connected infinistore instance.
+This method attempts to synchronize the current instance using either a local
+connection or an RDMA connection. If neither connection is available, it raises
+an exception.
+:raises Exception: If not connected to any instance.
+:raises Exception: If synchronization fails with a negative return code.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="infinistore.ServerConfig">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">infinistore.</span></span><span class="sig-name descname"><span class="pre">ServerConfig</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.ServerConfig" title="Permalink to this definition">¶</a></dt>
+<dd><dl class="py class">
+<dt class="sig sig-object py" id="infinistore.ServerConfig.ServerConfig">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">ServerConfig</span></span><a class="headerlink" href="#infinistore.ServerConfig.ServerConfig" title="Permalink to this definition">¶</a></dt>
+<dd><p>ServerConfig is a configuration class for the server settings.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.ServerConfig.ServerConfig.manage_port">
+<span class="sig-name descname"><span class="pre">manage_port</span></span><a class="headerlink" href="#infinistore.ServerConfig.ServerConfig.manage_port" title="Permalink to this definition">¶</a></dt>
+<dd><p>The port used for management. Defaults to 0.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.ServerConfig.ServerConfig.service_port">
+<span class="sig-name descname"><span class="pre">service_port</span></span><a class="headerlink" href="#infinistore.ServerConfig.ServerConfig.service_port" title="Permalink to this definition">¶</a></dt>
+<dd><p>The port used for service. Defaults to 0.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.ServerConfig.ServerConfig.log_level">
+<span class="sig-name descname"><span class="pre">log_level</span></span><a class="headerlink" href="#infinistore.ServerConfig.ServerConfig.log_level" title="Permalink to this definition">¶</a></dt>
+<dd><p>The logging level. Defaults to “warning”.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>str</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.ServerConfig.ServerConfig.dev_name">
+<span class="sig-name descname"><span class="pre">dev_name</span></span><a class="headerlink" href="#infinistore.ServerConfig.ServerConfig.dev_name" title="Permalink to this definition">¶</a></dt>
+<dd><p>The device name. Defaults to “mlx5_1”.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>str</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.ServerConfig.ServerConfig.ib_port">
+<span class="sig-name descname"><span class="pre">ib_port</span></span><a class="headerlink" href="#infinistore.ServerConfig.ServerConfig.ib_port" title="Permalink to this definition">¶</a></dt>
+<dd><p>The InfiniBand port number. Defaults to 1.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.ServerConfig.ServerConfig.link_type">
+<span class="sig-name descname"><span class="pre">link_type</span></span><a class="headerlink" href="#infinistore.ServerConfig.ServerConfig.link_type" title="Permalink to this definition">¶</a></dt>
+<dd><p>The type of link. Defaults to “IB”.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>str</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.ServerConfig.ServerConfig.prealloc_size">
+<span class="sig-name descname"><span class="pre">prealloc_size</span></span><a class="headerlink" href="#infinistore.ServerConfig.ServerConfig.prealloc_size" title="Permalink to this definition">¶</a></dt>
+<dd><p>The preallocation size. Defaults to 16.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.ServerConfig.ServerConfig.minimal_allocate_size">
+<span class="sig-name descname"><span class="pre">minimal_allocate_size</span></span><a class="headerlink" href="#infinistore.ServerConfig.ServerConfig.minimal_allocate_size" title="Permalink to this definition">¶</a></dt>
+<dd><p>The minimal allocation size. Defaults to 64.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="infinistore.ServerConfig.ServerConfig.num_stream">
+<span class="sig-name descname"><span class="pre">num_stream</span></span><a class="headerlink" href="#infinistore.ServerConfig.ServerConfig.num_stream" title="Permalink to this definition">¶</a></dt>
+<dd><p>The number of streams. Defaults to 1.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="infinistore.register_server">
+<span class="sig-prename descclassname"><span class="pre">infinistore.</span></span><span class="sig-name descname"><span class="pre">register_server</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">loop</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#infinistore.ServerConfig" title="infinistore.lib.ServerConfig"><span class="pre">ServerConfig</span></a></span></em><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.register_server" title="Permalink to this definition">¶</a></dt>
+<dd><p>Registers a server with the given event loop and configuration.</p>
+<p>This function is intended to be used internally and should not be called by clients directly.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>loop</strong> – The event loop to register the server with.</p></li>
+<li><p><strong>config</strong> (<a class="reference internal" href="#infinistore.ServerConfig" title="infinistore.ServerConfig"><em>ServerConfig</em></a>) – The configuration for the server.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>Exception</strong> – If the server registration fails.</p>
+</dd>
+</dl>
+</dd></dl>
+
 </section>
 
 
