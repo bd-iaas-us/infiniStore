@@ -1011,6 +1011,26 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, in
 }
 
 int register_mr(connection_t *conn, void *base_ptr, size_t ptr_region_size) {
+    cudaPointerAttributes attr;
+    cudaError_t err = cudaPointerGetAttributes(&attr, base_ptr);
+    if (err == cudaSuccess) {
+        if (attr.type == cudaMemoryTypeDevice) {
+            INFO("try to register device memory");
+        }
+        else if (attr.type == cudaMemoryTypeHost || attr.type == cudaMemoryTypeUnregistered) {
+            INFO("try to register host memory");
+        }
+        else {
+            WARN("the memory type of {} is {}, I do not know if registering on RMDA will be OK",
+                 base_ptr, attr.type);
+            return -1;
+        }
+    }
+    else {
+        ERROR("Failed to get pointer attributes: {}", cudaGetErrorString(err));
+        return -1;
+    }
+
     if (conn->local_mr.count((uintptr_t)base_ptr)) {
         WARN("this memory address is already registered!");
         ibv_dereg_mr(conn->local_mr[(uintptr_t)base_ptr]);

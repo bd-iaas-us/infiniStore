@@ -18,11 +18,11 @@ def generate_random_string(length):
     return random_string
 
 
-def run(conn):
+def run(conn, src_device="cuda:0", dst_device="cuda:2"):
     check_supported()
     with DisableTorchCaching():  # not required if using RDMA
         src_tensor = torch.tensor(
-            [i for i in range(4096)], device="cuda:0", dtype=torch.float32
+            [i for i in range(4096)], device=src_device, dtype=torch.float32
         )
     if conn.rdma_connected:
         conn.register_mr(src_tensor)
@@ -32,7 +32,7 @@ def run(conn):
         remote_addr = conn.allocate_rdma(
             keys, 1024 * 4
         )  # 1024(block_size) * 4(element size)
-        print(f"remote_addr: {remote_addr}")
+        # print(f"remote_addr: {remote_addr}")
     now = time.time()
     if conn.rdma_connected:
         conn.rdma_write_cache(src_tensor, [0, 1024, 2048], 1024, remote_addr)
@@ -47,7 +47,7 @@ def run(conn):
     print(f"sync elapse time is {time.time() - before_sync}")
 
     with DisableTorchCaching():
-        dst_tensor = torch.zeros(4096, device="cuda:2", dtype=torch.float32)
+        dst_tensor = torch.zeros(4096, device=dst_device, dtype=torch.float32)
 
     if conn.rdma_connected:
         conn.register_mr(dst_tensor)
@@ -66,7 +66,7 @@ if __name__ == "__main__":
     config = ClientConfig(
         host_addr="127.0.0.1",
         service_port=12345,
-        log_level="debug",
+        log_level="info",
         connection_type=infinistore.TYPE_RDMA,
         ib_port=1,
         link_type=infinistore.LINK_ETHERNET,
@@ -74,7 +74,15 @@ if __name__ == "__main__":
     )
     rdma_conn = InfinityConnection(config)
     rdma_conn.connect()
-    run(rdma_conn)
+    m = [
+        ("cpu", "cuda:0"),
+        ("cuda:0", "cuda:1"),
+        ("cuda:0", "cpu"),
+        ("cpu", "cpu"),
+    ]
+    for src, dst in m:
+        print(f"rdma connection: {src} -> {dst}")
+        run(rdma_conn, src, dst)
 
     config.connection_type = infinistore.TYPE_LOCAL_GPU
     local_conn = InfinityConnection(config)

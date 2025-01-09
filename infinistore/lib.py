@@ -48,8 +48,11 @@ class ClientConfig(_infinistore.ClientConfig):
             raise Exception("log level should be error, debug, info or warning")
         if self.ib_port < 1:
             raise Exception("ib port of device should be greater than 0")
-        if self.link_type not in ["IB", "Ethernet"]:
-            raise Exception("link type should be IB or Ethernet")
+        if self.connection_type == TYPE_RDMA and self.link_type not in [
+            "IB",
+            "Ethernet",
+        ]:
+            raise Exception("link type should be IB or Ethernet for RDMA connection")
 
 
 class ServerConfig(_infinistore.ServerConfig):
@@ -350,8 +353,8 @@ class InfinityConnection:
         return
 
     def _verify(self, cache: torch.Tensor):
-        if cache.device.type != "cuda":
-            raise Exception("Tensor must be on CUDA device")
+        if (not self.rdma_connected) and cache.device.type != "cuda":
+            raise Exception("Tensor must be on CUDA device for local GPU connection")
         if cache.is_contiguous() is False:
             raise Exception("Tensor must be contiguous")
 
