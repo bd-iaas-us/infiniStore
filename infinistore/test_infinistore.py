@@ -285,3 +285,36 @@ def test_key_not_found(server):
     # expect raise exception
     with pytest.raises(Exception):
         conn.read_cache(src, [(key, 0)], 4096)
+
+
+def test_upload_cpu_download_gpu(server):
+    src_config = infinistore.ClientConfig(
+        host_addr="127.0.0.1",
+        service_port=92345,
+        link_type=infinistore.LINK_ETHERNET,
+        dev_name="mlx5_0",
+        connection_type=infinistore.TYPE_RDMA,
+    )
+    dst_config = infinistore.ClientConfig(
+        host_addr="127.0.0.1",
+        service_port=92345,
+        connection_type=infinistore.TYPE_LOCAL_GPU,
+    )
+    src_conn = infinistore.InfinityConnection(src_config)
+    src_conn.connect()
+
+    key = generate_random_string(5)
+    src = torch.randn(4096, dtype=torch.float32, device="cpu")
+    # NOTE: not orch.cuda.synchronize required for CPU tensor
+    src_conn.register_mr(src)
+    remote_addrs = src_conn.allocate_rdma([key], 4096 * 4)
+    src_conn.rdma_write_cache(src, [0], 4096, remote_addrs)
+    src_conn.sync()
+
+    dst_conn = infinistore.InfinityConnection(dst_config)
+    dst_conn.connect()
+
+    dst = torch.zeros(4096, dtype=torch.float32, device="cuda:0")
+    dst_conn.read_cache(dst, [(key, 0)], 4096)
+    dst_conn.sync()
+    assert torch.equal(src, dst.cpu())
