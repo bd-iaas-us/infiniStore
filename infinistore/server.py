@@ -139,7 +139,7 @@ def main():
         num_stream=args.num_stream,
     )
     config.verify()
-    check_p2p_access()
+    # check_p2p_access()
     check_supported()
 
     Logger.set_log_level(config.log_level)

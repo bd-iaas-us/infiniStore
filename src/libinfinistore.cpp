@@ -273,8 +273,13 @@ int modify_qp_to_init(connection_t *conn) {
 
 int sync_rdma(connection_t *conn) {
     std::unique_lock<std::mutex> lock(conn->mutex);
-    conn->cv.wait_for(lock, std::chrono::seconds(5),
-                      [&conn] { return conn->rdma_inflight_count == 0; });
+    bool ret = conn->cv.wait_for(lock, std::chrono::seconds(5),
+                                 [&conn] { return conn->rdma_inflight_count == 0; });
+
+    if (!ret) {
+        ERROR("timeout to sync RDMA");
+        return -1;
+    }
     return 0;
 }
 
