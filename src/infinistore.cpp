@@ -37,7 +37,8 @@ MM *mm;
 int gidx = 0;
 int lid = -1;
 uint8_t ib_port = -1;
-ibv_mtu active_mtu = IBV_MTU_1024;
+// local active_mtu attr, after exchanging with remote, we will use the min of the two for path.mtu
+ibv_mtu active_mtu;
 
 // PTR is shared by kv_map and inflight_rdma_kv_map
 class PTR : public IntrusivePtrTarget {
@@ -843,15 +844,22 @@ int Client::rdma_exchange() {
     local_info_.psn = lrand48() & 0xffffff;
     local_info_.gid = gid;
     local_info_.lid = lid;
+    local_info_.mtu = (uint32_t)active_mtu;
 
     INFO("gid index: {}", gidx);
     print_rdma_conn_info(&local_info_, false);
     print_rdma_conn_info(&remote_info_, true);
 
+    // update MTU
+    if (remote_info_.mtu != (uint32_t)active_mtu) {
+        WARN("remote MTU: {}, local MTU: {} is not the same, update to minimal MTU",
+             (uint32_t)remote_info_.mtu, (uint32_t)active_mtu);
+    }
+
     // Modify QP to RTR state
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTR;
-    attr.path_mtu = active_mtu;  // FIXME: hard coded
+    attr.path_mtu = (enum ibv_mtu)std::min((uint32_t)active_mtu, (uint32_t)remote_info_.mtu);
     attr.dest_qp_num = remote_info_.qpn;
     attr.rq_psn = remote_info_.psn;
     attr.max_dest_rd_atomic = 4;
