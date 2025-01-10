@@ -75,6 +75,7 @@ typedef struct __attribute__((packed)) rdma_conn_info_t {
     uint32_t psn;
     union ibv_gid gid;  // RoCE v2
     uint16_t lid;       // IB
+    uint32_t mtu;       // peers should have the same mtu
 } rdma_conn_info_t;
 
 #define FIXED_HEADER_SIZE sizeof(header_t)

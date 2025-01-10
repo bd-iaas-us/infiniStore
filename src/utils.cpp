@@ -82,12 +82,12 @@ std::string human_readable_gid(rdma_conn_info_t* info) {
 void print_rdma_conn_info(rdma_conn_info_t* info, bool is_remote) {
     std::string gid_str = human_readable_gid(info);
     if (is_remote) {
-        DEBUG("remote rdma_conn_info: psn: {}, qpn: {}, gid: {}", (uint32_t)info->psn,
-              (uint32_t)info->qpn, gid_str);
+        DEBUG("remote rdma_conn_info: psn: {}, qpn: {}, gid: {}, enum mtu: {}", (uint32_t)info->psn,
+              (uint32_t)info->qpn, gid_str, (uint32_t)info->mtu);
     }
     else {
-        DEBUG("local rdma_conn_info: psn: {}, qpn: {}, gid: {}", (uint32_t)info->psn,
-              (uint32_t)info->qpn, gid_str);
+        DEBUG("local rdma_conn_info: psn: {}, qpn: {}, gid: {}, enum mtu: {}", (uint32_t)info->psn,
+              (uint32_t)info->qpn, gid_str, (uint32_t)info->mtu);
     }
 }
 

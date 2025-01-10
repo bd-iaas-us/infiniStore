@@ -27,7 +27,10 @@ struct Connection {
     int gidx = -1;
     int lid = -1;
     uint8_t ib_port = -1;
-    ibv_mtu active_mtu = IBV_MTU_1024;
+
+    // local active_mtu attr, after exchanging with remote, we will use the min of the two for
+    // path.mtu
+    ibv_mtu active_mtu;
 
     rdma_conn_info_t local_info;
     rdma_conn_info_t remote_info;

@@ -249,6 +249,8 @@ int init_rdma_resources(connection_t *conn, client_config_t config) {
     }
     conn->local_info.lid = conn->lid;
 
+    conn->local_info.mtu = (uint32_t)conn->active_mtu;
+
     print_rdma_conn_info(&conn->local_info, false);
     return 0;
 }
@@ -496,7 +498,15 @@ int modify_qp_to_rtr(connection_t *conn) {
 
     struct ibv_qp_attr attr = {};
     attr.qp_state = IBV_QPS_RTR;
-    attr.path_mtu = conn->active_mtu;
+
+    // update MTU
+    if (conn->remote_info.mtu != conn->active_mtu) {
+        WARN("remote MTU: {}, local MTU: {} is not the same, update to minimal MTU",
+             (uint32_t)conn->remote_info.mtu, (uint32_t)conn->active_mtu);
+    }
+    attr.path_mtu =
+        (enum ibv_mtu)std::min((uint32_t)conn->active_mtu, (uint32_t)conn->remote_info.mtu);
+
     attr.dest_qp_num = remote_info->qpn;
     attr.rq_psn = remote_info->psn;
     attr.max_dest_rd_atomic = 4;
