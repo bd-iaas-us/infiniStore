@@ -30,6 +30,11 @@ def server():
         ]
     )
     time.sleep(4)
+    if server_process.poll() is None:
+        print("Test Server process is running.")
+    else:
+        print("Server process failed to start or has already exited.")
+        assert False
     yield
     os.kill(server_process.pid, signal.SIGINT)
     server_process.wait()
