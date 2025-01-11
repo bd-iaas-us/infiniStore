@@ -1,6 +1,7 @@
 import subprocess
 from setuptools import setup, find_packages, Extension
 from setuptools.command.build_ext import build_ext
+import sys
 
 
 def get_git_commit_count():
@@ -30,10 +31,16 @@ class CustomBuildExt(build_ext):
 
 
 commit_count = get_git_commit_count()
-cpp_extension = Extension(
-    name="infinistore._infinistore",
-    sources=[],
-)
+
+ext_modules = []
+if "bdist_wheel" in sys.argv:
+    # this dummy extension is only for the wheel package
+    # so wheel package will have Python ABI dependency for wheel package.
+    # this is to prevent from strange error when do 'pip install -e .'
+    # fix this error if you have better solution
+    cpp_extension = Extension(name="infinistore.dummy", sources=[])
+    ext_modules = [cpp_extension]
+
 
 setup(
     name="infinistore",
@@ -53,6 +60,6 @@ setup(
             "infinistore=infinistore.server:main",
         ],
     },
-    ext_modules=[cpp_extension],
+    ext_modules=ext_modules,
     zip_safe=False,
 )
