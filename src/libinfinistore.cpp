@@ -1032,7 +1032,7 @@ int register_mr(connection_t *conn, void *base_ptr, size_t ptr_region_size) {
         }
         else {
             WARN("the memory type of {} is {}, I do not know if registering on RMDA will be OK",
-                 base_ptr, attr.type);
+                 base_ptr, (uint32_t)attr.type);
             return -1;
         }
     }
