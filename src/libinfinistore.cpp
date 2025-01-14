@@ -846,7 +846,14 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
     struct ibv_sge sges[max_wr];
 
     size_t num_wr = 0;
+    int skipped = 0;
     for (size_t i = 0; i < remote_blocks_len; i++) {
+        // skip duplicated remote blocks
+        if (is_fake_remote_block(p_remote_blocks[i])) {
+            skipped++;
+            continue;
+        }
+
         sges[num_wr].addr = (uintptr_t)(base_ptr + p_offsets[i]);
         sges[num_wr].length = block_size;
         sges[num_wr].lkey = mr->lkey;
@@ -883,6 +890,21 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
             }
             num_wr = 0;
         }
+    }
+
+    // Check if there are remaining WRs to be sent
+    if (num_wr > 0) {
+        struct ibv_send_wr *bad_wr = nullptr;
+        int ret = conn->post_send(&wrs[0], &bad_wr);
+        if (ret) {
+            ERROR("Failed to post RDMA write");
+            return -1;
+        }
+    }
+
+    if (skipped == remote_blocks_len) {
+        WARN("All remote blocks are faked(keys are duplicated), skip RDMA write");
+        return 0;
     }
 
     conn->rdma_inflight_count++;

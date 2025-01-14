@@ -97,4 +97,7 @@ class FixedBufferAllocator : public Allocator {
     size_t offset_;
 };
 
+const RemoteBlock FAKE_REMOTE_BLOCK = RemoteBlock(0, 0);
+bool is_fake_remote_block(remote_block_t& block);
+
 #endif
