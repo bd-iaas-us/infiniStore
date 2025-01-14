@@ -887,7 +887,14 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
         sges = new struct ibv_sge[max_wr];
     }
 
+    size_t skipped = 0;
     for (size_t i = 0; i < remote_blocks_len; i++) {
+        // skip duplicated remote blocks
+        if (is_fake_remote_block(p_remote_blocks[i])) {
+            skipped++;
+            continue;
+        }
+
         sges[num_wr].addr = (uintptr_t)(base_ptr + p_offsets[i]);
         sges[num_wr].length = block_size;
         sges[num_wr].lkey = mr->lkey;
@@ -948,6 +955,30 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
         }
     }
 
+    // Check if there are remaining WRs to be sent
+    if (num_wr > 0) {
+        if (wr_full) {
+            WARN("WR queue full: push into temp queue, len: {}, first wr_id: {}, last wr_id: {}",
+                 num_wr, wrs[0].wr_id, wrs[num_wr - 1].wr_id);
+            conn->outstanding_rdma_writes_queue.push_back({&wrs[0], &sges[0]});
+        }
+        else {
+            struct ibv_send_wr *bad_wr = nullptr;
+            int ret = ibv_post_send(conn->qp, &wrs[0], &bad_wr);
+            if (ret) {
+                ERROR("Failed to post RDMA write {}", strerror(ret));
+                return -1;
+            }
+        }
+    }
+
+    if (skipped > 0) {
+        WARN("Skipped {} duplicated keys", skipped);
+        if (skipped == remote_blocks_len) {
+            // All keys are duplicated, skip RDMA write
+            return 0;
+        }
+    }
     conn->rdma_inflight_count++;
     DEBUG("rdma_inflight_count: {}", conn->rdma_inflight_count.load());
 

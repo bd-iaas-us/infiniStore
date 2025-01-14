@@ -332,6 +332,15 @@ int Client::allocate_rdma(const RemoteMetaRequest *req) {
                           // FIXME: rdma write should have a msg to update committed to true
 
                           const auto *key = req->keys()->Get(key_idx);
+
+                          if (kv_map.count(key->str()) != 0) {
+                              // WARN("rdma_write: Key already exists: {}", key->str());
+                              // put fake addr, and send to client
+                              blocks.push_back(FAKE_REMOTE_BLOCK);
+                              key_idx++;
+                              return;
+                          }
+
                           auto ptr =
                               boost::intrusive_ptr<PTR>(new PTR(addr, block_size, pool_idx, false));
 
@@ -687,6 +696,8 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
          global_config.num_stream);
 
     void *d_ptr;
+    int return_code = TASK_ACCEPTED;
+
     cudaIpcMemHandle_t ipc_handle = *(cudaIpcMemHandle_t *)meta_req->ipc_handle()->data();
 
     CHECK_CUDA(cudaSetDevice(meta_req->device()));
@@ -720,6 +731,17 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
             auto block = meta_req->blocks()->Get(key_idx);
             DEBUG("key: {}, local_addr: {}, size : {}", block->key()->str(), (uintptr_t)addr,
                   block_size);
+
+            // deduplicate the key
+            const auto &key = block->key()->str();
+            if (kv_map.count(key) != 0) {
+                // this key could be commited or uncommitted, no mather what it is, we should skip
+                // it
+                WARN("local gpu write: Key already exists: {}, skip this key", key);
+                key_idx++;
+                return;
+            }
+
             // we have global_config.num_stream streams, so we need to divide the tasks into streams
             // and interleavely lanch cudaMemcpyAsync
             int stream_idx = key_idx % global_config.num_stream;
@@ -744,12 +766,21 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
              std::chrono::high_resolution_clock::now() - start)
              .count());
 
-    int return_code = TASK_ACCEPTED;
     if (!ret) {
         ERROR("Failed to allocate memory");
         return_code = OUT_OF_MEMORY;
     }
 
+    if (tasks->size() == 0) {
+        // all keys are duplicated, do not start the async tasks
+        send_resp(return_code, NULL, 0);
+        reset_client_read_state();
+        return 0;
+    }
+
+    for (int i = 0; i < global_config.num_stream; i++) {
+        CHECK_CUDA(cudaEventRecord(events[i], cuda_streams[i]));
+    }
     remain_++;
 
     auto *finished = new std::atomic<int>;
@@ -759,6 +790,9 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
         wqueue_data_t *wqueue_data = new wqueue_data_t();
         wqueue_data->client = this;
         wqueue_data->d_ptr = d_ptr;
+
+        // streams share the same tasks, the tasks will be merged into kv_map when all streams are
+        // synced.
         wqueue_data->tasks = tasks;
         wqueue_data->finished = finished;
         wqueue_data->task_id = i;
@@ -772,7 +806,6 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
     }
 
     send_resp(return_code, NULL, 0);
-
     reset_client_read_state();
 
     return 0;
