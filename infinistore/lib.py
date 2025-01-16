@@ -301,7 +301,7 @@ class InfinityConnection:
         device_id = cache.device.index
         cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
         if len(cuda_visible_devices) > 0:
-            device_id = int(cuda_visible_devices.split(",")[cache.device.index])    
+            device_id = int(cuda_visible_devices.split(",")[cache.device.index])
         if self.local_connected:
             ret = _infinistore.rw_local(
                 self.conn,
