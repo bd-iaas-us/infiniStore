@@ -271,8 +271,10 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
             }
             else if (wc.opcode ==
                      IBV_WC_RECV_RDMA_WITH_IMM) {  // write cache: we alreay have all data now.
-                INFO("write cache completed successfully, #keys {} saved", wc.imm_data);
-                INFO("ready for next request");
+
+                // client should not use WRITE_WITH_IMM to notify.
+                // it should use COMMIT message to notify.
+                WARN("WRITE_WITH_IMM is not supported in server side");
                 if (prepare_recv_rdma_request(wc.wr_id) < 0) {
                     ERROR("Failed to prepare recv rdma request");
                     return;

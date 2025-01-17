@@ -953,10 +953,16 @@ int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, voi
     conn->rdma_inflight_count++;
 
     // recv ACK for whole batch.
+    struct ibv_sge recv_sge = {
+        .addr = (uintptr_t)conn->recv_buffer,
+        .length = 0,
+        .lkey = conn->recv_mr->lkey,
+    };
     struct ibv_recv_wr recv_wr = {
-        .wr_id = (uintptr_t)mr,
-        .sg_list = NULL,
-        .num_sge = 0,
+        .wr_id = 0,
+        .next = NULL,
+        .sg_list = &recv_sge,
+        .num_sge = 1,
     };
 
     struct ibv_recv_wr *bad_wr_recv = NULL;
