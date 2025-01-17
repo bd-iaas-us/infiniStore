@@ -20,6 +20,24 @@
 #include "protocol.h"
 #include "utils.h"
 
+SendBuffer::SendBuffer(struct ibv_pd *pd, size_t size) {
+    if (posix_memalign(&buffer_, 4096, PROTOCOL_BUFFER_SIZE) != 0) {
+        assert(false);
+    }
+    mr_ = ibv_reg_mr(pd, buffer_, PROTOCOL_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
+    assert(mr_ != NULL);
+}
+
+SendBuffer::~SendBuffer() {
+    DEBUG("destroying send buffer");
+    if (mr_) {
+        ibv_dereg_mr(mr_);
+    }
+    if (buffer_) {
+        free(buffer_);
+    }
+}
+
 int Connection::post_send(struct ibv_send_wr *send_wr, struct ibv_send_wr **bad_wr) {
     std::unique_lock<std::mutex> lock(rdma_post_send_mutex);
     return ibv_post_send(qp, send_wr, bad_wr);
@@ -69,25 +87,16 @@ Connection::~Connection() {
     }
     local_mr.clear();
 
-    if (send_mr) {
-        ibv_dereg_mr(send_mr);
-    }
     if (recv_mr) {
         ibv_dereg_mr(recv_mr);
     }
-    if (send_buffer) {
-        free(send_buffer);
-    }
+
     if (recv_buffer) {
         free(recv_buffer);
     }
 
-    if (cq_send_mr) {
-        ibv_dereg_mr(cq_send_mr);
-    }
-
-    if (cq_send_buffer) {
-        free(cq_send_buffer);
+    for (auto *buffer : send_buffers) {
+        delete buffer;
     }
 
     if (qp) {
@@ -207,7 +216,7 @@ int init_rdma_resources(connection_t *conn, client_config_t config) {
     }
 
     // Create Completion Queue
-    conn->cq = ibv_create_cq(conn->ib_ctx, MAX_WR * 2, NULL, conn->comp_channel, 0);
+    conn->cq = ibv_create_cq(conn->ib_ctx, MAX_SEND_WR + MAX_RECV_WR, NULL, conn->comp_channel, 0);
     if (!conn->cq) {
         ERROR("Failed to create CQ");
         return -1;
@@ -224,8 +233,8 @@ int init_rdma_resources(connection_t *conn, client_config_t config) {
     qp_init_attr.send_cq = conn->cq;
     qp_init_attr.recv_cq = conn->cq;
     qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
-    qp_init_attr.cap.max_send_wr = MAX_WR;
-    qp_init_attr.cap.max_recv_wr = MAX_WR;
+    qp_init_attr.cap.max_send_wr = MAX_SEND_WR;
+    qp_init_attr.cap.max_recv_wr = MAX_RECV_WR;
     qp_init_attr.cap.max_send_sge = 1;
     qp_init_attr.cap.max_recv_sge = 1;
 
@@ -312,9 +321,11 @@ void cq_handler(connection_t *conn) {
                         return;
                     }
 
-                    if (wc[i].opcode == IBV_WC_SEND) {  // read cache/allocate msg: request sent
+                    if (wc[i].opcode ==
+                        IBV_WC_SEND) {  // read cache/allocate msg/commit msg: request sent
                         DEBUG("read cache/allocated/commit msg request send{}, ",
                               (uintptr_t)wc[i].wr_id);
+                        release_send_buffer(conn, (SendBuffer *)wc[i].wr_id);
                     }
                     else if (wc[i].opcode == IBV_WC_RECV) {  // allocate msg recved.
                         DEBUG("rdma allocated recv {}", (uintptr_t)wc[i].wr_id);
@@ -331,7 +342,8 @@ void cq_handler(connection_t *conn) {
                         INFO("write cache completed");
                         assert(wc[i].wr_id != 0);
 
-                        FixedBufferAllocator allocator(conn->cq_send_buffer, PROTOCOL_BUFFER_SIZE);
+                        SendBuffer *send_buffer = get_send_buffer(conn);
+                        FixedBufferAllocator allocator(send_buffer->buffer_, PROTOCOL_BUFFER_SIZE);
                         FlatBufferBuilder builder(64 << 10, &allocator);
                         auto *info = reinterpret_cast<std::vector<uintptr_t> *>(wc[i].wr_id);
                         auto remote_addrs_offset = builder.CreateVector(*info);
@@ -347,9 +359,9 @@ void cq_handler(connection_t *conn) {
 
                         sge.addr = (uintptr_t)builder.GetBufferPointer();
                         sge.length = builder.GetSize();
-                        sge.lkey = conn->cq_send_mr->lkey;
+                        sge.lkey = send_buffer->mr_->lkey;
 
-                        wr.wr_id = 0;
+                        wr.wr_id = (uintptr_t)send_buffer;
                         wr.opcode = IBV_WR_SEND;
                         wr.sg_list = &sge;
                         wr.num_sge = 1;
@@ -388,6 +400,25 @@ void cq_handler(connection_t *conn) {
     }
 }
 
+SendBuffer *get_send_buffer(connection_t *conn) {
+    std::unique_lock<std::mutex> lock(conn->send_buffer_mutex);
+
+    /*
+    if send buffer list is empty,we just report error, and return NULL
+    normal user should not have too many inflight requests, so we just report error
+    */
+    assert(!conn->send_buffers.empty());
+
+    SendBuffer *buffer = conn->send_buffers.front();
+    conn->send_buffers.pop_front();
+    return buffer;
+}
+
+void release_send_buffer(connection_t *conn, SendBuffer *buffer) {
+    std::unique_lock<std::mutex> lock(conn->send_buffer_mutex);
+    conn->send_buffers.push_back(buffer);
+}
+
 int setup_rdma(connection_t *conn, client_config_t config) {
     if (init_rdma_resources(conn, config) < 0) {
         ERROR("Failed to initialize RDMA resources");
@@ -416,34 +447,6 @@ int setup_rdma(connection_t *conn, client_config_t config) {
         return -1;
     }
 
-    if (posix_memalign(&conn->send_buffer, 4096, PROTOCOL_BUFFER_SIZE) != 0) {
-        ERROR("Failed to allocate recv buffer");
-        delete conn;
-        return -1;
-    }
-
-    conn->send_mr =
-        ibv_reg_mr(conn->pd, conn->send_buffer, PROTOCOL_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
-    if (!conn->send_mr) {
-        ERROR("Failed to register send MR");
-        delete conn;
-        return -1;
-    }
-
-    if (posix_memalign(&conn->cq_send_buffer, 4096, PROTOCOL_BUFFER_SIZE) != 0) {
-        ERROR("Failed to allocate cq send buffer");
-        delete conn;
-        return -1;
-    }
-
-    conn->cq_send_mr =
-        ibv_reg_mr(conn->pd, conn->cq_send_buffer, PROTOCOL_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
-    if (!conn->cq_send_mr) {
-        ERROR("Failed to register cq send MR");
-        delete conn;
-        return -1;
-    }
-
     if (posix_memalign(&conn->recv_buffer, 4096, PROTOCOL_BUFFER_SIZE) != 0) {
         ERROR("Failed to allocate recv buffer");
         delete conn;
@@ -455,6 +458,14 @@ int setup_rdma(connection_t *conn, client_config_t config) {
         ERROR("Failed to register recv MR");
         delete conn;
         return -1;
+    }
+
+    /*
+    This is MAX_RECV_WR not MAX_SEND_WR,
+    because server also has the same number of buffers
+    */
+    for (int i = 0; i < MAX_RECV_WR; i++) {
+        conn->send_buffers.push_back(new SendBuffer(conn->pd, PROTOCOL_BUFFER_SIZE));
     }
 
     conn->rdma_inflight_count = 0;
@@ -735,7 +746,9 @@ int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_
     }
     */
 
-    FixedBufferAllocator allocator(conn->send_buffer, PROTOCOL_BUFFER_SIZE);
+    SendBuffer *send_buffer = get_send_buffer(conn);
+
+    FixedBufferAllocator allocator(send_buffer->buffer_, PROTOCOL_BUFFER_SIZE);
     FlatBufferBuilder builder(64 << 10, &allocator);
     auto keys_offset = builder.CreateVectorOfStrings(keys);
 
@@ -750,9 +763,9 @@ int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_
 
     sge.addr = (uintptr_t)builder.GetBufferPointer();
     sge.length = builder.GetSize();
-    sge.lkey = conn->send_mr->lkey;
+    sge.lkey = send_buffer->mr_->lkey;
 
-    wr.wr_id = 0;
+    wr.wr_id = (uintptr_t)send_buffer;
     wr.opcode = IBV_WR_SEND;
     wr.sg_list = &sge;
     wr.num_sge = 1;
@@ -906,7 +919,8 @@ int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, voi
         .op = OP_RDMA_READ,
     }
     */
-    FixedBufferAllocator allocator(conn->send_buffer, PROTOCOL_BUFFER_SIZE);
+    SendBuffer *send_buffer = get_send_buffer(conn);
+    FixedBufferAllocator allocator(send_buffer->buffer_, PROTOCOL_BUFFER_SIZE);
     FlatBufferBuilder builder(64 << 10, &allocator);
 
     auto keys_offset = builder.CreateVectorOfStrings(keys);
@@ -920,12 +934,12 @@ int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, voi
     struct ibv_sge sge = {0};
     sge.addr = (uintptr_t)builder.GetBufferPointer();
     sge.length = builder.GetSize();
-    sge.lkey = conn->send_mr->lkey;
+    sge.lkey = send_buffer->mr_->lkey;
 
     struct ibv_send_wr wr = {0};
     struct ibv_send_wr *bad_wr = NULL;
-    // FIXME:
-    wr.wr_id = 1234;
+
+    wr.wr_id = (uintptr_t)send_buffer;
     wr.opcode = IBV_WR_SEND;
     wr.sg_list = &sge;
     wr.num_sge = 1;
