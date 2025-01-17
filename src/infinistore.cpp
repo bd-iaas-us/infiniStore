@@ -858,7 +858,7 @@ int Client::rdma_exchange() {
     // update MTU
     if (remote_info_.mtu != (uint32_t)active_mtu) {
         WARN("remote MTU: {}, local MTU: {} is not the same, update to minimal MTU",
-            1 << ((uint32_t)remote_info_.mtu + 7), 1 << ((uint32_t)active_mtu + 7));
+             1 << ((uint32_t)remote_info_.mtu + 7), 1 << ((uint32_t)active_mtu + 7));
     }
 
     // Modify QP to RTR state
