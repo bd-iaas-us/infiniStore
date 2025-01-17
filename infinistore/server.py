@@ -1,11 +1,11 @@
-from .lib import (
+from infinistore.lib import (
     register_server,
     check_supported,
     ServerConfig,
     Logger,
 )
 
-from ._infinistore import get_kvmap_len
+from infinistore._infinistore import get_kvmap_len
 
 import asyncio
 import uvloop

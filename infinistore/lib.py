@@ -1,4 +1,7 @@
-from . import _infinistore
+import infinistore._infinistore as _infinistore
+
+# sphinx-doc will mock infinistore._infinistore, it has to be written like this
+
 import torch
 import os
 from typing import List, Tuple
@@ -14,6 +17,19 @@ LINK_IB = "IB"
 
 
 class ClientConfig(_infinistore.ClientConfig):
+    """
+    ClientConfig is a configuration class for the Infinistore client.
+
+    Attributes:
+        connection_type (str): The type of connection to use (e.g., TYPE_LOCAL_GPU, TYPE_RDMA).
+        host_addr (str): The address of the host.
+        dev_name (str): The name of the device (default is "mlx5_1").
+        ib_port (int): The port number of the InfiniBand device (default is 1).
+        link_type (str): The type of link (default is "IB").
+        service_port (int): The port number of the service.
+        log_level (str): The logging level (default is "warning").
+    """
+
     def __init__(self, **kwargs):
         super().__init__()
         self.connection_type = kwargs.get("connection_type", None)
@@ -56,6 +72,22 @@ class ClientConfig(_infinistore.ClientConfig):
 
 
 class ServerConfig(_infinistore.ServerConfig):
+    class ServerConfig:
+        """
+        ServerConfig is a configuration class for the server settings.
+
+        Attributes:
+            manage_port (int): The port used for management. Defaults to 0.
+            service_port (int): The port used for service. Defaults to 0.
+            log_level (str): The logging level. Defaults to "warning".
+            dev_name (str): The device name. Defaults to "mlx5_1".
+            ib_port (int): The InfiniBand port number. Defaults to 1.
+            link_type (str): The type of link. Defaults to "IB".
+            prealloc_size (int): The preallocation size. Defaults to 16.
+            minimal_allocate_size (int): The minimal allocation size. Defaults to 64.
+            num_stream (int): The number of streams. Defaults to 1.
+        """
+
     def __init__(self, **kwargs):
         super().__init__()
         self.manage_port = kwargs.get("manage_port", 0)
@@ -116,13 +148,16 @@ class Logger:
 
 def register_server(loop, config: ServerConfig):
     """
-    Registers a server with the given event loop.
+    Registers a server with the given event loop and configuration.
 
-    This function is intended for internal use only and should not be called by clients.
+    This function is intended to be used internally and should not be called by clients directly.
 
     Args:
         loop: The event loop to register the server with.
+        config (ServerConfig): The configuration for the server.
 
+    Raises:
+        Exception: If the server registration fails.
     """
     # client does not need to call this function
     from uvloop.loop import libuv_get_loop_t_ptr
@@ -187,6 +222,19 @@ def check_supported():
 
 
 class DisableTorchCaching:
+    """
+    Context manager to disable PyTorch CUDA memory caching.
+
+    When this context manager is entered, it sets the environment variable
+    "PYTORCH_NO_CUDA_MEMORY_CACHING" to "1", which disables CUDA memory caching
+    in PyTorch. When the context manager is exited, the environment variable is
+    deleted, restoring the default behavior.
+
+    Usage:
+        with DisableTorchCaching():
+            # Your code here
+    """
+
     def __enter__(self):
         os.environ["PYTORCH_NO_CUDA_MEMORY_CACHING"] = "1"
         return self
@@ -197,6 +245,16 @@ class DisableTorchCaching:
 
 
 class InfinityConnection:
+    """
+    A class to manage connections and data transfers with an Infinistore instance using either local or RDMA connections.
+
+    Attributes:
+        conn (_infinistore.Connection): The connection object to the Infinistore instance.
+        local_connected (bool): Indicates if connected to a local instance.
+        rdma_connected (bool): Indicates if connected to a remote instance via RDMA.
+        config (ClientConfig): Configuration object for the connection.
+    """
+
     OP_R = "R"
     OP_W = "W"
     OP_SYNC = "S"
@@ -212,7 +270,14 @@ class InfinityConnection:
 
     def connect(self):
         """
-        Establishes an RDMA connection using the provided IP address.
+        Establishes a connection to the Infinistore instance based on the configuration.
+
+        Raises:
+            Exception: If already connected to a local instance.
+            Exception: If already connected to a remote instance.
+            Exception: If failed to initialize remote connection.
+            Exception: If local GPU connection is not to localhost.
+            Exception: If failed to setup RDMA connection.
         """
         if self.local_connected:
             raise Exception("Already connected to local instance")
@@ -235,6 +300,18 @@ class InfinityConnection:
     def local_gpu_write_cache(
         self, cache: torch.Tensor, blocks: List[Tuple[str, int]], page_size: int
     ):
+        """
+        Writes a tensor to the local GPU cache.
+        Args:
+            cache (torch.Tensor): The tensor to be written to the cache.
+            blocks (List[Tuple[str, int]]): A list of tuples where each tuple contains a key and an offset.
+            page_size (int): The size of each page in the cache.
+        Raises:
+            Exception: If writing to infinistore fails.
+        Returns:
+            int: Returns 0 on success.
+        """
+
         self._verify(cache)
         ptr = cache.data_ptr()
         element_size = cache.element_size()
@@ -259,7 +336,23 @@ class InfinityConnection:
     def rdma_write_cache(
         self, cache: torch.Tensor, offsets: List[int], page_size, remote_blocks: List
     ):
-        """ """
+        """
+        Writes the given cache tensor to remote memory using RDMA (Remote Direct Memory Access).
+
+        Args:
+            cache (torch.Tensor): The tensor containing the data to be written to remote memory.
+            offsets (List[int]): A list of offsets (in elements) where the data should be written.
+            page_size (int): The size of each page to be written, in elements.
+            remote_blocks (List): A list of remote memory blocks where the data should be written.
+
+        Raises:
+            AssertionError: If RDMA is not connected.
+            Exception: If the RDMA write operation fails.
+
+        Returns:
+            int: Returns 0 on success.
+        """
+
         assert self.rdma_connected
         self._verify(cache)
         ptr = cache.data_ptr()
@@ -367,18 +460,54 @@ class InfinityConnection:
             raise Exception("Tensor must be contiguous")
 
     def check_exist(self, key: str):
+        """
+        Check if a given key exists in the store.
+
+        Args:
+            key (str): The key to check for existence.
+
+        Returns:
+            bool: True if the key exists, False otherwise.
+
+        Raises:
+            Exception: If there is an error checking the key's existence.
+        """
         ret = _infinistore.check_exist(self.conn, key)
         if ret < 0:
             raise Exception("Failed to check if this key exists")
         return True if ret == 0 else False
 
     def get_match_last_index(self, keys: List[str]):
+        """
+        Retrieve the last index of a match for the given keys.
+
+        Args:
+            keys (List[str]): A list of string keys to search for matches.
+
+        Returns:
+            int: The last index of a match.
+
+        Raises:
+            Exception: If no match is found (i.e., if the return value is negative).
+        """
         ret = _infinistore.get_match_last_index(self.conn, keys)
         if ret < 0:
             raise Exception("can't find a match")
         return ret
 
     def register_mr(self, cache: torch.Tensor):
+        """
+        Registers a memory region for RDMA (Remote Direct Memory Access) operations.
+
+        Args:
+            cache (torch.Tensor): The tensor whose memory region is to be registered.
+
+        Returns:
+            int: A positive integer indicating the registration was successful.
+
+        Raises:
+            Exception: If RDMA is not connected or if the memory region registration fails.
+        """
         self._verify(cache)
         ptr = cache.data_ptr()
         element_size = cache.element_size()
@@ -390,6 +519,21 @@ class InfinityConnection:
         return ret
 
     def allocate_rdma(self, keys: List[str], page_size_in_bytes: int):
+        """
+        Allocates RDMA memory for the given keys. For RDMA writes, user must first allocate RDMA memory.
+        and then use the allocated RDMA memory address to write data to the remote memory.
+
+        Args:
+            keys (List[str]): A list of keys for which RDMA memory is to be allocated.
+            page_size_in_bytes (int): The size of each page in bytes.
+
+        Returns:
+            List: A list of allocated RDMA memory addresses.
+
+        Raises:
+            Exception: If RDMA is not connected.
+            Exception: If memory allocation fails.
+        """
         if not self.rdma_connected:
             raise Exception("this function is only valid for connected rdma")
         ret = _infinistore.allocate_rdma(self.conn, keys, page_size_in_bytes)
