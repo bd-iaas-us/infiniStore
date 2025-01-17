@@ -19,7 +19,11 @@
 
 using namespace flatbuffers;
 
-#define MAX_WR 8192
+// this number should be big for lots of RMDA_WRITE requests
+#define MAX_SEND_WR 8192
+// this is only used for recving RDMA_SEND or IMM data. this should be bigger than max layers of
+// model.
+#define MAX_RECV_WR 64
 
 #define MAGIC 0xdeadbeef
 #define MAGIC_SIZE 4

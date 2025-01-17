@@ -1,3 +1,5 @@
+# python benchmark.py --service-port 12345 --dev-name mlx5_0 --link-type Ethernet --size 100 --block-size 32 --src-gpu 1 --dst-gpu  0 --iteration 1 --rdma
+
 import infinistore
 import torch
 import time
@@ -117,6 +119,7 @@ def run(args):
 
     block_size = args.block_size * 1024 // 4
     num_of_blocks = args.size * 1024 * 1024 // (args.block_size * 1024)
+    keys = [generate_random_string(250) for i in range(num_of_blocks)]
     with infinistore.DisableTorchCaching():
         src_tensor = torch.rand(
             num_of_blocks * block_size, device=src_device, dtype=torch.float32
@@ -127,36 +130,56 @@ def run(args):
             num_of_blocks * block_size, device=dst_device, dtype=torch.float32
         )
 
+    torch.cuda.synchronize(src_tensor.device)
+    torch.cuda.synchronize(dst_tensor.device)
     if args.rdma:
         conn.register_mr(src_tensor)
         conn.register_mr(dst_tensor)
+
+    offset_blocks = [i * block_size for i in range(num_of_blocks)]
+
+    # zip keys and offset_blocks
+    blocks = list(zip(keys, offset_blocks))
 
     # blocks = [(keys[i], offset_blocks[i]) for i in range(num_of_blocks)]
     write_sum = 0.0
     read_sum = 0.0
 
     for _ in range(args.iteration):
-        keys = [generate_random_string(250) for i in range(num_of_blocks)]
-        offset_blocks = [i * block_size for i in range(num_of_blocks)]
-        # zip keys and offset_blocks
-        blocks = list(zip(keys, offset_blocks))
         if args.rdma:
             remote_addrs = conn.allocate_rdma(keys, block_size * 4)
 
-        start = time.time()
-        if args.rdma:
-            conn.rdma_write_cache(src_tensor, offset_blocks, block_size, remote_addrs)
-        else:
-            conn.local_gpu_write_cache(src_tensor, blocks, block_size)
+        steps = int(
+            32
+        )  # simulate we have <steps> layers, this steps should be less then MAX_WR_SIZE
+        while len(blocks) % steps != 0 and steps > 1:
+            steps = int(steps / 2)
+        print(f"\nSimulate {steps} layers, running\n")
+        # how many blocks to write in each step
+        n = int(len(blocks) / steps)
 
-        print(f"write_cache takes {time.time() - start} seconds")
-        start_before_sync = time.time()
+        start = time.time()
+
+        for i in range(steps):
+            if args.rdma:
+                conn.rdma_write_cache(
+                    src_tensor,
+                    offset_blocks[i * n : i * n + n],
+                    block_size,
+                    remote_addrs[i * n : i * n + n],
+                )
+            else:
+                conn.local_gpu_write_cache(
+                    src_tensor, blocks[i * n : i * n + n], block_size
+                )
         conn.sync()
-        print(f"write sync takes {time.time() - start_before_sync} seconds")
+        # print(f"write  takes {time.time() - start} seconds")
+
         mid = time.time()
         write_sum += mid - start
+        for i in range(steps):
+            conn.read_cache(dst_tensor, blocks[i * n : i * n + n], block_size)
 
-        conn.read_cache(dst_tensor, blocks, block_size)
         conn.sync()
         end = time.time()
         read_sum += end - mid
@@ -172,6 +195,8 @@ def run(args):
             args.size * args.iteration / read_sum,
         )
     )
+
+    assert torch.equal(src_tensor.cpu(), dst_tensor.cpu())
 
 
 if __name__ == "__main__":

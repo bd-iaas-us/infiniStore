@@ -8,12 +8,25 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <deque>
 #include <future>
 #include <map>
 
 #include "config.h"
 #include "log.h"
 #include "protocol.h"
+
+// RDMA send buffer
+// because write_cache will be invoked asynchronously,
+// so each request will have a standalone send buffer.
+struct SendBuffer {
+    void *buffer_ = NULL;
+    struct ibv_mr *mr_ = NULL;
+
+    SendBuffer(struct ibv_pd *pd, size_t size);
+    SendBuffer(const SendBuffer &) = delete;
+    ~SendBuffer();
+};
 
 struct Connection {
     // tcp socket
@@ -37,15 +50,15 @@ struct Connection {
 
     std::unordered_map<uintptr_t, struct ibv_mr *> local_mr;
 
-    void *send_buffer = NULL;
-    struct ibv_mr *send_mr = NULL;
+    std::mutex send_buffer_mutex;
+    std::deque<SendBuffer *> send_buffers;
 
+    // this recv buffer is used in
+    // 1. allocate rdma
+    // 2. recv IMM data, althougth IMM DATA is not put into recv_buffer,
+    // but for compatibility, we still use a zero-length recv_buffer.
     void *recv_buffer = NULL;
     struct ibv_mr *recv_mr = NULL;
-
-    // this buffer is used for cq_handler thread to send RDMA COMMIT msg only.
-    void *cq_send_buffer = NULL;
-    struct ibv_mr *cq_send_mr = NULL;
 
     struct ibv_comp_channel *comp_channel = NULL;
     std::future<void> cq_future;  // cq thread
@@ -89,5 +102,9 @@ int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_
 int check_exist(connection_t *conn, std::string key);
 int get_match_last_index(connection_t *conn, std::vector<std::string>);
 int register_mr(connection_t *conn, void *base_ptr, size_t ptr_region_size);
+
+// TODO: refactor to c++ style
+SendBuffer *get_send_buffer(connection_t *conn);
+void release_send_buffer(connection_t *conn, SendBuffer *buffer);
 
 #endif  // LIBINFINISTORE_H

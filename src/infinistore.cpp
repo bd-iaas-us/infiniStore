@@ -87,8 +87,8 @@ struct Client {
     header_t header_;
 
     // RDMA recv buffer
-    char *recv_buffer_ = NULL;
-    struct ibv_mr *recv_mr_ = NULL;
+    char *recv_buffer_[MAX_RECV_WR];
+    struct ibv_mr *recv_mr_[MAX_RECV_WR];
 
     // RDMA send buffer
     char *send_buffer_ = NULL;
@@ -131,7 +131,7 @@ struct Client {
     int check_key(const std::string &key_to_check);
     int get_match_last_index(const GetMatchLastIndexRequest *request);
     int rdma_exchange();
-    int prepare_recv_rdma_request();
+    int prepare_recv_rdma_request(int buf_idx);
 };
 
 typedef struct Client client_t;
@@ -146,18 +146,19 @@ Client::~Client() {
         free(handle_);
         handle_ = NULL;
     }
-    if (recv_mr_) {
-        ibv_dereg_mr(recv_mr_);
-        recv_mr_ = NULL;
-    }
+
     if (send_mr_) {
         ibv_dereg_mr(send_mr_);
         send_mr_ = NULL;
     }
-    if (recv_buffer_) {
-        free(recv_buffer_);
-        recv_buffer_ = NULL;
+
+    for (int i = 0; i < MAX_RECV_WR; i++) {
+        if (recv_buffer_[i]) {
+            free(recv_buffer_[i]);
+            ibv_dereg_mr(recv_mr_[i]);
+        }
     }
+
     if (send_buffer_) {
         free(send_buffer_);
         send_buffer_ = NULL;
@@ -220,7 +221,7 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
         if (wc.status == IBV_WC_SUCCESS) {
             if (wc.opcode == IBV_WC_RECV) {  // recv RDMA read/write request
                 INFO("RDMA Send completed successfully, recved {}", wc.byte_len);
-                const RemoteMetaRequest *request = GetRemoteMetaRequest(recv_buffer_);
+                const RemoteMetaRequest *request = GetRemoteMetaRequest(recv_buffer_[wc.wr_id]);
 
                 INFO("Received remote meta request OP {}", op_name(request->op()));
 
@@ -245,7 +246,7 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                         for (auto addr : *request->remote_addrs()) {
                             auto it = inflight_rdma_kv_map.find(addr);
                             if (it == inflight_rdma_kv_map.end()) {
-                                ERROR("Key not found: {}", addr);
+                                ERROR("commit msg: Key not found: {}", addr);
                                 continue;
                             }
                             it->second->committed = true;
@@ -260,7 +261,7 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                 }
 
                 INFO("ready for next request");
-                if (prepare_recv_rdma_request() < 0) {
+                if (prepare_recv_rdma_request(wc.wr_id) < 0) {
                     ERROR("Failed to prepare recv rdma request");
                     return;
                 }
@@ -272,7 +273,7 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                      IBV_WC_RECV_RDMA_WITH_IMM) {  // write cache: we alreay have all data now.
                 INFO("write cache completed successfully, #keys {} saved", wc.imm_data);
                 INFO("ready for next request");
-                if (prepare_recv_rdma_request() < 0) {
+                if (prepare_recv_rdma_request(wc.wr_id) < 0) {
                     ERROR("Failed to prepare recv rdma request");
                     return;
                 }
@@ -347,15 +348,15 @@ int Client::allocate_rdma(const RemoteMetaRequest *req) {
     return 0;
 }
 
-int Client::prepare_recv_rdma_request() {
+int Client::prepare_recv_rdma_request(int buf_idx) {
     struct ibv_sge sge = {0};
     struct ibv_recv_wr rwr = {0};
     struct ibv_recv_wr *bad_wr = NULL;
-    sge.addr = (uintptr_t)recv_buffer_;
+    sge.addr = (uintptr_t)(recv_buffer_[buf_idx]);
     sge.length = PROTOCOL_BUFFER_SIZE;
-    sge.lkey = recv_mr_->lkey;
+    sge.lkey = recv_mr_[buf_idx]->lkey;
 
-    rwr.wr_id = (uint64_t)recv_buffer_;
+    rwr.wr_id = buf_idx;
     rwr.next = NULL;
     rwr.sg_list = &sge;
     rwr.num_sge = 1;
@@ -426,7 +427,7 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
             struct ibv_send_wr *bad_wr = nullptr;
             int ret = ibv_post_send(qp_, &wrs[0], &bad_wr);
             if (ret) {
-                ERROR("Failed to post RDMA write");
+                ERROR("Failed to post RDMA write {}", strerror(ret));
                 return -1;
             }
             num_wr = 0;  // Reset the counter for the next batch
@@ -497,6 +498,7 @@ void wait_for_ipc_close_completion(uv_work_t *req) {
         // closing ipc handle is slow, so we put it here
         CHECK_CUDA(cudaIpcCloseMemHandle(wqueue_data->d_ptr));
     }
+
     DEBUG("task_id {}, wait_for_ipc_close_completion done", wqueue_data->task_id);
 }
 
@@ -507,7 +509,7 @@ void after_ipc_close_completion(uv_work_t *req, int status) {
         wqueue_data->client->remain_--;
 
         // merge vectors into kv_map
-        INFO("async local gpu read/write tasks done");
+        DEBUG("async local gpu read/write tasks done");
         if (wqueue_data->tasks != NULL) {
             for (auto &task : *wqueue_data->tasks) {
                 kv_map[task.key] = task.ptr;
@@ -673,7 +675,7 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
         CHECK_CUDA(cudaEventRecord(events[i], cuda_streams[i]));
     }
 
-    INFO("allocate memory time: {} micro seconds",
+    INFO("local gpu write:allocate memory time: {} micro seconds",
          std::chrono::duration_cast<std::chrono::microseconds>(
              std::chrono::high_resolution_clock::now() - start)
              .count());
@@ -797,7 +799,7 @@ int Client::rdma_exchange() {
     // RDMA setup if not already done
     assert(comp_channel_ != NULL);
 
-    cq_ = ibv_create_cq(ib_ctx, MAX_WR * 2, NULL, comp_channel_, 0);
+    cq_ = ibv_create_cq(ib_ctx, MAX_SEND_WR + MAX_RECV_WR, NULL, comp_channel_, 0);
     if (!cq_) {
         ERROR("Failed to create CQ");
         return SYSTEM_ERROR;
@@ -808,8 +810,8 @@ int Client::rdma_exchange() {
     qp_init_attr.send_cq = cq_;
     qp_init_attr.recv_cq = cq_;
     qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
-    qp_init_attr.cap.max_send_wr = MAX_WR;
-    qp_init_attr.cap.max_recv_wr = MAX_WR;
+    qp_init_attr.cap.max_send_wr = MAX_SEND_WR;
+    qp_init_attr.cap.max_recv_wr = MAX_RECV_WR;
     qp_init_attr.cap.max_send_sge = 1;
     qp_init_attr.cap.max_recv_sge = 1;
 
@@ -923,21 +925,22 @@ int Client::rdma_exchange() {
         return SYSTEM_ERROR;
     }
 
-    if (posix_memalign((void **)&recv_buffer_, 4096, PROTOCOL_BUFFER_SIZE) != 0) {
-        ERROR("Failed to allocate recv buffer");
-        return SYSTEM_ERROR;
-    }
+    for (int i = 0; i < MAX_RECV_WR; i++) {
+        if (posix_memalign((void **)&recv_buffer_[i], 4096, PROTOCOL_BUFFER_SIZE) != 0) {
+            ERROR("Failed to allocate recv buffer");
+            return SYSTEM_ERROR;
+        }
 
-    recv_mr_ = ibv_reg_mr(pd, recv_buffer_, PROTOCOL_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
-    if (!recv_mr_) {
-        ERROR("Failed to register MR");
-        return SYSTEM_ERROR;
-    }
+        recv_mr_[i] = ibv_reg_mr(pd, recv_buffer_[i], PROTOCOL_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
+        if (!recv_mr_[i]) {
+            ERROR("Failed to register MR");
+            return SYSTEM_ERROR;
+        }
 
-    // ready to receive RDMA_SEND
-    if (prepare_recv_rdma_request() < 0) {
-        ERROR("Failed to prepare recv rdma request");
-        return SYSTEM_ERROR;
+        if (prepare_recv_rdma_request(i) < 0) {
+            ERROR("Failed to prepare recv rdma request");
+            return SYSTEM_ERROR;
+        }
     }
 
     if (ibv_req_notify_cq(cq_, 0)) {
