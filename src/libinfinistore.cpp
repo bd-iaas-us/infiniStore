@@ -513,7 +513,7 @@ int modify_qp_to_rtr(connection_t *conn) {
     // update MTU
     if (conn->remote_info.mtu != conn->active_mtu) {
         WARN("remote MTU: {}, local MTU: {} is not the same, update to minimal MTU",
-             2 << ((uint32_t)conn->remote_info.mtu + 7), 2 << ((uint32_t)conn->active_mtu + 7));
+             1 << ((uint32_t)conn->remote_info.mtu + 7), 1 << ((uint32_t)conn->active_mtu + 7));
     }
     attr.path_mtu =
         (enum ibv_mtu)std::min((uint32_t)conn->active_mtu, (uint32_t)conn->remote_info.mtu);
