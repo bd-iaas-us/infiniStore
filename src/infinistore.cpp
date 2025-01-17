@@ -492,7 +492,8 @@ void wait_for_ipc_close_completion(uv_work_t *req) {
     CHECK_CUDA(cudaEventDestroy(wqueue_data->event));
     CHECK_CUDA(cudaStreamDestroy(wqueue_data->stream));
 
-    if (wqueue_data->finished->fetch_add(1) == global_config.num_stream) {
+    wqueue_data->finished->fetch_add(1);
+    if (wqueue_data->finished->load() == global_config.num_stream) {
         // closing ipc handle is slow, so we put it here
         CHECK_CUDA(cudaIpcCloseMemHandle(wqueue_data->d_ptr));
     }

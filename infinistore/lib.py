@@ -241,9 +241,9 @@ class InfinityConnection:
         assert self.local_connected
         blocks_in_bytes = [(key, offset * element_size) for key, offset in blocks]
         device_id = cache.device.index
-        cuda_visible_devices = os.environ["CUDA_VISIBLE_DEVICES"].split(",")
+        cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
         if len(cuda_visible_devices) > 0:
-            device_id = int(cuda_visible_devices[cache.device.index])
+            device_id = int(cuda_visible_devices.split(",")[cache.device.index])
         ret = _infinistore.rw_local(
             self.conn,
             self.OP_W,
@@ -299,9 +299,9 @@ class InfinityConnection:
         # each offset should multiply by the element size
         blocks_in_bytes = [(key, offset * element_size) for key, offset in blocks]
         device_id = cache.device.index
-        cuda_visible_devices = os.environ["CUDA_VISIBLE_DEVICES"].split(",")
+        cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
         if len(cuda_visible_devices) > 0:
-            device_id = int(cuda_visible_devices[cache.device.index])        
+            device_id = int(cuda_visible_devices.split(",")[cache.device.index])
         if self.local_connected:
             ret = _infinistore.rw_local(
                 self.conn,
