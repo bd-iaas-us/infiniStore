@@ -281,7 +281,9 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                 }
             }
             else {
-                ERROR("Unexpected wc opcode: {}", (int)wc.opcode);
+                WARN("Unexpected wc opcode: {}, wrid {}", (int)wc.opcode, wc.wr_id);
+                // FIXME: add more opcodes
+                return;
             }
         }
         else {
@@ -422,9 +424,13 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
         wrs[num_wr].wr_id = 1234;
         wrs[num_wr].opcode = (i == remote_meta_req->keys()->size() - 1) ? IBV_WR_RDMA_WRITE_WITH_IMM
                                                                         : IBV_WR_RDMA_WRITE;
+        if (i == remote_meta_req->keys()->size() - 1) {
+            wrs[num_wr].wr_id = 5555;
+        }
+
         wrs[num_wr].sg_list = &sges[num_wr];
         wrs[num_wr].num_sge = 1;
-        wrs[num_wr].send_flags = 0;
+        wrs[num_wr].send_flags = IBV_SEND_SIGNALED;
         wrs[num_wr].wr.rdma.remote_addr = remote_meta_req->remote_addrs()->Get(i);
         wrs[num_wr].wr.rdma.rkey = remote_meta_req->rkey();
         wrs[num_wr].next = (num_wr == max_wr - 1 || i == remote_meta_req->keys()->size() - 1)
@@ -441,7 +447,34 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
                 ERROR("Failed to post RDMA write {}", strerror(ret));
                 return -1;
             }
+
+            INFO("RDMA write posted, WRS: {}", num_wr);
+
+            struct ibv_wc wc[num_wr] = {0};
+            int x = num_wr;
+            int num_comp = 0;
+            int offset;
+            while (x > 0) {
+                // INFO("x: {}", x);
+                offset = num_wr - x;
+                num_comp = ibv_poll_cq(cq_, x, &wc[offset]);
+                if (num_comp < 0) {
+                    ERROR("Failed to poll CQ");
+                    return -1;
+                }
+                x -= num_comp;
+            }
+
+            for (int j = 0; j < num_wr; j++) {
+                if (wc[j].status != IBV_WC_SUCCESS) {
+                    ERROR("RDMA write failed: {}", ibv_wc_status_str(wc[j].status));
+                    return -1;
+                }
+                INFO("event for wc op code: {}, wr id {}", wc[j].opcode, wc[j].wr_id);
+            }
             num_wr = 0;  // Reset the counter for the next batch
+
+            INFO("RDMA write completed successfully");
         }
     }
 
