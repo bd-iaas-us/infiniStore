@@ -803,7 +803,7 @@ int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_
     conn->rdma_allocate_count = 1;
 
     std::unique_lock<std::mutex> lock(conn->mutex);
-    if (!conn->allocater_cv.wait_for(lock, std::chrono::seconds(5),
+    if (!conn->allocater_cv.wait_for(lock, std::chrono::seconds(15),
                                      [&conn] { return conn->rdma_allocate_count == 0; })) {
         ERROR("timeout to allocate remote memory");
         return -1;
@@ -878,7 +878,7 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
             struct ibv_send_wr *bad_wr = nullptr;
             int ret = conn->post_send(&wrs[0], &bad_wr);
             if (ret) {
-                ERROR("Failed to post RDMA write");
+                ERROR("Failed to post RDMA write {}", strerror(ret));
                 return -1;
             }
             num_wr = 0;
@@ -903,6 +903,26 @@ int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, voi
     INFO("r_rdma,, block_size: {}, base_ptr: {}", block_size, base_ptr);
     struct ibv_mr *mr = conn->local_mr[(uintptr_t)base_ptr];
     assert(mr != NULL);
+
+    // recv ACK for whole batch.
+    struct ibv_sge recv_sge = {
+        .addr = (uintptr_t)conn->recv_buffer,
+        .length = 0,
+        .lkey = conn->recv_mr->lkey,
+    };
+    struct ibv_recv_wr recv_wr = {
+        .wr_id = 0,
+        .next = NULL,
+        .sg_list = &recv_sge,
+        .num_sge = 1,
+    };
+
+    struct ibv_recv_wr *bad_wr_recv = NULL;
+
+    int ret = ibv_post_recv(conn->qp, &recv_wr, &bad_wr_recv);
+    if (ret) {
+        ERROR("Failed to post RDMA recv :{}", strerror(ret));
+    }
 
     std::vector<std::string> keys;
     std::vector<uintptr_t> remote_addrs;
@@ -945,32 +965,13 @@ int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, voi
     wr.num_sge = 1;
     wr.send_flags = IBV_SEND_SIGNALED;
 
-    int ret = conn->post_send(&wr, &bad_wr);
+    ret = conn->post_send(&wr, &bad_wr);
     if (ret) {
         ERROR("Failed to post RDMA send :{}", strerror(ret));
         return -1;
     }
     conn->rdma_inflight_count++;
 
-    // recv ACK for whole batch.
-    struct ibv_sge recv_sge = {
-        .addr = (uintptr_t)conn->recv_buffer,
-        .length = 0,
-        .lkey = conn->recv_mr->lkey,
-    };
-    struct ibv_recv_wr recv_wr = {
-        .wr_id = 0,
-        .next = NULL,
-        .sg_list = &recv_sge,
-        .num_sge = 1,
-    };
-
-    struct ibv_recv_wr *bad_wr_recv = NULL;
-
-    ret = ibv_post_recv(conn->qp, &recv_wr, &bad_wr_recv);
-    if (ret) {
-        ERROR("Failed to post RDMA recv :{}", strerror(ret));
-    }
     return 0;
 }
 
