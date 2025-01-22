@@ -54,7 +54,7 @@ std::string op_name(char op);
 
 #define RETURN_CODE_SIZE sizeof(int)
 
-#define PROTOCOL_BUFFER_SIZE (8 << 20)  // 4M could be enough
+#define PROTOCOL_BUFFER_SIZE (4 << 20)  // 4M could be enough
 
 typedef struct __attribute__((packed)) {
     unsigned int magic;
