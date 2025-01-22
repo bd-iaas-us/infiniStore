@@ -150,7 +150,7 @@ def run(args):
             remote_addrs = conn.allocate_rdma(keys, block_size * 4)
 
         steps = int(
-            2
+            1
         )  # simulate we have <steps> layers, this steps should be less then MAX_WR_SIZE
         while len(blocks) % steps != 0 and steps > 1:
             steps = int(steps / 2)
