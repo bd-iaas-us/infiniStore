@@ -14,6 +14,7 @@
 #include <uv.h>
 
 #include <chrono>
+#include <deque>
 #include <iostream>
 #include <string>
 #include <unordered_map>
@@ -93,6 +94,8 @@ struct Client {
     // RDMA send buffer
     char *send_buffer_ = NULL;
     struct ibv_mr *send_mr_ = NULL;
+    int outstanding_rdma_writes_ = 0;
+    std::deque<std::pair<struct ibv_send_wr *, struct ibv_sge *>> outstanding_rdma_writes_queue_;
 
     // TCP send buffer
     char *tcp_send_buffer_ = NULL;
@@ -271,13 +274,36 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
             }
             else if (wc.opcode ==
                      IBV_WC_RECV_RDMA_WITH_IMM) {  // write cache: we alreay have all data now.
-
                 // client should not use WRITE_WITH_IMM to notify.
                 // it should use COMMIT message to notify.
                 WARN("WRITE_WITH_IMM is not supported in server side");
                 if (prepare_recv_rdma_request(wc.wr_id) < 0) {
                     ERROR("Failed to prepare recv rdma request");
                     return;
+                }
+            }
+            else if (wc.opcode == IBV_WC_RDMA_WRITE) {
+                // some RDMA write(read cache WRs) is finished
+
+                DEBUG("RDMA_WRITE done wr_id: {}", wc.wr_id);
+                assert(outstanding_rdma_writes_ >= 0);
+                outstanding_rdma_writes_ -= 16;
+
+                if (!outstanding_rdma_writes_queue_.empty()) {
+                    auto item = outstanding_rdma_writes_queue_.front();
+                    struct ibv_send_wr *wrs = item.first;
+                    struct ibv_sge *sges = item.second;
+                    ibv_send_wr *bad_wr = nullptr;
+                    DEBUG("IBV POST SEND, wr_id: {}", wrs[0].wr_id);
+                    int ret = ibv_post_send(qp_, &wrs[0], &bad_wr);
+                    if (ret) {
+                        ERROR("Failed to post RDMA write {}", strerror(ret));
+                        throw std::runtime_error("Failed to post RDMA write");
+                    }
+                    outstanding_rdma_writes_ += 16;
+                    delete[] wrs;
+                    delete[] sges;
+                    outstanding_rdma_writes_queue_.pop_front();
                 }
             }
             else {
@@ -370,7 +396,7 @@ int Client::prepare_recv_rdma_request(int buf_idx) {
 }
 
 int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
-    INFO("do rdma read...");
+    INFO("do rdma read... num of keys: {}", remote_meta_req->keys()->size());
 
     if (remote_meta_req->keys()->size() != remote_meta_req->remote_addrs()->size()) {
         ERROR("keys size and remote_addrs size mismatch");
@@ -401,16 +427,27 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
     }
 
     const size_t max_wr = 16;
-    struct ibv_send_wr wrs[max_wr];
-    struct ibv_sge sges[max_wr];
+    struct ibv_send_wr local_wrs[max_wr];
+    struct ibv_sge local_sges[max_wr];
+
+    struct ibv_send_wr *wrs = local_wrs;
+    struct ibv_sge *sges = local_sges;
 
     size_t num_wr = 0;
+    bool wr_full = false;
+
+    if (outstanding_rdma_writes_ + 16 > 1024) {
+        wr_full = true;
+        wrs = new struct ibv_send_wr[max_wr];
+        sges = new struct ibv_sge[max_wr];
+    }
+
     for (size_t i = 0; i < remote_meta_req->keys()->size(); i++) {
         sges[num_wr].addr = blocks[i].local_addr;
         sges[num_wr].length = remote_meta_req->block_size();
         sges[num_wr].lkey = blocks[i].lkey;
 
-        wrs[num_wr].wr_id = 1234;
+        wrs[num_wr].wr_id = i;
         wrs[num_wr].opcode = (i == remote_meta_req->keys()->size() - 1) ? IBV_WR_RDMA_WRITE_WITH_IMM
                                                                         : IBV_WR_RDMA_WRITE;
         wrs[num_wr].sg_list = &sges[num_wr];
@@ -422,16 +459,42 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
                                ? nullptr
                                : &wrs[num_wr + 1];
 
+        wrs[num_wr].send_flags = (num_wr == max_wr - 1 || i == remote_meta_req->keys()->size() - 1)
+                                     ? IBV_SEND_SIGNALED
+                                     : 0;
+
         num_wr++;
 
-        // If we reach the maximum number of WRs, post them
         if (num_wr == max_wr || i == remote_meta_req->keys()->size() - 1) {
-            struct ibv_send_wr *bad_wr = nullptr;
-            int ret = ibv_post_send(qp_, &wrs[0], &bad_wr);
-            if (ret) {
-                ERROR("Failed to post RDMA write {}", strerror(ret));
-                return -1;
+            if (!wr_full) {
+                struct ibv_send_wr *bad_wr = nullptr;
+                DEBUG("local write");
+                int ret = ibv_post_send(qp_, &wrs[0], &bad_wr);
+                if (ret) {
+                    ERROR("Failed to post RDMA write {}", strerror(ret));
+                    return -1;
+                }
+                outstanding_rdma_writes_ += 16;
+
+                // check if next iteration will exceed the limit
+                if (outstanding_rdma_writes_ + 16 > 1024 - 200) {
+                    wr_full = true;
+                }
             }
+            else {
+                // if WR queue is full, we need to put them into queue
+                WARN(
+                    "WR queue full: push into queue, len: {}, first wr_id: {}, last wr_id: {}, "
+                    "last op code: {} ",
+                    num_wr, wrs[0].wr_id, wrs[num_wr - 1].wr_id, wrs[num_wr - 1].opcode);
+                outstanding_rdma_writes_queue_.push_back({&wrs[0], &sges[0]});
+            }
+
+            if (wr_full) {
+                wrs = new struct ibv_send_wr[max_wr];
+                sges = new struct ibv_sge[max_wr];
+            }
+
             num_wr = 0;  // Reset the counter for the next batch
         }
     }
