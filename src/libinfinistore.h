@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include <boost/lockfree/queue.hpp>
+#include <deque>
 #include <future>
 #include <map>
 
@@ -74,11 +75,12 @@ struct Connection {
     std::condition_variable cv;
     std::condition_variable allocater_cv;
 
-    // protect ibv_post_send
+    // protect ibv_post_send, outstanding_rdma_writes_queue
     std::mutex rdma_post_send_mutex;
+    std::atomic<int> outstanding_rdma_writes{0};
+    std::deque<std::pair<struct ibv_send_wr *, struct ibv_sge *>> outstanding_rdma_writes_queue;
 
     Connection() = default;
-    int post_send(struct ibv_send_wr *send_wr, struct ibv_send_wr **bad_wr);
 
     Connection(const Connection &) = delete;
     // destory the connection
