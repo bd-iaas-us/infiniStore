@@ -15,6 +15,7 @@ import torch
 import argparse
 import logging
 import subprocess
+import os
 
 
 # disable standard logging, we will use our own logger
@@ -125,6 +126,12 @@ def parse_args():
     return parser.parse_args()
 
 
+def prevent_oom():
+    pid = os.getpid()
+    with open(f"/proc/{pid}/oom_score_adj", "w") as f:
+        f.write("-1000")
+
+
 def main():
     args = parse_args()
     config = ServerConfig(
@@ -164,6 +171,9 @@ def main():
                 "2",
             ]
         )
+
+    prevent_oom()
+    Logger.info("set oom_score_adj to -1000 to prevent OOM")
 
     http_config = uvicorn.Config(
         app, host="0.0.0.0", port=config.manage_port, loop="uvloop"
