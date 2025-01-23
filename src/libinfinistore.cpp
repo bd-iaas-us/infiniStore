@@ -95,7 +95,8 @@ Connection::~Connection() {
         free(recv_buffer);
     }
 
-    for (auto *buffer : send_buffers) {
+    SendBuffer *buffer;
+    while (send_buffers.pop(buffer)) {
         delete buffer;
     }
 
@@ -401,22 +402,19 @@ void cq_handler(connection_t *conn) {
 }
 
 SendBuffer *get_send_buffer(connection_t *conn) {
-    std::unique_lock<std::mutex> lock(conn->send_buffer_mutex);
-
     /*
     if send buffer list is empty,we just report error, and return NULL
     normal user should not have too many inflight requests, so we just report error
     */
     assert(!conn->send_buffers.empty());
 
-    SendBuffer *buffer = conn->send_buffers.front();
-    conn->send_buffers.pop_front();
+    SendBuffer *buffer;
+    assert(conn->send_buffers.pop(buffer));
     return buffer;
 }
 
 void release_send_buffer(connection_t *conn, SendBuffer *buffer) {
-    std::unique_lock<std::mutex> lock(conn->send_buffer_mutex);
-    conn->send_buffers.push_back(buffer);
+    conn->send_buffers.push(buffer);
 }
 
 int setup_rdma(connection_t *conn, client_config_t config) {
@@ -465,7 +463,7 @@ int setup_rdma(connection_t *conn, client_config_t config) {
     because server also has the same number of buffers
     */
     for (int i = 0; i < MAX_RECV_WR; i++) {
-        conn->send_buffers.push_back(new SendBuffer(conn->pd, PROTOCOL_BUFFER_SIZE));
+        conn->send_buffers.push(new SendBuffer(conn->pd, PROTOCOL_BUFFER_SIZE));
     }
 
     conn->rdma_inflight_count = 0;
