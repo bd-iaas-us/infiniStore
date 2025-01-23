@@ -8,7 +8,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include <deque>
+#include <boost/lockfree/queue.hpp>
 #include <future>
 #include <map>
 
@@ -50,8 +50,11 @@ struct Connection {
 
     std::unordered_map<uintptr_t, struct ibv_mr *> local_mr;
 
-    std::mutex send_buffer_mutex;
-    std::deque<SendBuffer *> send_buffers;
+    /*
+    This is MAX_RECV_WR not MAX_SEND_WR,
+    because server also has the same number of buffers
+    */
+    boost::lockfree::queue<SendBuffer *> send_buffers{MAX_RECV_WR};
 
     // this recv buffer is used in
     // 1. allocate rdma
