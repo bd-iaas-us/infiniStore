@@ -38,11 +38,6 @@ SendBuffer::~SendBuffer() {
     }
 }
 
-int Connection::post_send(struct ibv_send_wr *send_wr, struct ibv_send_wr **bad_wr) {
-    std::unique_lock<std::mutex> lock(rdma_post_send_mutex);
-    return ibv_post_send(qp, send_wr, bad_wr);
-}
-
 Connection::~Connection() {
     DEBUG("destroying connection");
 
@@ -340,49 +335,77 @@ void cq_handler(connection_t *conn) {
                         conn->cv.notify_all();
                     }
                     else if (wc[i].opcode == IBV_WC_RDMA_WRITE) {  // write cache done
-                        INFO("write cache completed");
-                        assert(wc[i].wr_id != 0);
 
-                        SendBuffer *send_buffer = get_send_buffer(conn);
-                        FixedBufferAllocator allocator(send_buffer->buffer_, PROTOCOL_BUFFER_SIZE);
-                        FlatBufferBuilder builder(64 << 10, &allocator);
-                        auto *info = reinterpret_cast<std::vector<uintptr_t> *>(wc[i].wr_id);
-                        auto remote_addrs_offset = builder.CreateVector(*info);
+                        std::unique_lock<std::mutex> lock(conn->rdma_post_send_mutex);
 
-                        auto req = CreateRemoteMetaRequest(builder, 0, 0, 0, remote_addrs_offset,
-                                                           OP_RDMA_WRITE_COMMIT);
-                        builder.Finish(req);
+                        conn->outstanding_rdma_writes -= 32;
+                        INFO("RDMA_WRITE completed, wr_id: {}, outstanding_rdma_writes: {}",
+                             wc[i].wr_id, conn->outstanding_rdma_writes);
 
-                        // send RDMA COMMIT msg to server
-                        struct ibv_sge sge = {0};
-                        struct ibv_send_wr wr = {0};
-                        struct ibv_send_wr *bad_wr = NULL;
-
-                        sge.addr = (uintptr_t)builder.GetBufferPointer();
-                        sge.length = builder.GetSize();
-                        sge.lkey = send_buffer->mr_->lkey;
-
-                        wr.wr_id = (uintptr_t)send_buffer;
-                        wr.opcode = IBV_WR_SEND;
-                        wr.sg_list = &sge;
-                        wr.num_sge = 1;
-                        wr.send_flags = IBV_SEND_SIGNALED;
-                        int ret = conn->post_send(&wr, &bad_wr);
-                        if (ret) {
-                            ERROR("Failed to post RDMA send :{}", strerror(ret));
-                            return;
+                        // drain the queue
+                        if (!conn->outstanding_rdma_writes_queue.empty()) {
+                            auto item = conn->outstanding_rdma_writes_queue.front();
+                            struct ibv_send_wr *wrs = item.first;
+                            struct ibv_sge *sges = item.second;
+                            ibv_send_wr *bad_wr = nullptr;
+                            INFO("IBV POST SEND, wr_id: {}", wrs[0].wr_id);
+                            int ret = ibv_post_send(conn->qp, &wrs[0], &bad_wr);
+                            if (ret) {
+                                ERROR("Failed to post RDMA write {}", strerror(ret));
+                                throw std::runtime_error("Failed to post RDMA write");
+                            }
+                            conn->outstanding_rdma_writes += 32;
+                            delete[] wrs;
+                            delete[] sges;
+                            conn->outstanding_rdma_writes_queue.pop_front();
                         }
-                        delete info;
 
-                        // FIXME:
-                        // notify until server commit the keys
-                        // if we use the same connection, it is safe for following code to read
-                        // keys. however, if we use a different connection, we need to wait for
-                        // server to COMMIT the keys and send ACK back. In real world, DECODE node
-                        // will try to get key when conn.sync() is done, I just cross fingers to
-                        // hope that server will commit the keys before DECODE node starts.
-                        conn->rdma_inflight_count--;
-                        conn->cv.notify_all();
+                        // last WR of w_rdma, send RDMA COMMIT msg to server
+                        if (wc[i].wr_id != 0) {
+                            SendBuffer *send_buffer = get_send_buffer(conn);
+                            FixedBufferAllocator allocator(send_buffer->buffer_,
+                                                           PROTOCOL_BUFFER_SIZE);
+                            FlatBufferBuilder builder(64 << 10, &allocator);
+                            auto *info = reinterpret_cast<std::vector<uintptr_t> *>(wc[i].wr_id);
+                            auto remote_addrs_offset = builder.CreateVector(*info);
+
+                            auto req = CreateRemoteMetaRequest(
+                                builder, 0, 0, 0, remote_addrs_offset, OP_RDMA_WRITE_COMMIT);
+                            builder.Finish(req);
+
+                            // send RDMA COMMIT msg to server
+                            struct ibv_sge sge = {0};
+                            struct ibv_send_wr wr = {0};
+                            struct ibv_send_wr *bad_wr = NULL;
+
+                            sge.addr = (uintptr_t)builder.GetBufferPointer();
+                            sge.length = builder.GetSize();
+                            sge.lkey = send_buffer->mr_->lkey;
+
+                            wr.wr_id = (uintptr_t)send_buffer;
+                            wr.opcode = IBV_WR_SEND;
+                            wr.sg_list = &sge;
+                            wr.num_sge = 1;
+                            wr.send_flags = IBV_SEND_SIGNALED;
+
+                            int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
+                            if (ret) {
+                                ERROR("Failed to post RDMA send :{}", strerror(ret));
+                                return;
+                            }
+                            delete info;
+
+                            // FIXME:
+                            // notify until server commit the keys
+                            // if we use the same connection, it is safe for following code to read
+                            // keys. however, if we use a different connection, we need to wait for
+                            // server to COMMIT the keys and send ACK back. In real world, DECODE
+                            // node will try to get key when conn.sync() is done, I just cross
+                            // fingers to hope that server will commit the keys before DECODE node
+                            // starts.
+                            conn->rdma_inflight_count--;
+                            conn->cv.notify_all();
+                        }
                     }
                     else {
                         ERROR("Unexpected opcode: {}", (int)wc[i].opcode);
@@ -769,8 +792,11 @@ int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_
     wr.num_sge = 1;
     wr.send_flags = IBV_SEND_SIGNALED;
 
-    int ret = conn->post_send(&wr, &bad_wr);
-
+    int ret;
+    {
+        std::unique_lock<std::mutex> lock(conn->mutex);
+        ret = ibv_post_send(conn->qp, &wr, &bad_wr);
+    }
     if (ret) {
         ERROR("Failed to post RDMA send :{}", strerror(ret));
         return -1;
@@ -839,11 +865,26 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
     INFO("w_rdma, block_size: {}, base_ptr: {}", block_size, base_ptr);
     struct ibv_mr *mr = conn->local_mr[(uintptr_t)base_ptr];
 
-    const size_t max_wr = 16;
-    struct ibv_send_wr wrs[max_wr];
-    struct ibv_sge sges[max_wr];
+    std::unique_lock<std::mutex> lock(conn->rdma_post_send_mutex);
+
+    const size_t max_wr = 32;
+
+    struct ibv_send_wr local_wrs[max_wr];
+    struct ibv_sge local_sges[max_wr];
+
+    struct ibv_send_wr *wrs = local_wrs;
+    struct ibv_sge *sges = local_sges;
 
     size_t num_wr = 0;
+
+    bool wr_full = false;
+
+    if (conn->outstanding_rdma_writes + 32 > 2048) {
+        wr_full = true;
+        wrs = new struct ibv_send_wr[max_wr];
+        sges = new struct ibv_sge[max_wr];
+    }
+
     for (size_t i = 0; i < remote_blocks_len; i++) {
         sges[num_wr].addr = (uintptr_t)(base_ptr + p_offsets[i]);
         sges[num_wr].length = block_size;
@@ -864,22 +905,43 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
 
         wrs[num_wr].sg_list = &sges[num_wr];
         wrs[num_wr].num_sge = 1;
-        wrs[num_wr].send_flags = (i == remote_blocks_len - 1) ? IBV_SEND_SIGNALED : 0;
+        wrs[num_wr].send_flags =
+            (num_wr == max_wr - 1 || i == remote_blocks_len - 1) ? IBV_SEND_SIGNALED : 0;
+
         wrs[num_wr].wr.rdma.remote_addr = p_remote_blocks[i].remote_addr;
         wrs[num_wr].wr.rdma.rkey = p_remote_blocks[i].rkey;
         wrs[num_wr].next =
             (num_wr == max_wr - 1 || i == remote_blocks_len - 1) ? nullptr : &wrs[num_wr + 1];
-
         num_wr++;
 
         if (num_wr == max_wr || i == remote_blocks_len - 1) {
-            struct ibv_send_wr *bad_wr = nullptr;
-            int ret = conn->post_send(&wrs[0], &bad_wr);
-            if (ret) {
-                ERROR("Failed to post RDMA write {}", strerror(ret));
-                return -1;
+            if (!wr_full) {
+                struct ibv_send_wr *bad_wr = nullptr;
+                int ret = ibv_post_send(conn->qp, &wrs[0], &bad_wr);
+                if (ret) {
+                    ERROR("Failed to post RDMA write {}", strerror(ret));
+                    return -1;
+                }
+                conn->outstanding_rdma_writes += 32;
+                // check if next iteration will exceed the limit
+                if (conn->outstanding_rdma_writes + 32 > 2048) {
+                    wr_full = true;
+                }
             }
-            num_wr = 0;
+            else {
+                // if WR queue is full, we need to put them into queue
+                WARN(
+                    "WR queue full: push into temp queue, len: {}, first wr_id: {}, last wr_id: "
+                    "{},(wr_id should be 0)" num_wr,
+                    wrs[0].wr_id, wrs[num_wr - 1].wr_id, wrs[num_wr - 1].opcode);
+                conn->outstanding_rdma_writes_queue.push_back({&wrs[0], &sges[0]});
+            }
+
+            if (wr_full) {
+                wrs = new struct ibv_send_wr[max_wr];
+                sges = new struct ibv_sge[max_wr];
+            }
+            num_wr = 0;  // Reset the counter for the next batch
         }
     }
 
@@ -963,7 +1025,11 @@ int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, voi
     wr.num_sge = 1;
     wr.send_flags = IBV_SEND_SIGNALED;
 
-    ret = conn->post_send(&wr, &bad_wr);
+    {
+        std::unique_lock<std::mutex> lock(conn->rdma_post_send_mutex);
+        ret = ibv_post_send(conn->qp, &wr, &bad_wr);
+    }
+
     if (ret) {
         ERROR("Failed to post RDMA send :{}", strerror(ret));
         return -1;

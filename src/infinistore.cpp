@@ -452,7 +452,6 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
                                                                         : IBV_WR_RDMA_WRITE;
         wrs[num_wr].sg_list = &sges[num_wr];
         wrs[num_wr].num_sge = 1;
-        wrs[num_wr].send_flags = 0;
         wrs[num_wr].wr.rdma.remote_addr = remote_meta_req->remote_addrs()->Get(i);
         wrs[num_wr].wr.rdma.rkey = remote_meta_req->rkey();
         wrs[num_wr].next = (num_wr == max_wr - 1 || i == remote_meta_req->keys()->size() - 1)
