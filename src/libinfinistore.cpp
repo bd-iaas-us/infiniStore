@@ -336,11 +336,13 @@ void cq_handler(connection_t *conn) {
                     }
                     else if (wc[i].opcode == IBV_WC_RDMA_WRITE) {  // write cache done
 
+                        assert(conn->outstanding_rdma_writes >= 0);
+
                         std::unique_lock<std::mutex> lock(conn->rdma_post_send_mutex);
 
-                        conn->outstanding_rdma_writes -= 32;
-                        INFO("RDMA_WRITE completed, wr_id: {}, outstanding_rdma_writes: {}",
-                             wc[i].wr_id, conn->outstanding_rdma_writes);
+                        conn->outstanding_rdma_writes -= MAX_WR_BATCH;
+                        DEBUG("RDMA_WRITE completed, wr_id: {}, outstanding_rdma_writes: {}",
+                              wc[i].wr_id, conn->outstanding_rdma_writes);
 
                         // drain the queue
                         if (!conn->outstanding_rdma_writes_queue.empty()) {
@@ -354,13 +356,13 @@ void cq_handler(connection_t *conn) {
                                 ERROR("Failed to post RDMA write {}", strerror(ret));
                                 throw std::runtime_error("Failed to post RDMA write");
                             }
-                            conn->outstanding_rdma_writes += 32;
+                            conn->outstanding_rdma_writes += MAX_WR_BATCH;
                             delete[] wrs;
                             delete[] sges;
                             conn->outstanding_rdma_writes_queue.pop_front();
                         }
 
-                        // last WR of w_rdma, send RDMA COMMIT msg to server
+                        // If this is the last WR of w_rdma, send RDMA COMMIT msg to server
                         if (wc[i].wr_id != 0) {
                             SendBuffer *send_buffer = get_send_buffer(conn);
                             FixedBufferAllocator allocator(send_buffer->buffer_,
@@ -867,7 +869,7 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
 
     std::unique_lock<std::mutex> lock(conn->rdma_post_send_mutex);
 
-    const size_t max_wr = 32;
+    const size_t max_wr = MAX_WR_BATCH;
 
     struct ibv_send_wr local_wrs[max_wr];
     struct ibv_sge local_sges[max_wr];
@@ -879,7 +881,7 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
 
     bool wr_full = false;
 
-    if (conn->outstanding_rdma_writes + 32 > 2048) {
+    if (conn->outstanding_rdma_writes + max_wr > MAX_RDMA_WRITE_WR) {
         wr_full = true;
         wrs = new struct ibv_send_wr[max_wr];
         sges = new struct ibv_sge[max_wr];
@@ -922,9 +924,10 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
                     ERROR("Failed to post RDMA write {}", strerror(ret));
                     return -1;
                 }
-                conn->outstanding_rdma_writes += 32;
+                conn->outstanding_rdma_writes += max_wr;
+
                 // check if next iteration will exceed the limit
-                if (conn->outstanding_rdma_writes + 32 > 2048) {
+                if (conn->outstanding_rdma_writes + max_wr > MAX_RDMA_WRITE_WR) {
                     wr_full = true;
                 }
             }
@@ -932,8 +935,8 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
                 // if WR queue is full, we need to put them into queue
                 WARN(
                     "WR queue full: push into temp queue, len: {}, first wr_id: {}, last wr_id: "
-                    "{},(wr_id should be 0)" num_wr,
-                    wrs[0].wr_id, wrs[num_wr - 1].wr_id, wrs[num_wr - 1].opcode);
+                    "{}",
+                    num_wr, wrs[0].wr_id, wrs[num_wr - 1].wr_id);
                 conn->outstanding_rdma_writes_queue.push_back({&wrs[0], &sges[0]});
             }
 
