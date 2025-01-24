@@ -1,4 +1,7 @@
-import infinistore._infinistore as _infinistore
+from infinistore import (
+    client_bindgen,
+    server_bindgen
+)
 
 # sphinx-doc will mock infinistore._infinistore, it has to be written like this
 
@@ -16,7 +19,7 @@ LINK_ETHERNET = "Ethernet"
 LINK_IB = "IB"
 
 
-class ClientConfig(_infinistore.ClientConfig):
+class ClientConfig(client_bindgen.ClientConfig):
     """
     ClientConfig is a configuration class for the Infinistore client.
 
@@ -71,7 +74,7 @@ class ClientConfig(_infinistore.ClientConfig):
             raise Exception("link type should be IB or Ethernet for RDMA connection")
 
 
-class ServerConfig(_infinistore.ServerConfig):
+class ServerConfig(server_bindgen.ServerConfig):
     class ServerConfig:
         """
         ServerConfig is a configuration class for the server settings.
@@ -127,23 +130,23 @@ class ServerConfig(_infinistore.ServerConfig):
 class Logger:
     @staticmethod
     def info(msg):
-        _infinistore.log_msg("info", str(msg))
+        client_bindgen.log_msg("info", str(msg))
 
     @staticmethod
     def debug(msg):
-        _infinistore.log_msg("debug", str(msg))
+        client_bindgen.log_msg("debug", str(msg))
 
     @staticmethod
     def error(msg):
-        _infinistore.log_msg("error", str(msg))
+        client_bindgen.log_msg("error", str(msg))
 
     @staticmethod
     def warn(msg):
-        _infinistore.log_msg("warning", str(msg))
+        client_bindgen.log_msg("warning", str(msg))
 
     @staticmethod
     def set_log_level(level):
-        _infinistore.set_log_level(level)
+        client_bindgen.set_log_level(level)
 
 
 def register_server(loop, config: ServerConfig):
@@ -171,7 +174,7 @@ def register_server(loop, config: ServerConfig):
 
     # from cpython.pycapsule import PyCapsule_GetPointer
     # <uint64_t>PyCapsule_GetPointer(obj, NULL)
-    if _infinistore.register_server(loop_ptr, config) < 0:
+    if server_bindgen.register_server(loop_ptr, config) < 0:
         raise Exception("Failed to register server")
 
 
@@ -262,7 +265,7 @@ class InfinityConnection:
 
     def __init__(self, config: ClientConfig):
         config.verify()
-        self.conn = _infinistore.Connection()
+        self.conn = client_bindgen.Connection()
         self.local_connected = False
         self.rdma_connected = False
         self.config = config
@@ -283,7 +286,7 @@ class InfinityConnection:
             raise Exception("Already connected to local instance")
         if self.rdma_connected:
             raise Exception("Already connected to remote instance")
-        ret = _infinistore.init_connection(self.conn, self.config)
+        ret = client_bindgen.init_connection(self.conn, self.config)
         if ret < 0:
             raise Exception("Failed to initialize remote connection")
 
@@ -292,7 +295,7 @@ class InfinityConnection:
                 raise Exception("Local GPU connection must be to localhost")
             self.local_connected = True
         else:
-            ret = _infinistore.setup_rdma(self.conn, self.config)
+            ret = client_bindgen.setup_rdma(self.conn, self.config)
             if ret < 0:
                 raise Exception("Failed to setup RDMA connection")
             self.rdma_connected = True
@@ -321,7 +324,7 @@ class InfinityConnection:
         cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
         if len(cuda_visible_devices) > 0:
             device_id = int(cuda_visible_devices.split(",")[cache.device.index])
-        ret = _infinistore.rw_local(
+        ret = client_bindgen.rw_local(
             self.conn,
             self.OP_W,
             blocks_in_bytes,
@@ -360,7 +363,7 @@ class InfinityConnection:
 
         # each offset should multiply by the element size
         offsets_in_bytes = [offset * element_size for offset in offsets]
-        ret = _infinistore.w_rdma(
+        ret = client_bindgen.w_rdma(
             self.conn,
             offsets_in_bytes,
             page_size * element_size,
@@ -396,7 +399,7 @@ class InfinityConnection:
         if len(cuda_visible_devices) > 0:
             device_id = int(cuda_visible_devices.split(",")[cache.device.index])
         if self.local_connected:
-            ret = _infinistore.rw_local(
+            ret = client_bindgen.rw_local(
                 self.conn,
                 self.OP_R,
                 blocks_in_bytes,
@@ -407,7 +410,7 @@ class InfinityConnection:
             if ret < 0:
                 raise Exception(f"Failed to read to infinistore, ret = {ret}")
         elif self.rdma_connected:
-            ret = _infinistore.r_rdma(
+            ret = client_bindgen.r_rdma(
                 self.conn,
                 blocks_in_bytes,
                 page_size * element_size,
@@ -433,7 +436,7 @@ class InfinityConnection:
             n = 0
             timeout = 1  # 1 second timeout
             while True:
-                ret = _infinistore.sync_local(self.conn)
+                ret = client_bindgen.sync_local(self.conn)
                 if ret < 0:
                     raise Exception(f"Failed to sync to infinistore, ret = {ret}")
                 elif ret > 0:
@@ -445,7 +448,7 @@ class InfinityConnection:
                 else:
                     return
         elif self.rdma_connected:
-            ret = _infinistore.sync_rdma(self.conn)
+            ret = client_bindgen.sync_rdma(self.conn)
         else:
             raise Exception("Not connected to any instance")
 
@@ -472,7 +475,7 @@ class InfinityConnection:
         Raises:
             Exception: If there is an error checking the key's existence.
         """
-        ret = _infinistore.check_exist(self.conn, key)
+        ret = client_bindgen.check_exist(self.conn, key)
         if ret < 0:
             raise Exception("Failed to check if this key exists")
         return True if ret == 0 else False
@@ -490,7 +493,7 @@ class InfinityConnection:
         Raises:
             Exception: If no match is found (i.e., if the return value is negative).
         """
-        ret = _infinistore.get_match_last_index(self.conn, keys)
+        ret = client_bindgen.get_match_last_index(self.conn, keys)
         if ret < 0:
             raise Exception("can't find a match")
         return ret
@@ -513,7 +516,7 @@ class InfinityConnection:
         element_size = cache.element_size()
         if not self.rdma_connected:
             raise Exception("this function is only valid for connected rdma")
-        ret = _infinistore.register_mr(self.conn, ptr, cache.numel() * element_size)
+        ret = client_bindgen.register_mr(self.conn, ptr, cache.numel() * element_size)
         if ret < 0:
             raise Exception("register memory region failed")
         return ret
@@ -536,7 +539,7 @@ class InfinityConnection:
         """
         if not self.rdma_connected:
             raise Exception("this function is only valid for connected rdma")
-        ret = _infinistore.allocate_rdma(self.conn, keys, page_size_in_bytes)
+        ret = client_bindgen.allocate_rdma(self.conn, keys, page_size_in_bytes)
         if len(ret) == 0:
             raise Exception("allocate memory failed")
         return ret

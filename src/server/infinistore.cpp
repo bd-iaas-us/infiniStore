@@ -19,12 +19,14 @@
 #include <string>
 #include <unordered_map>
 
-#include "config.h"
-#include "ibv_helper.h"
-#include "log.h"
-#include "mempool.h"
-#include "protocol.h"
-#include "utils.h"
+#include <config.h>
+#include <ibv_helper.h>
+#include <log.h>
+#include <mempool.h>
+#include <protocol.h>
+#include <utils.h>
+
+#include "include/infinistore.h"
 
 server_config_t global_config;
 

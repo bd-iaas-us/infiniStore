@@ -5,7 +5,7 @@ from infinistore.lib import (
     Logger,
 )
 
-from infinistore._infinistore import get_kvmap_len
+from infinistore import server_bindgen
 
 import asyncio
 import uvloop

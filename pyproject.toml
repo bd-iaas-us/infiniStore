@@ -1,0 +1,25 @@
+[project]
+name = "infinistore"
+version = "0.1.146"
+description = "Infinistore project with client and server wheels"
+readme = "README.md"
+authors = [
+    {name = "Dongmao Zhang", email = "deanraccoon@gmail.com"},
+    {name = "Jingxin Pan", email = "jingxin.pan123@gmail.com"},
+    {name = "Rain Jiang", email = "rain-jiang@outlook.com"}
+]
+dependencies = ["torch", "uvloop", "fastapi", "uvicorn", "numpy"]  # Add your Python dependencies here
+requires-python = ">=3.9"
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[build-system]
+requires = ["scikit-build-core", "pybind11"]
+build-backend = "scikit_build_core.build"
+
+[tool.scikit-build]
+build.verbose = true
+wheel.packages = ["src/infinistore"]
+# cmake.build-type = "Debug"
+logging.level = "INFO"

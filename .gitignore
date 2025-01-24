@@ -10,3 +10,4 @@ __pycache__
 infini*.egg-info
 test_run
 *.so
+.venv

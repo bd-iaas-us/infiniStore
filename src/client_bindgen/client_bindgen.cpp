@@ -8,13 +8,12 @@
 #include <tuple>
 #include <vector>
 
-#include "config.h"
-#include "libinfinistore.h"
-#include "log.h"
+#include <config.h>
+#include <log.h>
+#include <libinfinistore.h>
+
 
 namespace py = pybind11;
-
-extern int register_server(unsigned long loop_ptr, server_config_t config);
 
 int rw_local_wrapper(connection_t *conn, char op,
                      const std::vector<std::tuple<std::string, unsigned long>> &blocks,
@@ -81,7 +80,7 @@ int register_mr_wrapper(connection_t *conn, uintptr_t ptr, size_t ptr_region_siz
     return register_mr(conn, (void *)ptr, ptr_region_size);
 }
 
-PYBIND11_MODULE(_infinistore, m) {
+PYBIND11_MODULE(client_bindgen, m) {
     // client side
     py::class_<client_config_t>(m, "ClientConfig")
         .def(py::init<>())
@@ -109,20 +108,6 @@ PYBIND11_MODULE(_infinistore, m) {
     m.def("get_match_last_index", &get_match_last_index,
           "get the last index of a key list which is in the store");
     m.def("register_mr", &register_mr_wrapper, "register memory region");
-
-    // server side
-    py::class_<server_config_t>(m, "ServerConfig")
-        .def(py::init<>())
-        .def_readwrite("service_port", &ServerConfig::service_port)
-        .def_readwrite("log_level", &ServerConfig::log_level)
-        .def_readwrite("dev_name", &ServerConfig::dev_name)
-        .def_readwrite("ib_port", &ServerConfig::ib_port)
-        .def_readwrite("link_type", &ServerConfig::link_type)
-        .def_readwrite("prealloc_size", &ServerConfig::prealloc_size)
-        .def_readwrite("minimal_allocate_size", &ServerConfig::minimal_allocate_size)
-        .def_readwrite("num_stream", &ServerConfig::num_stream);
-    m.def("get_kvmap_len", &get_kvmap_len, "get kv map size");
-    m.def("register_server", &register_server, "register the server");
 
     // //both side
     m.def("log_msg", &log_msg, "log");

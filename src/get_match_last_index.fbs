@@ -1,5 +1,0 @@
-table  GetMatchLastIndexRequest {
-  keys: [string];
-}
-
-root_type GetMatchLastIndexRequest;

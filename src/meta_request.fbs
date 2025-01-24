@@ -1,9 +1,0 @@
-//RDMA read/allocate request
-table RemoteMetaRequest {
-  keys: [string];
-  block_size: int;
-  rkey: uint;                  // rkey
-  remote_addrs: [ulong];       // GPU addresses
-  op: byte;
-}
-root_type RemoteMetaRequest;

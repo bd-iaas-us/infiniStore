@@ -1,4 +1,4 @@
-#include "libinfinistore.h"
+#include "include/libinfinistore.h"
 
 #include <arpa/inet.h>
 #include <assert.h>
@@ -14,11 +14,11 @@
 
 #include <vector>
 
-#include "config.h"
-#include "ibv_helper.h"
-#include "log.h"
-#include "protocol.h"
-#include "utils.h"
+#include <config.h>
+#include <ibv_helper.h>
+#include <log.h>
+#include <protocol.h>
+#include <utils.h>
 
 SendBuffer::SendBuffer(struct ibv_pd *pd, size_t size) {
     if (posix_memalign(&buffer_, 4096, PROTOCOL_BUFFER_SIZE) != 0) {

@@ -1,4 +1,4 @@
-#include "protocol.h"
+#include "include/protocol.h"
 
 std::unordered_map<char, std::string> op_map = {{OP_R, "READ"},
                                                 {OP_W, "WRITE"},

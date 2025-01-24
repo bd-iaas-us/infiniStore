@@ -12,9 +12,9 @@
 #include <future>
 #include <map>
 
-#include "config.h"
-#include "log.h"
-#include "protocol.h"
+#include <config.h>
+#include <log.h>
+#include <protocol.h>
 
 // RDMA send buffer
 // because write_cache will be invoked asynchronously,
@@ -90,7 +90,6 @@ int init_connection(connection_t *conn, client_config_t config);
 int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, int block_size,
              void *ptr, int device_id);
 int sync_local(connection_t *conn);
-int get_kvmap_len();
 int setup_rdma(connection_t *conn, client_config_t config);
 int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, void *base_ptr);
 int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int block_size,

@@ -27,11 +27,11 @@ python -m infinistore.server
 ## build
 
 ```
-apt install libuv1-dev
-apt install libflatbuffers-dev
-apt install libspdlog-dev libfmt-dev
-apt install ibverbs-utils libibverbs-dev
-apt install libboost-dev
+apt install -y libuv1-dev
+apt install -y libflatbuffers-dev
+apt install -y libspdlog-dev libfmt-dev
+apt install -y ibverbs-utils libibverbs-dev
+apt install -y libboost-dev
 pip install -e .
 pip install pre-commit
 pre-commit install

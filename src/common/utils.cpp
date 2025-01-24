@@ -1,6 +1,3 @@
-
-#include "utils.h"
-
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
@@ -13,7 +10,8 @@
 #include <iostream>
 #include <sstream>
 
-#include "log.h"
+#include "include/utils.h"
+#include "include/log.h"
 
 int send_exact(int socket, const void* buffer, size_t length) {
     size_t total_sent = 0;
