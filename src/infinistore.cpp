@@ -1297,7 +1297,7 @@ int register_server(unsigned long loop_ptr, server_config_t config) {
     if (init_rdma_context(config) < 0) {
         return -1;
     }
-    mm = new MM(config.prealloc_size << 30, config.minimal_allocate_size << 10, pd);
+    mm = new MM(config.prealloc_size << 30, config.minimal_allocate_size << 10, pd, loop);
 
     INFO("register server done");
 
