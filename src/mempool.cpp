@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <sys/mman.h>
+#include <uv.h>
 
 #include <cstring>
 #include <iostream>
@@ -10,11 +11,9 @@
 #include "log.h"
 #include "utils.h"
 
-#include <uv.h>
-
 bool extend_in_flight = false;
 
-MemoryPool::MemoryPool(size_t pool_size, size_t block_size, struct ibv_pd* pd)
+MemoryPool::MemoryPool(size_t pool_size, size_t block_size, struct ibv_pd *pd)
     : pool_(nullptr),
       pool_size_(pool_size),
       block_size_(block_size),
@@ -103,7 +102,7 @@ int MemoryPool::allocate(size_t size, size_t n, SimpleAllocationCallback callbac
                     size_t bit = (start_block + j) & (bit_per_word - 1);
                     bitmap_[idx] |= (1ULL << bit);
                 }
-                void* addr = static_cast<char*>(pool_) + start_block * block_size_;
+                void *addr = static_cast<char *>(pool_) + start_block * block_size_;
                 callback(addr, mr_->lkey, mr_->rkey);
                 last_search_position_ = word_index;
                 if (++num_allocated == n) {
@@ -117,13 +116,13 @@ int MemoryPool::allocate(size_t size, size_t n, SimpleAllocationCallback callbac
     return num_allocated;
 }
 
-void MemoryPool::deallocate(void* ptr, size_t size) {
+void MemoryPool::deallocate(void *ptr, size_t size) {
     size_t blocks_to_free = size / block_size_;
     if (size % block_size_ != 0) {
         blocks_to_free += 1;  // round up
     }
 
-    uintptr_t offset = static_cast<char*>(ptr) - static_cast<char*>(pool_);
+    uintptr_t offset = static_cast<char *>(ptr) - static_cast<char *>(pool_);
     if (offset % block_size_ != 0) {
         std::cerr << "Invalid pointer deallocation attempt: not aligned" << std::endl;
         return;
@@ -154,7 +153,8 @@ void MemoryPool::deallocate(void* ptr, size_t size) {
 
 void create_mempool(uv_work_t *req) {
     mempool_wqueue_data_t *wqueue_data = (mempool_wqueue_data_t *)req->data;
-    wqueue_data->pool_ptr = new MemoryPool((size_t)EXTEND_POOL_SIZE, (size_t)EXTEND_BLOCK_SIZE, wqueue_data->pd);
+    wqueue_data->pool_ptr =
+        new MemoryPool((size_t)EXTEND_POOL_SIZE, (size_t)EXTEND_BLOCK_SIZE, wqueue_data->pd);
 }
 
 void create_mempool_completion(uv_work_t *req, int status) {
@@ -168,7 +168,7 @@ bool MM::allocate(size_t size, size_t n, AllocationCallback callback) {
     int mempool_cnt = mempools_.size();
     for (int i = 0; i < mempool_cnt; ++i) {
         // create a new callback from the original callback
-        auto simple_callback = [callback, i](void* ptr, uint32_t lkey, uint32_t rkey) {
+        auto simple_callback = [callback, i](void *ptr, uint32_t lkey, uint32_t rkey) {
             callback(ptr, lkey, rkey, i);
         };
 
@@ -177,8 +177,10 @@ bool MM::allocate(size_t size, size_t n, AllocationCallback callback) {
 
         auto total_blocks = mempools_[i]->get_total_blocks();
         auto allocated_blocks = mempools_[i]->get_allocated_blocks();
-        INFO("Pool idx: {}, Total blocks: {}, allocated blocks: {}, block usage: {}%", i, total_blocks, allocated_blocks, 100 * allocated_blocks / total_blocks);
-        if (i == mempools_.size() - 1 && (float)allocated_blocks / total_blocks > block_usage_ratio_) {
+        INFO("Pool idx: {}, Total blocks: {}, allocated blocks: {}, block usage: {}%", i,
+             total_blocks, allocated_blocks, 100 * allocated_blocks / total_blocks);
+        if (i == mempools_.size() - 1 &&
+            (float)allocated_blocks / total_blocks > block_usage_ratio_) {
             to_extend = true;
         }
         if (n == 0) {
@@ -194,6 +196,6 @@ bool MM::allocate(size_t size, size_t n, AllocationCallback callback) {
     return allocated;
 }
 
-void MM::deallocate(void* ptr, size_t size, int pool_idx) {
+void MM::deallocate(void *ptr, size_t size, int pool_idx) {
     mempools_[pool_idx]->deallocate(ptr, size);
 }

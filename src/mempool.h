@@ -5,11 +5,11 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <infiniband/verbs.h>
+#include <uv.h>
 
 #include <cstddef>
 #include <functional>
 #include <vector>
-#include <uv.h>
 
 #define BLOCK_USAGE_RATIO 0.5
 #define EXTEND_POOL_SIZE 10 << 30
@@ -55,9 +55,9 @@ class MemoryPool {
 };
 
 typedef struct {
-    MemoryPool *pool_ptr = NULL;
+    MemoryPool* pool_ptr = NULL;
     struct ibv_pd* pd = NULL;
-    std::vector<MemoryPool*> *mempools = NULL;
+    std::vector<MemoryPool*>* mempools = NULL;
 } mempool_wqueue_data_t;
 
 class MM {
@@ -65,20 +65,20 @@ class MM {
     std::vector<MemoryPool*> mempools_;
     float block_usage_ratio_;
     struct ibv_pd* pd_;
-    uv_loop_t *loop_;
-    uv_work_t *req_;
-    mempool_wqueue_data_t *wqueue_data_;
+    uv_loop_t* loop_;
+    uv_work_t* req_;
+    mempool_wqueue_data_t* wqueue_data_;
 
    public:
-    MM(size_t pool_size, size_t block_size, struct ibv_pd* pd, uv_loop_t *loop) {
+    MM(size_t pool_size, size_t block_size, struct ibv_pd* pd, uv_loop_t* loop) {
         block_usage_ratio_ = BLOCK_USAGE_RATIO;
         pd_ = pd;
         loop_ = loop;
         req_ = new uv_work_t();
-        wqueue_data_ = new mempool_wqueue_data_t();    
+        wqueue_data_ = new mempool_wqueue_data_t();
         wqueue_data_->pd = pd_;
         wqueue_data_->mempools = &mempools_;
-        req_->data = (void *)wqueue_data_;
+        req_->data = (void*)wqueue_data_;
         mempools_.push_back(new MemoryPool(pool_size, block_size, pd));
     }
     MM(const MM& mm) = delete;
