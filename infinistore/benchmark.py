@@ -88,6 +88,13 @@ def parse_args():
         help="IB or Ethernet, default IB",
         type=str,
     )
+    parser.add_argument(
+        "--steps",
+        required=False,
+        type=int,
+        default=32,
+        help="number of steps, default 32",
+    )
     return parser.parse_args()
 
 
@@ -119,7 +126,7 @@ def run(args):
 
     block_size = args.block_size * 1024 // 4
     num_of_blocks = args.size * 1024 * 1024 // (args.block_size * 1024)
-    keys = [generate_random_string(250) for i in range(num_of_blocks)]
+    keys = [generate_random_string(100) for i in range(num_of_blocks)]
     with infinistore.DisableTorchCaching():
         src_tensor = torch.rand(
             num_of_blocks * block_size, device=src_device, dtype=torch.float32
@@ -149,9 +156,8 @@ def run(args):
         if args.rdma:
             remote_addrs = conn.allocate_rdma(keys, block_size * 4)
 
-        steps = int(
-            32
-        )  # simulate we have <steps> layers, this steps should be less then MAX_WR_SIZE
+        steps = args.steps
+        # simulate we have <steps> layers, this steps should be less then MAX_WR_SIZE
         while len(blocks) % steps != 0 and steps > 1:
             steps = int(steps / 2)
         print(f"\nSimulate {steps} layers, running\n")

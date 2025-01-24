@@ -287,7 +287,7 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
 
                 DEBUG("RDMA_WRITE done wr_id: {}", wc.wr_id);
                 assert(outstanding_rdma_writes_ >= 0);
-                outstanding_rdma_writes_ -= 16;
+                outstanding_rdma_writes_ -= MAX_WR_BATCH;
 
                 if (!outstanding_rdma_writes_queue_.empty()) {
                     auto item = outstanding_rdma_writes_queue_.front();
@@ -300,7 +300,7 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                         ERROR("Failed to post RDMA write {}", strerror(ret));
                         throw std::runtime_error("Failed to post RDMA write");
                     }
-                    outstanding_rdma_writes_ += 16;
+                    outstanding_rdma_writes_ += MAX_WR_BATCH;
                     delete[] wrs;
                     delete[] sges;
                     outstanding_rdma_writes_queue_.pop_front();
@@ -426,7 +426,7 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
         blocks.push_back({.lkey = mm->get_lkey(ptr->pool_idx), .local_addr = (uintptr_t)ptr->ptr});
     }
 
-    const size_t max_wr = 16;
+    const size_t max_wr = MAX_WR_BATCH;
     struct ibv_send_wr local_wrs[max_wr];
     struct ibv_sge local_sges[max_wr];
 
@@ -436,7 +436,7 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
     size_t num_wr = 0;
     bool wr_full = false;
 
-    if (outstanding_rdma_writes_ + 16 > 1024) {
+    if (outstanding_rdma_writes_ + max_wr > MAX_RDMA_WRITE_WR) {
         wr_full = true;
         wrs = new struct ibv_send_wr[max_wr];
         sges = new struct ibv_sge[max_wr];
@@ -473,10 +473,10 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
                     ERROR("Failed to post RDMA write {}", strerror(ret));
                     return -1;
                 }
-                outstanding_rdma_writes_ += 16;
+                outstanding_rdma_writes_ += max_wr;
 
                 // check if next iteration will exceed the limit
-                if (outstanding_rdma_writes_ + 16 > 1024 - 200) {
+                if (outstanding_rdma_writes_ + max_wr > MAX_RDMA_WRITE_WR) {
                     wr_full = true;
                 }
             }
