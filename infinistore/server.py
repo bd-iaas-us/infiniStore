@@ -113,7 +113,7 @@ def parse_args():
         "--num-stream",
         required=False,
         default=1,
-        help="number of streams, default 1, can only be 1, 2, 4",
+        help="(deprecated)number of streams, default 1, can only be 1, 2, 4",
         type=int,
     )
     parser.add_argument(
