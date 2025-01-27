@@ -6,6 +6,7 @@ import time
 import random
 import string
 import argparse
+import uuid
 
 
 def parse_args():
@@ -104,6 +105,10 @@ def generate_random_string(length):
     return random_string
 
 
+def generate_uuid():
+    return str(uuid.uuid4())
+
+
 def run(args):
     config = infinistore.ClientConfig(
         host_addr=args.server,
@@ -126,7 +131,7 @@ def run(args):
 
     block_size = args.block_size * 1024 // 4
     num_of_blocks = args.size * 1024 * 1024 // (args.block_size * 1024)
-    keys = [generate_random_string(150) for i in range(num_of_blocks)]
+
     with infinistore.DisableTorchCaching():
         src_tensor = torch.rand(
             num_of_blocks * block_size, device=src_device, dtype=torch.float32
@@ -143,17 +148,15 @@ def run(args):
         conn.register_mr(src_tensor)
         conn.register_mr(dst_tensor)
 
-    offset_blocks = [i * block_size for i in range(num_of_blocks)]
-
-    # zip keys and offset_blocks
-    blocks = list(zip(keys, offset_blocks))
-
     # blocks = [(keys[i], offset_blocks[i]) for i in range(num_of_blocks)]
     write_sum = 0.0
     read_sum = 0.0
 
     for _ in range(args.iteration):
-        random.seed(time.time())
+        keys = [generate_uuid() for i in range(num_of_blocks)]
+        offset_blocks = [i * block_size for i in range(num_of_blocks)]
+        # zip keys and offset_blocks
+        blocks = list(zip(keys, offset_blocks))
 
         if args.rdma:
             remote_addrs = conn.allocate_rdma(keys, block_size * 4)

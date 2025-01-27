@@ -13,7 +13,7 @@
 #include <unistd.h>
 #include <uv.h>
 
-#include <boost/lockfree/queue.hpp>
+#include <boost/lockfree/spsc_queue.hpp>
 #include <chrono>
 #include <deque>
 #include <future>
@@ -119,7 +119,9 @@ struct Client {
     uv_sem_t sem_;
     // we use this thread to wait for the completion of the local GPU operation
     std::future<void> cuda_future_;
-    boost::lockfree::queue<CUDA_TASK *> cuda_task_queue_{100};
+
+    using CudaTaskQueue = boost::lockfree::spsc_queue<CUDA_TASK *, boost::lockfree::capacity<4096>>;
+    std::shared_ptr<CudaTaskQueue> cuda_task_queue_ = std::make_shared<CudaTaskQueue>();
 
     uv_poll_t poll_handle_;
 
@@ -145,7 +147,7 @@ struct Client {
     int get_match_last_index(const GetMatchLastIndexRequest *request);
     int rdma_exchange();
     int prepare_recv_rdma_request(int buf_idx);
-    void wait_for_ipc_close();
+    void wait_for_ipc_close(std::shared_ptr<CudaTaskQueue> cuda_task_queue);
 };
 
 typedef struct Client client_t;
@@ -157,10 +159,10 @@ Client::~Client() {
         // send quit signal to the waiting_for_ipc_close thread
         CUDA_TASK *task = new CUDA_TASK();
         task->type = QUIT;
-        cuda_task_queue_.push(task);
+        // cuda_task_queue_.push(task);
+        cuda_task_queue_->push(task);
         uv_sem_post(&sem_);
-        cuda_future_.get();
-        INFO("cuda thread closed");
+        // cuda_future_.get().get() could block the main thread. we do not wait for it.
     }
 
     if (poll_handle_.data) {
@@ -640,10 +642,11 @@ int Client::read_cache(const LocalMetaRequest *meta_req) {
     if (!cuda_future_.valid()) {
         // initiate the semaphore
         uv_sem_init(&sem_, 0);
-        cuda_future_ = std::async(std::launch::async, [&]() { this->wait_for_ipc_close(); });
+        cuda_future_ =
+            std::async(std::launch::async, [&]() { this->wait_for_ipc_close(cuda_task_queue_); });
     }
 
-    cuda_task_queue_.push(task);
+    cuda_task_queue_->push(task);
     uv_sem_post(&sem_);  // wake up thread to clean up
 
     send_resp(TASK_ACCEPTED, NULL, 0);
@@ -653,25 +656,18 @@ int Client::read_cache(const LocalMetaRequest *meta_req) {
     return 0;
 }
 
-void Client::wait_for_ipc_close() {
+void Client::wait_for_ipc_close(std::shared_ptr<CudaTaskQueue> cuda_task_queue) {
     CUDA_TASK *task = NULL;
     while (true) {
         uv_sem_wait(&sem_);
-        if (cuda_task_queue_.empty()) {
-            continue;
-        }
-        cuda_task_queue_.pop(task);
-
+        cuda_task_queue->pop(task);
         assert(task != NULL);
-
+        assert(task->type == CUDA_WRITE || task->type == CUDA_READ || task->type == QUIT);
         if (task->type == QUIT) {
             // clean up
             delete task;
-            DEBUG("quit the waiting_for_ipc_close thread");
-            return;
+            break;
         }
-
-        assert(task->type == CUDA_WRITE || task->type == CUDA_READ);
 
         CHECK_CUDA(cudaSetDevice(task->device));
         CHECK_CUDA(cudaEventSynchronize(task->event));
@@ -690,6 +686,8 @@ void Client::wait_for_ipc_close() {
 
         delete task;
     }
+    uv_sem_destroy(&sem_);
+    INFO("quit the waiting_for_ipc_close thread");
 }
 
 int Client::write_cache(const LocalMetaRequest *meta_req) {
@@ -778,9 +776,10 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
     if (!cuda_future_.valid()) {
         // initiate the semaphore
         uv_sem_init(&sem_, 0);
-        cuda_future_ = std::async(std::launch::async, [&]() { this->wait_for_ipc_close(); });
+        cuda_future_ =
+            std::async(std::launch::async, [&]() { this->wait_for_ipc_close(cuda_task_queue_); });
     }
-    cuda_task_queue_.push(task);
+    cuda_task_queue_->push(task);
     uv_sem_post(&sem_);  // wake up thread to clean up
 
     send_resp(return_code, NULL, 0);
