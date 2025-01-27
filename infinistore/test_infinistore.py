@@ -323,3 +323,64 @@ def test_upload_cpu_download_gpu(server):
     dst_conn.read_cache(dst, [(key, 0)], 4096)
     dst_conn.sync()
     assert torch.equal(src, dst.cpu())
+
+
+@pytest.mark.parametrize("local", [False])
+def test_deduplicate(server, local):
+    config = infinistore.ClientConfig(
+        host_addr="127.0.0.1",
+        service_port=92345,
+        link_type=infinistore.LINK_ETHERNET,
+        dev_name="mlx5_2",
+    )
+
+    config.connection_type = (
+        infinistore.TYPE_LOCAL_GPU if local else infinistore.TYPE_RDMA
+    )
+
+    conn = infinistore.InfinityConnection(config)
+    conn.connect()
+
+    key = "duplicate_key"
+    src = [i for i in range(4096)]
+    with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
+        src_tensor = torch.tensor(src, device="cuda:0", dtype=torch.float32)
+
+    torch.cuda.synchronize(src_tensor.device)
+    if not local:
+        conn.register_mr(src_tensor)
+        element_size = torch._utils._element_size(torch.float32)
+
+        remote_addrs = conn.allocate_rdma([key], 4096 * element_size)
+        print(remote_addrs)
+        conn.rdma_write_cache(src_tensor, [0], 4096, remote_addrs)
+    else:
+        conn.local_gpu_write_cache(src_tensor, [(key, 0)], 4096)
+
+    conn.sync()
+
+    with infinistore.DisableTorchCaching() if local else contextlib.nullcontext():
+        src2_tensor = torch.randn(4096, device="cuda:0", dtype=torch.float32)
+
+    # test_deduplicate
+    if not local:
+        conn.register_mr(src2_tensor)
+        element_size = torch._utils._element_size(torch.float32)
+
+        remote_addrs = conn.allocate_rdma([key], 4096 * element_size)
+        conn.rdma_write_cache(src_tensor, [0], 4096, remote_addrs)
+    else:
+        conn.local_gpu_write_cache(src_tensor, [(key, 0)], 4096)
+    conn.sync()
+
+    if not local:
+        dst_tensor = torch.zeros(4096, dtype=torch.float32, device="cpu")
+        conn.register_mr(dst_tensor)
+    else:
+        dst_tensor = torch.zeros(4096, dtype=torch.float32, device="cuda:0")
+
+    conn.read_cache(dst_tensor, [(key, 0)], 4096)
+    conn.sync()
+
+    assert torch.equal(src_tensor.cpu(), dst_tensor.cpu())
+    assert not torch.equal(src2_tensor.cpu(), dst_tensor.cpu())
