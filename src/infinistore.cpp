@@ -40,6 +40,8 @@ uint8_t ib_port = -1;
 // local active_mtu attr, after exchanging with remote, we will use the min of the two for path.mtu
 ibv_mtu active_mtu;
 
+bool extend_in_flight = false;
+
 // PTR is shared by kv_map and inflight_rdma_kv_map
 class PTR : public IntrusivePtrTarget {
    public:
@@ -529,6 +531,14 @@ void on_write(uv_write_t *req, int status) {
     free(req);
 }
 
+void create_mempool(uv_work_t *req) { mm->add_mempool(pd); }
+
+void create_mempool_completion(uv_work_t *req, int status) {
+    extend_in_flight = false;
+    mm->need_extend = false;
+    delete req;
+}
+
 void wait_for_ipc_close_completion(uv_work_t *req) {
     wqueue_data_t *wqueue_data = (wqueue_data_t *)req->data;
 
@@ -727,6 +737,13 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
 
             key_idx++;
         });
+
+    if (mm->need_extend && !extend_in_flight) {
+        INFO("Extend another mempool");
+        uv_work_t *req = new uv_work_t();
+        uv_queue_work(loop, req, create_mempool, create_mempool_completion);
+        extend_in_flight = true;
+    }
 
     for (int i = 0; i < global_config.num_stream; i++) {
         CHECK_CUDA(cudaEventRecord(events[i], cuda_streams[i]));
@@ -1297,7 +1314,7 @@ int register_server(unsigned long loop_ptr, server_config_t config) {
     if (init_rdma_context(config) < 0) {
         return -1;
     }
-    mm = new MM(config.prealloc_size << 30, config.minimal_allocate_size << 10, pd, loop);
+    mm = new MM(config.prealloc_size << 30, config.minimal_allocate_size << 10, pd);
 
     INFO("register server done");
 

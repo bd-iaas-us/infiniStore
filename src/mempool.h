@@ -5,7 +5,6 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <infiniband/verbs.h>
-#include <uv.h>
 
 #include <cstddef>
 #include <functional>
@@ -54,34 +53,18 @@ class MemoryPool {
     struct ibv_pd* pd_;
 };
 
-typedef struct {
-    MemoryPool* pool_ptr = NULL;
-    struct ibv_pd* pd = NULL;
-    std::vector<MemoryPool*>* mempools = NULL;
-} mempool_wqueue_data_t;
-
 class MM {
    private:
     std::vector<MemoryPool*> mempools_;
-    float block_usage_ratio_;
-    struct ibv_pd* pd_;
-    uv_loop_t* loop_;
-    uv_work_t* req_;
-    mempool_wqueue_data_t* wqueue_data_;
 
    public:
-    MM(size_t pool_size, size_t block_size, struct ibv_pd* pd, uv_loop_t* loop) {
-        block_usage_ratio_ = BLOCK_USAGE_RATIO;
-        pd_ = pd;
-        loop_ = loop;
-        req_ = new uv_work_t();
-        wqueue_data_ = new mempool_wqueue_data_t();
-        wqueue_data_->pd = pd_;
-        wqueue_data_->mempools = &mempools_;
-        req_->data = (void*)wqueue_data_;
-        mempools_.push_back(new MemoryPool(pool_size, block_size, pd));
+    MM(size_t pool_size, size_t block_size, struct ibv_pd* pd) {
+        add_mempool(pool_size, block_size, pd);
     }
     MM(const MM& mm) = delete;
+    bool need_extend = false;
+    void add_mempool(struct ibv_pd* pd);
+    void add_mempool(size_t pool_size, size_t block_size, struct ibv_pd* pd);
     bool allocate(size_t size, size_t n, AllocationCallback callback);
     void deallocate(void* ptr, size_t size, int pool_idx);
     uint32_t get_lkey(int pool_idx) const {
@@ -97,8 +80,6 @@ class MM {
         for (auto& pool : mempools_) {
             delete pool;
         }
-        delete req_;
-        delete wqueue_data_;
     }
 };
 

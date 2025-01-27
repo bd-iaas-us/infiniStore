@@ -2,7 +2,6 @@
 
 #include <assert.h>
 #include <sys/mman.h>
-#include <uv.h>
 
 #include <cstring>
 #include <iostream>
@@ -10,8 +9,6 @@
 
 #include "log.h"
 #include "utils.h"
-
-bool extend_in_flight = false;
 
 MemoryPool::MemoryPool(size_t pool_size, size_t block_size, struct ibv_pd *pd)
     : pool_(nullptr),
@@ -151,20 +148,16 @@ void MemoryPool::deallocate(void *ptr, size_t size) {
     }
 }
 
-void create_mempool(uv_work_t *req) {
-    mempool_wqueue_data_t *wqueue_data = (mempool_wqueue_data_t *)req->data;
-    wqueue_data->pool_ptr =
-        new MemoryPool((size_t)EXTEND_POOL_SIZE, (size_t)EXTEND_BLOCK_SIZE, wqueue_data->pd);
+void MM::add_mempool(struct ibv_pd *pd) {
+    mempools_.push_back(new MemoryPool((size_t)EXTEND_POOL_SIZE, (size_t)EXTEND_BLOCK_SIZE, pd));
 }
 
-void create_mempool_completion(uv_work_t *req, int status) {
-    mempool_wqueue_data_t *wqueue_data = (mempool_wqueue_data_t *)req->data;
-    extend_in_flight = false;
-    wqueue_data->mempools->push_back(wqueue_data->pool_ptr);
+void MM::add_mempool(size_t pool_size, size_t block_size, struct ibv_pd *pd) {
+    mempools_.push_back(new MemoryPool(pool_size, block_size, pd));
 }
 
 bool MM::allocate(size_t size, size_t n, AllocationCallback callback) {
-    bool to_extend = false, allocated = false;
+    bool allocated = false;
     int mempool_cnt = mempools_.size();
     for (int i = 0; i < mempool_cnt; ++i) {
         // create a new callback from the original callback
@@ -180,18 +173,13 @@ bool MM::allocate(size_t size, size_t n, AllocationCallback callback) {
         INFO("Pool idx: {}, Total blocks: {}, allocated blocks: {}, block usage: {}%", i,
              total_blocks, allocated_blocks, 100 * allocated_blocks / total_blocks);
         if (i == mempools_.size() - 1 &&
-            (float)allocated_blocks / total_blocks > block_usage_ratio_) {
-            to_extend = true;
+            (float)allocated_blocks / total_blocks > BLOCK_USAGE_RATIO) {
+            need_extend = true;
         }
         if (n == 0) {
             allocated = true;
             break;
         }
-    }
-    if (to_extend && !extend_in_flight) {
-        INFO("Extend another mempool");
-        uv_queue_work(loop_, req_, create_mempool, create_mempool_completion);
-        extend_in_flight = true;
     }
     return allocated;
 }
