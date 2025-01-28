@@ -148,6 +148,32 @@ class Logger:
         _infinistore.set_log_level(level)
 
 
+def get_kvmap_len():
+    """
+    Returns the length of the key-value map in the infinistore.
+
+    This function calls the underlying _infinistore.get_kvmap_len() method to
+    get the length of the key-value map.
+
+    Returns:
+        The result of the _infinistore.get_kvmap_len() method call.
+    """
+    return _infinistore.get_kvmap_len()
+
+
+def purge_kv_map():
+    """
+    Purges the key-value map in the infinistore.
+
+    This function calls the underlying _infinistore.purge_kv_map() method to
+    clear all entries in the key-value map, effectively resetting it.
+
+    Returns:
+        The result of the _infinistore.purge_kv_map() method call.
+    """
+    return _infinistore.purge_kv_map()
+
+
 def register_server(loop, config: ServerConfig):
     """
     Registers a server with the given event loop and configuration.

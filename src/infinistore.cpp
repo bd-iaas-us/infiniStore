@@ -1,4 +1,6 @@
 // single thread right now.
+#include "infinistore.h"
+
 #include <arpa/inet.h>
 #include <assert.h>
 #include <cuda.h>
@@ -11,7 +13,6 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
-#include <uv.h>
 
 #include <boost/lockfree/spsc_queue.hpp>
 #include <chrono>
@@ -21,12 +22,8 @@
 #include <string>
 #include <unordered_map>
 
-#include "config.h"
 #include "ibv_helper.h"
-#include "log.h"
-#include "mempool.h"
 #include "protocol.h"
-#include "utils.h"
 
 server_config_t global_config;
 
@@ -48,22 +45,6 @@ bool extend_in_flight = false;
 // indicate the number of cudaIpcOpenMemHandle
 std::atomic<unsigned int> opened_ipc{0};
 
-// PTR is shared by kv_map and inflight_rdma_kv_map
-class PTR : public IntrusivePtrTarget {
-   public:
-    void *ptr;
-    size_t size;
-    int pool_idx;
-    bool committed;
-    PTR(void *ptr, size_t size, int pool_idx, bool committed = false)
-        : ptr(ptr), size(size), pool_idx(pool_idx), committed(committed) {}
-    ~PTR() {
-        if (ptr) {
-            DEBUG("deallocate ptr: {}, size: {}, pool_idx: {}", ptr, size, pool_idx);
-            mm->deallocate(ptr, size, pool_idx);
-        }
-    }
-};
 
 enum CUDA_TASK_TYPE {
     CUDA_READ,
@@ -80,10 +61,9 @@ struct CUDA_TASK {
     cudaEvent_t event;
 };
 
-std::unordered_map<uintptr_t, boost::intrusive_ptr<PTR>> inflight_rdma_kv_map;
-std::unordered_map<std::string, boost::intrusive_ptr<PTR>> kv_map;
+std::unordered_map<uintptr_t, boost::intrusive_ptr<PTR>> inflight_rdma_writes;
 
-int get_kvmap_len() { return kv_map.size(); }
+std::unordered_map<std::string, boost::intrusive_ptr<PTR>> kv_map;
 
 typedef enum {
     READ_HEADER,
@@ -130,11 +110,6 @@ struct Client {
 
     uv_poll_t poll_handle_;
 
-    struct block {
-        uint32_t lkey;
-        uintptr_t local_addr;
-    };
-
     Client() = default;
     Client(const Client &) = delete;
     ~Client();
@@ -173,6 +148,7 @@ Client::~Client() {
     if (poll_handle_.data) {
         uv_poll_stop(&poll_handle_);
     }
+
     if (handle_) {
         free(handle_);
         handle_ = NULL;
@@ -274,15 +250,15 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                             ERROR("remote_addrs size should not be 0");
                         }
                         for (auto addr : *request->remote_addrs()) {
-                            auto it = inflight_rdma_kv_map.find(addr);
-                            if (it == inflight_rdma_kv_map.end()) {
+                            auto it = inflight_rdma_writes.find(addr);
+                            if (it == inflight_rdma_writes.end()) {
                                 ERROR("commit msg: Key not found: {}", addr);
                                 continue;
                             }
                             it->second->committed = true;
-                            inflight_rdma_kv_map.erase(it);
+                            inflight_rdma_writes.erase(it);
                         }
-                        DEBUG("inflight_rdma_kv_map size: {}", inflight_rdma_kv_map.size());
+                        DEBUG("inflight_rdma_kv_map size: {}", inflight_rdma_writes.size());
                         break;
                     }
                     default:
@@ -332,6 +308,12 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                     delete[] sges;
                     outstanding_rdma_writes_queue_.pop_front();
                 }
+
+                if (wc.wr_id > 0) {
+                    // last WR will inform that all RDMA write is finished,so we can dereference PTR
+                    auto inflight_rdma_reads = (std::vector<boost::intrusive_ptr<PTR>> *)wc.wr_id;
+                    delete inflight_rdma_reads;
+                }
             }
             else {
                 ERROR("Unexpected wc opcode: {}", (int)wc.opcode);
@@ -376,7 +358,7 @@ int Client::allocate_rdma(const RemoteMetaRequest *req) {
 
                           // save in inflight_rdma_kv_map, when write is finished, we can merge it
                           // into kv_map
-                          inflight_rdma_kv_map[(uintptr_t)addr] = ptr;
+                          inflight_rdma_writes[(uintptr_t)addr] = ptr;
 
                           blocks.push_back(RemoteBlock(rkey, (uint64_t)addr));
                           key_idx++;
@@ -439,8 +421,9 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
         return -1;
     }
 
-    std::vector<block> blocks;
-    blocks.reserve(remote_meta_req->keys()->size());
+    auto *inflight_rdma_reads = new std::vector<boost::intrusive_ptr<PTR>>;
+
+    inflight_rdma_reads->reserve(remote_meta_req->keys()->size());
 
     for (const auto *key : *remote_meta_req->keys()) {
         auto it = kv_map.find(key->str());
@@ -459,7 +442,7 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
         DEBUG("rkey: {}, local_addr: {}, size : {}", mm->get_lkey(ptr->pool_idx),
               (uintptr_t)ptr->ptr, ptr->size);
 
-        blocks.push_back({.lkey = mm->get_lkey(ptr->pool_idx), .local_addr = (uintptr_t)ptr->ptr});
+        inflight_rdma_reads->push_back(ptr);
     }
 
     const size_t max_wr = MAX_WR_BATCH;
@@ -477,13 +460,12 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
         wrs = new struct ibv_send_wr[max_wr];
         sges = new struct ibv_sge[max_wr];
     }
-
     for (size_t i = 0; i < remote_meta_req->keys()->size(); i++) {
-        sges[num_wr].addr = blocks[i].local_addr;
+        sges[num_wr].addr = (uintptr_t)(*inflight_rdma_reads)[i]->ptr;
         sges[num_wr].length = remote_meta_req->block_size();
-        sges[num_wr].lkey = blocks[i].lkey;
+        sges[num_wr].lkey = mm->get_lkey((*inflight_rdma_reads)[i]->pool_idx);
 
-        wrs[num_wr].wr_id = i;
+        wrs[num_wr].wr_id = 0;
         wrs[num_wr].opcode = (i == remote_meta_req->keys()->size() - 1) ? IBV_WR_RDMA_WRITE_WITH_IMM
                                                                         : IBV_WR_RDMA_WRITE;
         wrs[num_wr].sg_list = &sges[num_wr];
@@ -497,6 +479,10 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
         wrs[num_wr].send_flags = (num_wr == max_wr - 1 || i == remote_meta_req->keys()->size() - 1)
                                      ? IBV_SEND_SIGNALED
                                      : 0;
+
+        if (i == remote_meta_req->keys()->size() - 1) {
+            wrs[num_wr].wr_id = (uintptr_t)inflight_rdma_reads;
+        }
 
         num_wr++;
 
@@ -617,18 +603,12 @@ int Client::read_cache(const LocalMetaRequest *meta_req) {
 
         DEBUG("key: {}, local_addr: {}, size : {}", key, (uintptr_t)h_src, block_size);
 
-        task->ptrs.push_back(kv_map[key]);
+        task->ptrs.push_back(kv_map[key]);  // keep PTR in task as reference count.
         remote_addrs.push_back((uintptr_t)((char *)d_ptr + block->offset()));
         idx++;
     }
 
     assert(task->ptrs.size() == remote_addrs.size());
-
-    // for (auto &task : tasks) {
-    //     // CHECK_CUDA(cudaMemcpyAsync((void *)task.dst, task.ptr->ptr, block_size,
-    //     //                            cudaMemcpyHostToDevice, cuda_streams[task.stream_idx]));
-
-    // }
 
     for (int i = 0; i < task->ptrs.size(); i++) {
         CHECK_CUDA(cudaMemcpyAsync((void *)remote_addrs[i], task->ptrs[i]->ptr, block_size,
@@ -711,8 +691,7 @@ void add_mempool_completion(uv_work_t *req, int status) {
 }
 
 int Client::write_cache(const LocalMetaRequest *meta_req) {
-    INFO("do write_cache..., num of blocks: {}, stream num {}", meta_req->blocks()->size(),
-         global_config.num_stream);
+    INFO("do write_cache..., num of blocks: {}", meta_req->blocks()->size());
 
     void *d_ptr;
     int return_code = TASK_ACCEPTED;
@@ -1270,11 +1249,11 @@ void on_new_connection(uv_stream_t *server, int status) {
 }
 
 void signal_handler(int signum) {
-    void *array[10];
+    void *array[32];
     size_t size;
     if (signum == SIGSEGV) {
         ERROR("Caught SIGSEGV: segmentation fault");
-        size = backtrace(array, 10);
+        size = backtrace(array, 32);
         // print signum's name
         ERROR("Error: signal {}", signum);
         // backtrace_symbols_fd(array, size, STDERR_FILENO);
