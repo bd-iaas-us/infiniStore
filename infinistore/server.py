@@ -45,6 +45,12 @@ def check_p2p_access():
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "--autoincrease",
+        required=False,
+        action="store_true",
+        help="increase allocated memory automatically, 10GB each time, default False",
+    )
+    parser.add_argument(
         "--host",
         required=False,
         help="listen on which host, default 0.0.0.0",
@@ -144,6 +150,7 @@ def main():
         link_type=args.link_type,
         minimal_allocate_size=args.minimal_allocate_size,
         num_stream=args.num_stream,
+        autoincrease=args.autoincrease,
     )
     config.verify()
     # check_p2p_access()

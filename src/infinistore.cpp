@@ -763,7 +763,7 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
             key_idx++;
         });
 
-    if (mm->need_extend && !extend_in_flight) {
+    if (global_config.autoincrease && mm->need_extend && !extend_in_flight) {
         INFO("Extend another mempool");
         uv_work_t *req = new uv_work_t();
         uv_queue_work(loop, req, add_mempool, add_mempool_completion);
