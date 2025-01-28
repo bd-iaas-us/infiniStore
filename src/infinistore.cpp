@@ -43,7 +43,9 @@ uint8_t ib_port = -1;
 // local active_mtu attr, after exchanging with remote, we will use the min of the two for path.mtu
 ibv_mtu active_mtu;
 
+// indicate if the MM extend is in flight
 bool extend_in_flight = false;
+// indicate the number of cudaIpcOpenMemHandle
 std::atomic<unsigned int> opened_ipc{0};
 
 // PTR is shared by kv_map and inflight_rdma_kv_map
@@ -762,8 +764,7 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
             task->ptrs.push_back(ptr);
             key_idx++;
         });
-
-    if (global_config.autoincrease && mm->need_extend && !extend_in_flight) {
+    if (global_config.auto_increase && mm->need_extend && !extend_in_flight) {
         INFO("Extend another mempool");
         uv_work_t *req = new uv_work_t();
         uv_queue_work(loop, req, add_mempool, add_mempool_completion);

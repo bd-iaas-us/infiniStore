@@ -170,7 +170,7 @@ bool MM::allocate(size_t size, size_t n, AllocationCallback callback) {
 
         auto total_blocks = mempools_[i]->get_total_blocks();
         auto allocated_blocks = mempools_[i]->get_allocated_blocks();
-        INFO(
+        DEBUG(
             "Mempool Count: {}, Pool idx: {}, Total blocks: {}, allocated blocks: {}, block usage: "
             "{}%",
             mempool_cnt, i, total_blocks, allocated_blocks, 100 * allocated_blocks / total_blocks);
