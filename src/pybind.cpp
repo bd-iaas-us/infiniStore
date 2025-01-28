@@ -123,7 +123,6 @@ PYBIND11_MODULE(_infinistore, m) {
         .def_readwrite("minimal_allocate_size", &ServerConfig::minimal_allocate_size)
         .def_readwrite("num_stream", &ServerConfig::num_stream)
         .def_readwrite("auto_increase", &ServerConfig::auto_increase);
-        .def_readwrite("num_stream", &ServerConfig::num_stream);
     m.def(
         "purge_kv_map", []() { kv_map.clear(); }, "purge kv map");
     m.def(
