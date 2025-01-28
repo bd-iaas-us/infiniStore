@@ -10,6 +10,10 @@
 #include <functional>
 #include <vector>
 
+#define BLOCK_USAGE_RATIO 0.5
+#define EXTEND_POOL_SIZE 10 << 30
+#define EXTEND_BLOCK_SIZE 64 << 10
+
 using AllocationCallback =
     std::function<void(void* ptr, uint32_t lkey, uint32_t rkey, int pool_idx)>;
 using SimpleAllocationCallback = std::function<void(void* ptr, uint32_t lkey, uint32_t rkey)>;
@@ -23,7 +27,7 @@ class MemoryPool {
     /*
     @brief size should be aligned to block size
     */
-    bool allocate(size_t size, size_t n, SimpleAllocationCallback callback);
+    int allocate(size_t size, size_t n, SimpleAllocationCallback callback);
     /*
     @brief size should be aligned to block size
     */
@@ -31,6 +35,8 @@ class MemoryPool {
 
     uint32_t get_lkey() const { return mr_->lkey; }
     uint32_t get_rkey() const { return mr_->rkey; }
+    uint32_t get_total_blocks() const { return total_blocks_; }
+    uint32_t get_allocated_blocks() const { return allocated_blocks_; }
 
    private:
     void* pool_;
@@ -38,6 +44,7 @@ class MemoryPool {
     size_t block_size_;
     size_t total_blocks_;
     size_t last_search_position_;
+    size_t allocated_blocks_;
 
     // TODO: use judy libray to speed up the bitmap?
     std::vector<uint64_t> bitmap_;
@@ -52,9 +59,12 @@ class MM {
 
    public:
     MM(size_t pool_size, size_t block_size, struct ibv_pd* pd) {
-        mempools_.push_back(new MemoryPool(pool_size, block_size, pd));
+        add_mempool(pool_size, block_size, pd);
     }
     MM(const MM& mm) = delete;
+    bool need_extend = false;
+    void add_mempool(struct ibv_pd* pd);
+    void add_mempool(size_t pool_size, size_t block_size, struct ibv_pd* pd);
     bool allocate(size_t size, size_t n, AllocationCallback callback);
     void deallocate(void* ptr, size_t size, int pool_idx);
     uint32_t get_lkey(int pool_idx) const {

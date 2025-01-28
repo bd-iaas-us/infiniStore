@@ -16,7 +16,8 @@ MemoryPool::MemoryPool(size_t pool_size, size_t block_size, struct ibv_pd* pd)
       block_size_(block_size),
       pd_(pd),
       mr_(nullptr),
-      last_search_position_(0) {
+      last_search_position_(0),
+      allocated_blocks_(0) {
     // 计算总的内存块数量
     total_blocks_ = pool_size_ / block_size_;
     assert(pool_size % block_size == 0);
@@ -53,28 +54,32 @@ MemoryPool::~MemoryPool() {
     }
 }
 
-bool MemoryPool::allocate(size_t size, size_t n, SimpleAllocationCallback callback) {
+int MemoryPool::allocate(size_t size, size_t n, SimpleAllocationCallback callback) {
     size_t required_blocks = (size + block_size_ - 1) / block_size_;  // round up
+    int num_allocated = 0;
 
     if (required_blocks > total_blocks_) {
-        return false;
+        return 0;
     }
 
-    int num_allocated = 0;
     size_t bit_per_word = 64;
     size_t shift = 6;
 
     for (size_t word_index = last_search_position_; word_index < bitmap_.size(); ++word_index) {
+        if (num_allocated == n) {
+            break;
+        }
+
         uint64_t word = bitmap_[word_index];
         if (word == 0xFFFFFFFFFFFFFFFFULL) {
             continue;
         }
-
         for (size_t bit_index = __builtin_ctzll(~word); bit_index < bit_per_word; ++bit_index) {
             size_t start_block = (word_index << shift) + bit_index;
 
             if (start_block + required_blocks > total_blocks_) {
-                return false;
+                allocated_blocks_ += num_allocated * required_blocks;
+                return num_allocated;
             }
 
             bool found = true;
@@ -98,13 +103,14 @@ bool MemoryPool::allocate(size_t size, size_t n, SimpleAllocationCallback callba
                 callback(addr, mr_->lkey, mr_->rkey);
                 last_search_position_ = word_index;
                 if (++num_allocated == n) {
-                    return true;
+                    break;
                 }
             }
         }
     }
 
-    return num_allocated == n;
+    allocated_blocks_ += num_allocated * required_blocks;
+    return num_allocated;
 }
 
 void MemoryPool::deallocate(void* ptr, size_t size) {
@@ -142,18 +148,42 @@ void MemoryPool::deallocate(void* ptr, size_t size) {
     }
 }
 
+void MM::add_mempool(struct ibv_pd* pd) {
+    mempools_.push_back(new MemoryPool((size_t)EXTEND_POOL_SIZE, (size_t)EXTEND_BLOCK_SIZE, pd));
+}
+
+void MM::add_mempool(size_t pool_size, size_t block_size, struct ibv_pd* pd) {
+    mempools_.push_back(new MemoryPool(pool_size, block_size, pd));
+}
+
 bool MM::allocate(size_t size, size_t n, AllocationCallback callback) {
-    for (int i = 0; i < mempools_.size(); ++i) {
+    bool allocated = false;
+    int mempool_cnt = mempools_.size();
+    for (int i = 0; i < mempool_cnt; ++i) {
         // create a new callback from the original callback
         auto simple_callback = [callback, i](void* ptr, uint32_t lkey, uint32_t rkey) {
             callback(ptr, lkey, rkey, i);
         };
 
-        if (mempools_[i]->allocate(size, n, simple_callback)) {
-            return true;
+        int num_allocated = mempools_[i]->allocate(size, n, simple_callback);
+        n -= num_allocated;
+
+        auto total_blocks = mempools_[i]->get_total_blocks();
+        auto allocated_blocks = mempools_[i]->get_allocated_blocks();
+        INFO(
+            "Mempool Count: {}, Pool idx: {}, Total blocks: {}, allocated blocks: {}, block usage: "
+            "{}%",
+            mempool_cnt, i, total_blocks, allocated_blocks, 100 * allocated_blocks / total_blocks);
+        if (i == mempools_.size() - 1 &&
+            (float)allocated_blocks / total_blocks > BLOCK_USAGE_RATIO) {
+            need_extend = true;
+        }
+        if (n == 0) {
+            allocated = true;
+            break;
         }
     }
-    return false;
+    return allocated;
 }
 
 void MM::deallocate(void* ptr, size_t size, int pool_idx) {

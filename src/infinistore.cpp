@@ -75,6 +75,15 @@ struct CUDA_TASK {
     cudaEvent_t event;
 };
 
+enum MEMPOOL_TASK_TYPE {
+    MEMPOOL_ADD,
+    MEMPOOL_QUIT,
+};
+
+struct MEMPOOL_TASK {
+    enum MEMPOOL_TASK_TYPE type;
+};
+
 std::unordered_map<uintptr_t, boost::intrusive_ptr<PTR>> inflight_rdma_kv_map;
 std::unordered_map<std::string, boost::intrusive_ptr<PTR>> kv_map;
 
@@ -120,8 +129,16 @@ struct Client {
     // we use this thread to wait for the completion of the local GPU operation
     std::future<void> cuda_future_;
 
+    std::atomic<unsigned int> extend_in_flight_{0};
+    uv_sem_t mempool_sem_;
+    std::future<void> mempool_future_;
+
     using CudaTaskQueue = boost::lockfree::spsc_queue<CUDA_TASK *, boost::lockfree::capacity<4096>>;
     std::shared_ptr<CudaTaskQueue> cuda_task_queue_ = std::make_shared<CudaTaskQueue>();
+
+    using MempoolTaskQueue =
+        boost::lockfree::spsc_queue<MEMPOOL_TASK *, boost::lockfree::capacity<10>>;
+    std::shared_ptr<MempoolTaskQueue> mempool_task_queue_ = std::make_shared<MempoolTaskQueue>();
 
     uv_poll_t poll_handle_;
 
@@ -148,6 +165,7 @@ struct Client {
     int rdma_exchange();
     int prepare_recv_rdma_request(int buf_idx);
     void wait_for_ipc_close(std::shared_ptr<CudaTaskQueue> cuda_task_queue);
+    void wait_for_mempool_add(std::shared_ptr<MempoolTaskQueue> mempool_task_queue);
 };
 
 typedef struct Client client_t;
@@ -163,6 +181,12 @@ Client::~Client() {
         cuda_task_queue_->push(task);
         uv_sem_post(&sem_);
         // cuda_future_.get().get() could block the main thread. we do not wait for it.
+    }
+    if (mempool_future_.valid()) {
+        MEMPOOL_TASK *task = new MEMPOOL_TASK();
+        task->type = MEMPOOL_QUIT;
+        mempool_task_queue_->push(task);
+        uv_sem_post(&mempool_sem_);
     }
 
     if (poll_handle_.data) {
@@ -690,6 +714,28 @@ void Client::wait_for_ipc_close(std::shared_ptr<CudaTaskQueue> cuda_task_queue) 
     INFO("quit the waiting_for_ipc_close thread");
 }
 
+void Client::wait_for_mempool_add(std::shared_ptr<MempoolTaskQueue> mempool_task_queue) {
+    MEMPOOL_TASK *task = NULL;
+    while (true) {
+        uv_sem_wait(&mempool_sem_);
+        mempool_task_queue->pop(task);
+        assert(task != NULL);
+        assert(task->type == MEMPOOL_ADD || task->type == MEMPOOL_QUIT);
+        if (task->type == MEMPOOL_QUIT) {
+            delete task;
+            break;
+        }
+        if (task->type == MEMPOOL_ADD) {
+            mm->add_mempool(pd);
+        }
+        mm->need_extend = false;
+        extend_in_flight_--;
+        delete task;
+    }
+    uv_sem_destroy(&mempool_sem_);
+    INFO("quit the wait_for_mempool_add thread");
+}
+
 int Client::write_cache(const LocalMetaRequest *meta_req) {
     INFO("do write_cache..., num of blocks: {}, stream num {}", meta_req->blocks()->size(),
          global_config.num_stream);
@@ -743,6 +789,21 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
             task->ptrs.push_back(ptr);
             key_idx++;
         });
+
+    if (mm->need_extend && extend_in_flight_ == 0) {
+        INFO("Extend another mempool");
+        extend_in_flight_++;
+
+        MEMPOOL_TASK *mempool_task = new MEMPOOL_TASK();
+        mempool_task->type = MEMPOOL_ADD;
+        if (!mempool_future_.valid()) {
+            uv_sem_init(&mempool_sem_, 0);
+            mempool_future_ = std::async(
+                std::launch::async, [&]() { this->wait_for_mempool_add(mempool_task_queue_); });
+        }
+        mempool_task_queue_->push(mempool_task);
+        uv_sem_post(&mempool_sem_);
+    }
 
     CHECK_CUDA(cudaEventRecord(event, cuda_stream));
 
