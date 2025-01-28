@@ -10,6 +10,8 @@ from .lib import (
     LINK_ETHERNET,
     LINK_IB,
     register_server,
+    purge_kv_map,
+    get_kvmap_len,
 )
 
 __all__ = [
@@ -24,4 +26,6 @@ __all__ = [
     "check_supported",
     "LINK_ETHERNET",
     "LINK_IB",
+    "purge_kv_map",
+    "get_kvmap_len",
 ]

@@ -350,7 +350,7 @@ void cq_handler(connection_t *conn) {
                             struct ibv_send_wr *wrs = item.first;
                             struct ibv_sge *sges = item.second;
                             ibv_send_wr *bad_wr = nullptr;
-                            INFO("IBV POST SEND, wr_id: {}", wrs[0].wr_id);
+                            DEBUG("IBV POST SEND, wr_id: {}", wrs[0].wr_id);
                             int ret = ibv_post_send(conn->qp, &wrs[0], &bad_wr);
                             if (ret) {
                                 ERROR("Failed to post RDMA write {}", strerror(ret));
@@ -940,7 +940,7 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
             }
             else {
                 // if WR queue is full, we need to put them into queue
-                WARN(
+                DEBUG(
                     "WR queue full: push into temp queue, len: {}, first wr_id: {}, last wr_id: "
                     "{}",
                     num_wr, wrs[0].wr_id, wrs[num_wr - 1].wr_id);
@@ -958,8 +958,8 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
     // Check if there are remaining WRs to be sent
     if (num_wr > 0) {
         if (wr_full) {
-            WARN("WR queue full: push into temp queue, len: {}, first wr_id: {}, last wr_id: {}",
-                 num_wr, wrs[0].wr_id, wrs[num_wr - 1].wr_id);
+            DEBUG("WR queue full: push into temp queue, len: {}, first wr_id: {}, last wr_id: {}",
+                  num_wr, wrs[0].wr_id, wrs[num_wr - 1].wr_id);
             conn->outstanding_rdma_writes_queue.push_back({&wrs[0], &sges[0]});
         }
         else {

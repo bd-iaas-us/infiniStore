@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "config.h"
+#include "infinistore.h"
 #include "libinfinistore.h"
 #include "log.h"
 
@@ -122,7 +123,11 @@ PYBIND11_MODULE(_infinistore, m) {
         .def_readwrite("minimal_allocate_size", &ServerConfig::minimal_allocate_size)
         .def_readwrite("num_stream", &ServerConfig::num_stream)
         .def_readwrite("auto_increase", &ServerConfig::auto_increase);
-    m.def("get_kvmap_len", &get_kvmap_len, "get kv map size");
+        .def_readwrite("num_stream", &ServerConfig::num_stream);
+    m.def(
+        "purge_kv_map", []() { kv_map.clear(); }, "purge kv map");
+    m.def(
+        "get_kvmap_len", []() { return kv_map.size(); }, "get kv map size");
     m.def("register_server", &register_server, "register the server");
 
     // //both side

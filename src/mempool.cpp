@@ -146,6 +146,7 @@ void MemoryPool::deallocate(void* ptr, size_t size) {
             ERROR("Double free detected at block index {}", i);
         }
     }
+    last_search_position_ = 0;
 }
 
 void MM::add_mempool(struct ibv_pd* pd) {

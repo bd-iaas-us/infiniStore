@@ -1,11 +1,11 @@
-from infinistore.lib import (
+from infinistore import (
     register_server,
+    purge_kv_map,
+    get_kvmap_len,
     check_supported,
     ServerConfig,
     Logger,
 )
-
-from infinistore._infinistore import get_kvmap_len
 
 import asyncio
 import uvloop
@@ -24,9 +24,17 @@ logging.disable(logging.INFO)
 app = FastAPI()
 
 
-@app.get("/kvmapSize")
-async def read_status():
-    return get_kvmap_len()
+@app.post("/purge")
+async def purge():
+    Logger.info("clear kvmap")
+    num = get_kvmap_len()
+    purge_kv_map()
+    return {"status": "ok", "num": num}
+
+
+@app.get("/kvmap_len")
+async def kvmap_len():
+    return {"len": get_kvmap_len()}
 
 
 def check_p2p_access():
@@ -188,7 +196,7 @@ def main():
 
     server = uvicorn.Server(http_config)
 
-    Logger.info("server started")
+    Logger.warn("server started")
     loop.run_until_complete(server.serve())
 
 
