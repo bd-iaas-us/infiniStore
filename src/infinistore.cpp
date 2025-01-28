@@ -43,6 +43,9 @@ uint8_t ib_port = -1;
 // local active_mtu attr, after exchanging with remote, we will use the min of the two for path.mtu
 ibv_mtu active_mtu;
 
+bool extend_in_flight = false;
+std::atomic<unsigned int> opened_ipc{0};
+
 // PTR is shared by kv_map and inflight_rdma_kv_map
 class PTR : public IntrusivePtrTarget {
    public:
@@ -73,15 +76,6 @@ struct CUDA_TASK {
     void *d_ptr = NULL;
     cudaStream_t stream;
     cudaEvent_t event;
-};
-
-enum MEMPOOL_TASK_TYPE {
-    MEMPOOL_ADD,
-    MEMPOOL_QUIT,
-};
-
-struct MEMPOOL_TASK {
-    enum MEMPOOL_TASK_TYPE type;
 };
 
 std::unordered_map<uintptr_t, boost::intrusive_ptr<PTR>> inflight_rdma_kv_map;
@@ -129,16 +123,8 @@ struct Client {
     // we use this thread to wait for the completion of the local GPU operation
     std::future<void> cuda_future_;
 
-    std::atomic<unsigned int> extend_in_flight_{0};
-    uv_sem_t mempool_sem_;
-    std::future<void> mempool_future_;
-
     using CudaTaskQueue = boost::lockfree::spsc_queue<CUDA_TASK *, boost::lockfree::capacity<4096>>;
     std::shared_ptr<CudaTaskQueue> cuda_task_queue_ = std::make_shared<CudaTaskQueue>();
-
-    using MempoolTaskQueue =
-        boost::lockfree::spsc_queue<MEMPOOL_TASK *, boost::lockfree::capacity<10>>;
-    std::shared_ptr<MempoolTaskQueue> mempool_task_queue_ = std::make_shared<MempoolTaskQueue>();
 
     uv_poll_t poll_handle_;
 
@@ -165,7 +151,6 @@ struct Client {
     int rdma_exchange();
     int prepare_recv_rdma_request(int buf_idx);
     void wait_for_ipc_close(std::shared_ptr<CudaTaskQueue> cuda_task_queue);
-    void wait_for_mempool_add(std::shared_ptr<MempoolTaskQueue> mempool_task_queue);
 };
 
 typedef struct Client client_t;
@@ -181,12 +166,6 @@ Client::~Client() {
         cuda_task_queue_->push(task);
         uv_sem_post(&sem_);
         // cuda_future_.get().get() could block the main thread. we do not wait for it.
-    }
-    if (mempool_future_.valid()) {
-        MEMPOOL_TASK *task = new MEMPOOL_TASK();
-        task->type = MEMPOOL_QUIT;
-        mempool_task_queue_->push(task);
-        uv_sem_post(&mempool_sem_);
     }
 
     if (poll_handle_.data) {
@@ -611,6 +590,7 @@ int Client::read_cache(const LocalMetaRequest *meta_req) {
 
     cudaIpcMemHandle_t ipc_handle = *(cudaIpcMemHandle_t *)meta_req->ipc_handle()->data();
     CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, ipc_handle, cudaIpcMemLazyEnablePeerAccess));
+    opened_ipc++;
 
     size_t block_size = meta_req->block_size();
     int idx = 0;
@@ -698,6 +678,7 @@ void Client::wait_for_ipc_close(std::shared_ptr<CudaTaskQueue> cuda_task_queue) 
         CHECK_CUDA(cudaEventDestroy(task->event));
         CHECK_CUDA(cudaStreamDestroy(task->stream));
         CHECK_CUDA(cudaIpcCloseMemHandle(task->d_ptr));
+        opened_ipc--;
         DEBUG("CUDA_TASK done");
 
         if (task->type == CUDA_WRITE) {
@@ -714,26 +695,17 @@ void Client::wait_for_ipc_close(std::shared_ptr<CudaTaskQueue> cuda_task_queue) 
     INFO("quit the waiting_for_ipc_close thread");
 }
 
-void Client::wait_for_mempool_add(std::shared_ptr<MempoolTaskQueue> mempool_task_queue) {
-    MEMPOOL_TASK *task = NULL;
-    while (true) {
-        uv_sem_wait(&mempool_sem_);
-        mempool_task_queue->pop(task);
-        assert(task != NULL);
-        assert(task->type == MEMPOOL_ADD || task->type == MEMPOOL_QUIT);
-        if (task->type == MEMPOOL_QUIT) {
-            delete task;
-            break;
-        }
-        if (task->type == MEMPOOL_ADD) {
-            mm->add_mempool(pd);
-        }
-        mm->need_extend = false;
-        extend_in_flight_--;
-        delete task;
+void add_mempool(uv_work_t *req) {
+    while (opened_ipc > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    uv_sem_destroy(&mempool_sem_);
-    INFO("quit the wait_for_mempool_add thread");
+    mm->add_mempool(pd);
+}
+
+void add_mempool_completion(uv_work_t *req, int status) {
+    extend_in_flight = false;
+    mm->need_extend = false;
+    delete req;
 }
 
 int Client::write_cache(const LocalMetaRequest *meta_req) {
@@ -748,6 +720,7 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
     CHECK_CUDA(cudaSetDevice(meta_req->device()));
 
     CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, ipc_handle, cudaIpcMemLazyEnablePeerAccess));
+    opened_ipc++;
 
     int key_idx = 0;
     size_t block_size = meta_req->block_size();
@@ -790,19 +763,11 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
             key_idx++;
         });
 
-    if (mm->need_extend && extend_in_flight_ == 0) {
+    if (mm->need_extend && !extend_in_flight) {
         INFO("Extend another mempool");
-        extend_in_flight_++;
-
-        MEMPOOL_TASK *mempool_task = new MEMPOOL_TASK();
-        mempool_task->type = MEMPOOL_ADD;
-        if (!mempool_future_.valid()) {
-            uv_sem_init(&mempool_sem_, 0);
-            mempool_future_ = std::async(
-                std::launch::async, [&]() { this->wait_for_mempool_add(mempool_task_queue_); });
-        }
-        mempool_task_queue_->push(mempool_task);
-        uv_sem_post(&mempool_sem_);
+        uv_work_t *req = new uv_work_t();
+        uv_queue_work(loop, req, add_mempool, add_mempool_completion);
+        extend_in_flight = true;
     }
 
     CHECK_CUDA(cudaEventRecord(event, cuda_stream));
