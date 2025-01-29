@@ -32,14 +32,16 @@ SendBuffer::~SendBuffer() {
     DEBUG("destroying send buffer");
     if (mr_) {
         ibv_dereg_mr(mr_);
+        mr_ = nullptr;
     }
     if (buffer_) {
         free(buffer_);
+        buffer_ = nullptr;
     }
 }
 
 Connection::~Connection() {
-    DEBUG("destroying connection");
+    INFO("destroying connection");
 
     if (cq_future.valid()) {
         stop = true;
@@ -66,7 +68,7 @@ Connection::~Connection() {
             ibv_post_send(qp, &send_wr, &bad_send_wr);
         }
         // wait thread done
-        cq_future.get();
+        // cq_future.get();
     }
 
     if (comp_channel) {
@@ -311,6 +313,7 @@ void cq_handler(connection_t *conn) {
                         // only fake wr will use IBV_WC_SEND
                         // we use it to wake up cq thread and exit
                         if (wc[i].opcode == IBV_WC_SEND) {
+                            INFO("cq thread exit");
                             return;
                         }
                         ERROR("Failed status: {}", ibv_wc_status_str(wc[i].status));
@@ -319,14 +322,15 @@ void cq_handler(connection_t *conn) {
 
                     if (wc[i].opcode ==
                         IBV_WC_SEND) {  // read cache/allocate msg/commit msg: request sent
-                        DEBUG("read cache/allocated/commit msg request send{}, ",
+                        DEBUG("read cache/allocated/commit msg request send {}, ",
                               (uintptr_t)wc[i].wr_id);
                         release_send_buffer(conn, (SendBuffer *)wc[i].wr_id);
                     }
                     else if (wc[i].opcode == IBV_WC_RECV) {  // allocate msg recved.
-                        DEBUG("rdma allocated recv {}", (uintptr_t)wc[i].wr_id);
-                        conn->rdma_allocate_count = 0;
-                        conn->allocater_cv.notify_all();
+                        INFO("rdma allocated recv {}", (uintptr_t)wc[i].wr_id);
+                        auto *f = reinterpret_cast<std::function<void()> *>(wc[i].wr_id);
+                        (*f)();
+                        delete f;
                     }
                     else if (wc[i].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {  // read cache done
                         uint32_t imm_data = ntohl(wc[i].imm_data);
@@ -368,8 +372,9 @@ void cq_handler(connection_t *conn) {
                             FixedBufferAllocator allocator(send_buffer->buffer_,
                                                            PROTOCOL_BUFFER_SIZE);
                             FlatBufferBuilder builder(64 << 10, &allocator);
-                            auto *info = reinterpret_cast<std::vector<uintptr_t> *>(wc[i].wr_id);
-                            auto remote_addrs_offset = builder.CreateVector(*info);
+                            auto *info = reinterpret_cast<rdma_write_commit_info *>(wc[i].wr_id);
+
+                            auto remote_addrs_offset = builder.CreateVector(info->remote_addrs);
 
                             auto req = CreateRemoteMetaRequest(
                                 builder, 0, 0, 0, remote_addrs_offset, OP_RDMA_WRITE_COMMIT);
@@ -395,6 +400,7 @@ void cq_handler(connection_t *conn) {
                                 ERROR("Failed to post RDMA send :{}", strerror(ret));
                                 return;
                             }
+                            info->callback();
                             delete info;
 
                             // FIXME:
@@ -757,9 +763,27 @@ int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
     return last_index;
 }
 
+std::vector<remote_block_t> *allocate_rdma(connection_t *conn, std::vector<std::string> &keys,
+                                           int block_size) {
+    // convert allocate_rdma_async to sync version
+    std::promise<void> promise;
+    auto future = promise.get_future();
+    std::vector<remote_block_t> *ret_blocks;
+    allocate_rdma_async(conn, keys, block_size,
+                        [&promise, &ret_blocks](std::vector<remote_block_t> *blocks) {
+                            ret_blocks = blocks;
+                            for (auto &block : *ret_blocks) {
+                                INFO("rkey: {}, remote_addr: {}", block.rkey, block.remote_addr);
+                            }
+                            promise.set_value();
+                        });
+    future.get();
+    return ret_blocks;
+}
+
 // send a message to allocate memory and return the address
-int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_size,
-                  std::vector<remote_block_t> &blocks) {
+int allocate_rdma_async(connection_t *conn, std::vector<std::string> &keys, int block_size,
+                        std::function<void(std::vector<remote_block_t> *)> callback) {
     /*
     ENCODING
     remote_meta_request req = {
@@ -768,7 +792,48 @@ int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_
         .op = OP_RDMA_ALLOCATE,
     }
     */
+    int ret;
 
+    // post recv msg first
+    struct ibv_sge recv_sge = {0};
+    struct ibv_recv_wr *bad_recv_wr = NULL;
+    struct ibv_recv_wr recv_wr = {0};
+
+    // recv all remote addresses
+    recv_sge.addr = (uintptr_t)conn->recv_buffer;
+    recv_sge.length = PROTOCOL_BUFFER_SIZE;
+    recv_sge.lkey = conn->recv_mr->lkey;
+
+    // build a new callback function:
+    auto *f_ptr = new std::function<void()>([&conn, callback]() {
+        const RdmaAllocateResponse *resp = GetRdmaAllocateResponse(conn->recv_buffer);
+        INFO("Received allocate response, #keys: {}", resp->blocks()->size());
+
+        std::vector<remote_block_t> *blocks = new std::vector<remote_block_t>();
+        blocks->reserve(resp->blocks()->size());
+        for (const auto *block : *resp->blocks()) {
+            remote_block_t remote_block = {
+                .rkey = block->rkey(),
+                .remote_addr = block->remote_addr(),
+            };
+            blocks->push_back(remote_block);
+        }
+        callback(blocks);
+    });
+
+    recv_wr = {
+        .wr_id = (uintptr_t)f_ptr,
+        .next = NULL,
+        .sg_list = &recv_sge,
+        .num_sge = 1,
+    };
+    ret = ibv_post_recv(conn->qp, &recv_wr, &bad_recv_wr);
+    if (ret) {
+        ERROR("Failed to post RDMA recv :{}", strerror(ret));
+        return -1;
+    }
+
+    // Send RDMA request
     SendBuffer *send_buffer = get_send_buffer(conn);
 
     FixedBufferAllocator allocator(send_buffer->buffer_, PROTOCOL_BUFFER_SIZE);
@@ -779,7 +844,6 @@ int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_
 
     builder.Finish(req);
 
-    // send RDMA request
     struct ibv_sge sge = {0};
     struct ibv_send_wr wr = {0};
     struct ibv_send_wr *bad_wr = NULL;
@@ -793,67 +857,31 @@ int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_
     wr.sg_list = &sge;
     wr.num_sge = 1;
     wr.send_flags = IBV_SEND_SIGNALED;
-
-    int ret;
     {
-        std::unique_lock<std::mutex> lock(conn->mutex);
+        std::unique_lock<std::mutex> lock(conn->rdma_post_send_mutex);
         ret = ibv_post_send(conn->qp, &wr, &bad_wr);
     }
     if (ret) {
         ERROR("Failed to post RDMA send :{}", strerror(ret));
         return -1;
     }
-
-    struct ibv_sge recv_sge = {0};
-    struct ibv_recv_wr *bad_recv_wr = NULL;
-    struct ibv_recv_wr recv_wr = {0};
-
-    // recv all remote addresses
-    recv_sge.addr = (uintptr_t)conn->recv_buffer;
-    recv_sge.length = PROTOCOL_BUFFER_SIZE;
-    recv_sge.lkey = conn->recv_mr->lkey;
-
-    recv_wr = {
-        .wr_id = 1234,
-        .next = NULL,
-        .sg_list = &recv_sge,
-        .num_sge = 1,
-    };
-    ret = ibv_post_recv(conn->qp, &recv_wr, &bad_recv_wr);
-    if (ret) {
-        ERROR("Failed to post RDMA recv :{}", strerror(ret));
-        return -1;
-    }
-
-    assert(conn->rdma_allocate_count == 0);
-    conn->rdma_allocate_count = 1;
-
-    std::unique_lock<std::mutex> lock(conn->mutex);
-    if (!conn->allocater_cv.wait_for(lock, std::chrono::seconds(15),
-                                     [&conn] { return conn->rdma_allocate_count == 0; })) {
-        ERROR("timeout to allocate remote memory");
-        return -1;
-    }
-
-    const RdmaAllocateResponse *resp = GetRdmaAllocateResponse(conn->recv_buffer);
-
-    INFO("Received allocate response, #keys: {}", resp->blocks()->size());
-
-    // copy data to std::vector, and pybind11 will pass ptr to python.
-    blocks.reserve(resp->blocks()->size());
-
-    for (const auto *block : *resp->blocks()) {
-        remote_block_t remote_block = {
-            .rkey = block->rkey(),
-            .remote_addr = block->remote_addr(),
-        };
-        blocks.push_back(remote_block);
-    }
     return 0;
 }
 
 int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int block_size,
            remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr) {
+    // std::promise<void> promise;
+    // auto future = promise.get_future();
+    // w_rdma_async(conn, p_offsets, offsets_len, block_size, p_remote_blocks, remote_blocks_len,
+    //              base_ptr, [&promise]() { promise.set_value(); });
+    // future.get();
+    return w_rdma_async(conn, p_offsets, offsets_len, block_size, p_remote_blocks,
+                        remote_blocks_len, base_ptr, []() {});
+}
+
+int w_rdma_async(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int block_size,
+                 remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr,
+                 std::function<void()> callback) {
     assert(conn != NULL);
     assert(base_ptr != NULL);
     assert(p_remote_blocks != NULL);
@@ -881,6 +909,8 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
 
     bool wr_full = false;
 
+    auto *info = new rdma_write_commit_info(callback, remote_blocks_len);
+
     if (conn->outstanding_rdma_writes + max_wr > MAX_RDMA_WRITE_WR) {
         wr_full = true;
         wrs = new struct ibv_send_wr[max_wr];
@@ -902,10 +932,10 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
         wrs[num_wr].opcode = IBV_WR_RDMA_WRITE;
         if (i == remote_blocks_len - 1) {
             // save all the remote addresses for commiting keys
-            auto *info = new std::vector<uintptr_t>();
             for (size_t j = 0; j < remote_blocks_len; j++) {
-                info->push_back(p_remote_blocks[j].remote_addr);
+                info->remote_addrs.push_back(p_remote_blocks[j].remote_addr);
             }
+
             wrs[num_wr].wr_id = reinterpret_cast<uint64_t>(info);
         }
         else {
@@ -976,6 +1006,8 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
         WARN("Skipped {} duplicated keys", skipped);
         if (skipped == remote_blocks_len) {
             // All keys are duplicated, skip RDMA write
+            info->callback();
+            delete info;
             return 0;
         }
     }

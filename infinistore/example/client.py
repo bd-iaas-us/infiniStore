@@ -76,15 +76,15 @@ if __name__ == "__main__":
     rdma_conn.connect()
     m = [
         ("cpu", "cuda:0"),
-        ("cuda:0", "cuda:1"),
-        ("cuda:0", "cpu"),
-        ("cpu", "cpu"),
+        #    ("cuda:0", "cuda:1"),
+        #    ("cuda:0", "cpu"),
+        #    ("cpu", "cpu"),
     ]
     for src, dst in m:
         print(f"rdma connection: {src} -> {dst}")
         run(rdma_conn, src, dst)
 
-    config.connection_type = infinistore.TYPE_LOCAL_GPU
-    local_conn = InfinityConnection(config)
-    local_conn.connect()
-    run(local_conn)
+    # config.connection_type = infinistore.TYPE_LOCAL_GPU
+    # local_conn = InfinityConnection(config)
+    # local_conn.connect()
+    # run(local_conn)

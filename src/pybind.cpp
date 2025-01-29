@@ -1,3 +1,4 @@
+#include <pybind11/functional.h>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -71,11 +72,28 @@ inline py::array_t<typename Sequence::value_type> as_pyarray(Sequence &&seq) {
     );
 }
 
+void allocate_rdma_async_wrapper(connection_t *conn, std::vector<std::string> &keys, int block_size,
+                                 std::function<void(int)> callback) {
+    // INFO("WRAPPER: allocate_rdma_async_wrapper");
+    // callback(10);
+    assert(callback);
+
+    callback(1000);
+    // allocate_rdma_async(conn, keys, block_size, [callback](std::vector<remote_block_t> *blocks) {
+    //     for (auto &block : *blocks) {
+    //         INFO("block: rkey: {}, remote_addr: {}", block.rkey, block.remote_addr);
+    //     }
+    //     py::gil_scoped_acquire acquire;
+    //     callback(10);
+    //     //callback(std::move(*blocks));
+    // });
+    return;
+}
+
 py::array allocate_rdma_wrapper(connection_t *conn, std::vector<std::string> &keys,
                                 int block_size) {
-    std::vector<remote_block_t> blocks;
-    allocate_rdma(conn, keys, block_size, blocks);
-    return as_pyarray(std::move(blocks));
+    std::vector<remote_block_t> *blocks = allocate_rdma(conn, keys, block_size);
+    return as_pyarray(std::move(*blocks));
 }
 
 int register_mr_wrapper(connection_t *conn, uintptr_t ptr, size_t ptr_region_size) {
@@ -103,6 +121,8 @@ PYBIND11_MODULE(_infinistore, m) {
     PYBIND11_NUMPY_DTYPE(remote_block_t, rkey, remote_addr);
 
     m.def("allocate_rdma", &allocate_rdma_wrapper, "Allocate remote memory");
+    m.def("allocate_rdma_async", &allocate_rdma_async_wrapper,
+          "Allocate remote memory asynchronously");
     m.def("sync_local", &sync_local, "sync the cuda stream");
     m.def("setup_rdma", &setup_rdma, "setup rdma connection");
     m.def("sync_rdma", &sync_rdma, "sync the remote server");

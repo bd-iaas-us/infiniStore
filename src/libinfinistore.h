@@ -67,13 +67,11 @@ struct Connection {
     struct ibv_comp_channel *comp_channel = NULL;
     std::future<void> cq_future;  // cq thread
     std::atomic<int> rdma_inflight_count{0};
-    std::atomic<int> rdma_allocate_count{0};  // TODO: modify allocate_rdma to async API;
 
     std::atomic<bool> stop{false};
     // protect rdma_inflight_count
     std::mutex mutex;
     std::condition_variable cv;
-    std::condition_variable allocater_cv;
 
     // protect ibv_post_send, outstanding_rdma_writes_queue
     std::mutex rdma_post_send_mutex;
@@ -89,6 +87,18 @@ struct Connection {
 
 typedef struct Connection connection_t;
 
+struct rdma_write_commit_info {
+    // call back function.
+    std::function<void()> callback;
+    // the number of blocks that have been written.
+    std::vector<uintptr_t> remote_addrs;
+
+    rdma_write_commit_info(std::function<void()> callback, int n)
+        : callback(callback), remote_addrs() {
+        remote_addrs.reserve(n);
+    }
+};
+
 int init_connection(connection_t *conn, client_config_t config);
 // async rw local cpu memory, even rw_local returns, it is not guaranteed that
 // the operation is completed until sync_local is recved.
@@ -99,10 +109,14 @@ int setup_rdma(connection_t *conn, client_config_t config);
 int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, void *base_ptr);
 int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int block_size,
            remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr);
-
+int w_rdma_async(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int block_size,
+                 remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr,
+                 std::function<void()> callback);
 int sync_rdma(connection_t *conn);
-int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_size,
-                  std::vector<remote_block_t> &blocks);
+std::vector<remote_block_t> *allocate_rdma(connection_t *conn, std::vector<std::string> &keys,
+                                           int block_size);
+int allocate_rdma_async(connection_t *conn, std::vector<std::string> &keys, int block_size,
+                        std::function<void(std::vector<remote_block_t> *)> callback);
 int check_exist(connection_t *conn, std::string key);
 int get_match_last_index(connection_t *conn, std::vector<std::string>);
 int register_mr(connection_t *conn, void *base_ptr, size_t ptr_region_size);
