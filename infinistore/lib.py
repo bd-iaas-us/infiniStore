@@ -7,6 +7,8 @@ import os
 from typing import List, Tuple
 import subprocess
 import time
+import asyncio
+
 
 # connection type: default is RDMA
 TYPE_LOCAL_GPU = "LOCAL_GPU"
@@ -545,6 +547,22 @@ class InfinityConnection:
         if ret < 0:
             raise Exception("register memory region failed")
         return ret
+
+    async def allocate_rdma_async(self, keys: List[str], page_size_in_bytes: int):
+        if not self.rdma_connected:
+            raise Exception("this function is only valid for connected rdma")
+
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+
+        def _callback(remote_addrs):
+            Logger.info(f"!!!remote addrs is {remote_addrs}")
+            future.set_result(remote_addrs)
+            Logger.info("!!!future set result")
+
+        _infinistore.allocate_rdma_async(self.conn, keys, page_size_in_bytes, _callback)
+
+        return await future
 
     def allocate_rdma(self, keys: List[str], page_size_in_bytes: int):
         """
