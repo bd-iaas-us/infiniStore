@@ -86,6 +86,7 @@ class ServerConfig(_infinistore.ServerConfig):
             prealloc_size (int): The preallocation size. Defaults to 16.
             minimal_allocate_size (int): The minimal allocation size. Defaults to 64.
             num_stream (int): The number of streams. Defaults to 1.
+            auto_increase (bool): indicate if infinistore will be automatically increased. 10GB each time. Default False.
         """
 
     def __init__(self, **kwargs):
@@ -99,6 +100,7 @@ class ServerConfig(_infinistore.ServerConfig):
         self.prealloc_size = kwargs.get("prealloc_size", 16)
         self.minimal_allocate_size = kwargs.get("minimal_allocate_size", 64)
         self.num_stream = kwargs.get("num_stream", 1)
+        self.auto_increase = kwargs.get("auto_increase", False)
 
     def __repr__(self):
         return (

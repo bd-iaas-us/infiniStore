@@ -43,6 +43,11 @@ uint8_t ib_port = -1;
 // local active_mtu attr, after exchanging with remote, we will use the min of the two for path.mtu
 ibv_mtu active_mtu;
 
+// indicate if the MM extend is in flight
+bool extend_in_flight = false;
+// indicate the number of cudaIpcOpenMemHandle
+std::atomic<unsigned int> opened_ipc{0};
+
 // PTR is shared by kv_map and inflight_rdma_kv_map
 class PTR : public IntrusivePtrTarget {
    public:
@@ -587,6 +592,7 @@ int Client::read_cache(const LocalMetaRequest *meta_req) {
 
     cudaIpcMemHandle_t ipc_handle = *(cudaIpcMemHandle_t *)meta_req->ipc_handle()->data();
     CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, ipc_handle, cudaIpcMemLazyEnablePeerAccess));
+    opened_ipc++;
 
     size_t block_size = meta_req->block_size();
     int idx = 0;
@@ -674,6 +680,7 @@ void Client::wait_for_ipc_close(std::shared_ptr<CudaTaskQueue> cuda_task_queue) 
         CHECK_CUDA(cudaEventDestroy(task->event));
         CHECK_CUDA(cudaStreamDestroy(task->stream));
         CHECK_CUDA(cudaIpcCloseMemHandle(task->d_ptr));
+        opened_ipc--;
         DEBUG("CUDA_TASK done");
 
         if (task->type == CUDA_WRITE) {
@@ -690,6 +697,19 @@ void Client::wait_for_ipc_close(std::shared_ptr<CudaTaskQueue> cuda_task_queue) 
     INFO("quit the waiting_for_ipc_close thread");
 }
 
+void add_mempool(uv_work_t *req) {
+    while (opened_ipc > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    mm->add_mempool(pd);
+}
+
+void add_mempool_completion(uv_work_t *req, int status) {
+    extend_in_flight = false;
+    mm->need_extend = false;
+    delete req;
+}
+
 int Client::write_cache(const LocalMetaRequest *meta_req) {
     INFO("do write_cache..., num of blocks: {}, stream num {}", meta_req->blocks()->size(),
          global_config.num_stream);
@@ -702,6 +722,7 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
     CHECK_CUDA(cudaSetDevice(meta_req->device()));
 
     CHECK_CUDA(cudaIpcOpenMemHandle(&d_ptr, ipc_handle, cudaIpcMemLazyEnablePeerAccess));
+    opened_ipc++;
 
     int key_idx = 0;
     size_t block_size = meta_req->block_size();
@@ -743,6 +764,12 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
             task->ptrs.push_back(ptr);
             key_idx++;
         });
+    if (global_config.auto_increase && mm->need_extend && !extend_in_flight) {
+        INFO("Extend another mempool");
+        uv_work_t *req = new uv_work_t();
+        uv_queue_work(loop, req, add_mempool, add_mempool_completion);
+        extend_in_flight = true;
+    }
 
     CHECK_CUDA(cudaEventRecord(event, cuda_stream));
 
