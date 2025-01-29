@@ -67,13 +67,11 @@ struct Connection {
     struct ibv_comp_channel *comp_channel = NULL;
     std::future<void> cq_future;  // cq thread
     std::atomic<int> rdma_inflight_count{0};
-    std::atomic<int> rdma_allocate_count{0};  // TODO: modify allocate_rdma to async API;
 
     std::atomic<bool> stop{false};
     // protect rdma_inflight_count
     std::mutex mutex;
     std::condition_variable cv;
-    std::condition_variable allocater_cv;
 
     // protect ibv_post_send, outstanding_rdma_writes_queue
     std::mutex rdma_post_send_mutex;
@@ -103,6 +101,8 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
 int sync_rdma(connection_t *conn);
 int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_size,
                   std::vector<remote_block_t> &blocks);
+int allocate_rdma_async(connection_t *conn, std::vector<std::string> &keys, int block_size,
+                        std::vector<remote_block_t> &blocks, std::function<void()> callback);
 int check_exist(connection_t *conn, std::string key);
 int get_match_last_index(connection_t *conn, std::vector<std::string>);
 int register_mr(connection_t *conn, void *base_ptr, size_t ptr_region_size);

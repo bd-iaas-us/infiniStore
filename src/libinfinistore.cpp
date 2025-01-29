@@ -32,9 +32,11 @@ SendBuffer::~SendBuffer() {
     DEBUG("destroying send buffer");
     if (mr_) {
         ibv_dereg_mr(mr_);
+        mr_ = nullptr;
     }
     if (buffer_) {
         free(buffer_);
+        buffer_ = nullptr;
     }
 }
 
@@ -319,14 +321,16 @@ void cq_handler(connection_t *conn) {
 
                     if (wc[i].opcode ==
                         IBV_WC_SEND) {  // read cache/allocate msg/commit msg: request sent
-                        DEBUG("read cache/allocated/commit msg request send{}, ",
-                              (uintptr_t)wc[i].wr_id);
+                        INFO("read cache/allocated/commit msg request send {}, ",
+                             (uintptr_t)wc[i].wr_id);
                         release_send_buffer(conn, (SendBuffer *)wc[i].wr_id);
+                        INFO("released send buffer");
                     }
                     else if (wc[i].opcode == IBV_WC_RECV) {  // allocate msg recved.
-                        DEBUG("rdma allocated recv {}", (uintptr_t)wc[i].wr_id);
-                        conn->rdma_allocate_count = 0;
-                        conn->allocater_cv.notify_all();
+                        INFO("rdma allocated recv {}", (uintptr_t)wc[i].wr_id);
+                        auto *f = reinterpret_cast<std::function<void()> *>(wc[i].wr_id);
+                        (*f)();
+                        delete f;
                     }
                     else if (wc[i].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {  // read cache done
                         uint32_t imm_data = ntohl(wc[i].imm_data);
@@ -757,9 +761,19 @@ int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
     return last_index;
 }
 
-// send a message to allocate memory and return the address
 int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_size,
                   std::vector<remote_block_t> &blocks) {
+    // convert allocate_rdma_async to sync version
+    std::promise<void> promise;
+    auto future = promise.get_future();
+    allocate_rdma_async(conn, keys, block_size, blocks, [&promise]() { promise.set_value(); });
+    future.get();
+    return 0;
+}
+
+// send a message to allocate memory and return the address
+int allocate_rdma_async(connection_t *conn, std::vector<std::string> &keys, int block_size,
+                        std::vector<remote_block_t> &blocks, std::function<void()> callback) {
     /*
     ENCODING
     remote_meta_request req = {
@@ -768,7 +782,47 @@ int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_
         .op = OP_RDMA_ALLOCATE,
     }
     */
+    int ret;
 
+    // post recv msg first
+    struct ibv_sge recv_sge = {0};
+    struct ibv_recv_wr *bad_recv_wr = NULL;
+    struct ibv_recv_wr recv_wr = {0};
+
+    // recv all remote addresses
+    recv_sge.addr = (uintptr_t)conn->recv_buffer;
+    recv_sge.length = PROTOCOL_BUFFER_SIZE;
+    recv_sge.lkey = conn->recv_mr->lkey;
+
+    // build a new callback function:
+    auto *f_ptr = new std::function<void()>([conn, &blocks, callback]() {
+        const RdmaAllocateResponse *resp = GetRdmaAllocateResponse(conn->recv_buffer);
+        INFO("Received allocate response, #keys: {}", resp->blocks()->size());
+
+        blocks.reserve(resp->blocks()->size());
+        for (const auto *block : *resp->blocks()) {
+            remote_block_t remote_block = {
+                .rkey = block->rkey(),
+                .remote_addr = block->remote_addr(),
+            };
+            blocks.push_back(remote_block);
+        }
+        callback();
+    });
+
+    recv_wr = {
+        .wr_id = (uintptr_t)f_ptr,
+        .next = NULL,
+        .sg_list = &recv_sge,
+        .num_sge = 1,
+    };
+    ret = ibv_post_recv(conn->qp, &recv_wr, &bad_recv_wr);
+    if (ret) {
+        ERROR("Failed to post RDMA recv :{}", strerror(ret));
+        return -1;
+    }
+
+    // Send RDMA request
     SendBuffer *send_buffer = get_send_buffer(conn);
 
     FixedBufferAllocator allocator(send_buffer->buffer_, PROTOCOL_BUFFER_SIZE);
@@ -779,7 +833,6 @@ int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_
 
     builder.Finish(req);
 
-    // send RDMA request
     struct ibv_sge sge = {0};
     struct ibv_send_wr wr = {0};
     struct ibv_send_wr *bad_wr = NULL;
@@ -793,61 +846,13 @@ int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_
     wr.sg_list = &sge;
     wr.num_sge = 1;
     wr.send_flags = IBV_SEND_SIGNALED;
-
-    int ret;
     {
-        std::unique_lock<std::mutex> lock(conn->mutex);
+        std::unique_lock<std::mutex> lock(conn->rdma_post_send_mutex);
         ret = ibv_post_send(conn->qp, &wr, &bad_wr);
     }
     if (ret) {
         ERROR("Failed to post RDMA send :{}", strerror(ret));
         return -1;
-    }
-
-    struct ibv_sge recv_sge = {0};
-    struct ibv_recv_wr *bad_recv_wr = NULL;
-    struct ibv_recv_wr recv_wr = {0};
-
-    // recv all remote addresses
-    recv_sge.addr = (uintptr_t)conn->recv_buffer;
-    recv_sge.length = PROTOCOL_BUFFER_SIZE;
-    recv_sge.lkey = conn->recv_mr->lkey;
-
-    recv_wr = {
-        .wr_id = 1234,
-        .next = NULL,
-        .sg_list = &recv_sge,
-        .num_sge = 1,
-    };
-    ret = ibv_post_recv(conn->qp, &recv_wr, &bad_recv_wr);
-    if (ret) {
-        ERROR("Failed to post RDMA recv :{}", strerror(ret));
-        return -1;
-    }
-
-    assert(conn->rdma_allocate_count == 0);
-    conn->rdma_allocate_count = 1;
-
-    std::unique_lock<std::mutex> lock(conn->mutex);
-    if (!conn->allocater_cv.wait_for(lock, std::chrono::seconds(15),
-                                     [&conn] { return conn->rdma_allocate_count == 0; })) {
-        ERROR("timeout to allocate remote memory");
-        return -1;
-    }
-
-    const RdmaAllocateResponse *resp = GetRdmaAllocateResponse(conn->recv_buffer);
-
-    INFO("Received allocate response, #keys: {}", resp->blocks()->size());
-
-    // copy data to std::vector, and pybind11 will pass ptr to python.
-    blocks.reserve(resp->blocks()->size());
-
-    for (const auto *block : *resp->blocks()) {
-        remote_block_t remote_block = {
-            .rkey = block->rkey(),
-            .remote_addr = block->remote_addr(),
-        };
-        blocks.push_back(remote_block);
     }
     return 0;
 }
