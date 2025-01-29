@@ -87,6 +87,18 @@ struct Connection {
 
 typedef struct Connection connection_t;
 
+struct rdma_write_commit_info {
+    // call back function.
+    std::function<void()> callback;
+    // the number of blocks that have been written.
+    std::vector<uintptr_t> remote_addrs;
+
+    rdma_write_commit_info(std::function<void()> callback, int n)
+        : callback(callback), remote_addrs() {
+        remote_addrs.reserve(n);
+    }
+};
+
 int init_connection(connection_t *conn, client_config_t config);
 // async rw local cpu memory, even rw_local returns, it is not guaranteed that
 // the operation is completed until sync_local is recved.
@@ -97,7 +109,9 @@ int setup_rdma(connection_t *conn, client_config_t config);
 int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, void *base_ptr);
 int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int block_size,
            remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr);
-
+int w_rdma_async(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int block_size,
+                 remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr,
+                 std::function<void()> callback);
 int sync_rdma(connection_t *conn);
 int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_size,
                   std::vector<remote_block_t> &blocks);

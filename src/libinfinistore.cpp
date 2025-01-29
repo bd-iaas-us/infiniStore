@@ -321,13 +321,12 @@ void cq_handler(connection_t *conn) {
 
                     if (wc[i].opcode ==
                         IBV_WC_SEND) {  // read cache/allocate msg/commit msg: request sent
-                        INFO("read cache/allocated/commit msg request send {}, ",
-                             (uintptr_t)wc[i].wr_id);
+                        DEBUG("read cache/allocated/commit msg request send {}, ",
+                              (uintptr_t)wc[i].wr_id);
                         release_send_buffer(conn, (SendBuffer *)wc[i].wr_id);
-                        INFO("released send buffer");
                     }
                     else if (wc[i].opcode == IBV_WC_RECV) {  // allocate msg recved.
-                        INFO("rdma allocated recv {}", (uintptr_t)wc[i].wr_id);
+                        DEBUG("rdma allocated recv {}", (uintptr_t)wc[i].wr_id);
                         auto *f = reinterpret_cast<std::function<void()> *>(wc[i].wr_id);
                         (*f)();
                         delete f;
@@ -372,8 +371,9 @@ void cq_handler(connection_t *conn) {
                             FixedBufferAllocator allocator(send_buffer->buffer_,
                                                            PROTOCOL_BUFFER_SIZE);
                             FlatBufferBuilder builder(64 << 10, &allocator);
-                            auto *info = reinterpret_cast<std::vector<uintptr_t> *>(wc[i].wr_id);
-                            auto remote_addrs_offset = builder.CreateVector(*info);
+                            auto *info = reinterpret_cast<rdma_write_commit_info *>(wc[i].wr_id);
+
+                            auto remote_addrs_offset = builder.CreateVector(info->remote_addrs);
 
                             auto req = CreateRemoteMetaRequest(
                                 builder, 0, 0, 0, remote_addrs_offset, OP_RDMA_WRITE_COMMIT);
@@ -399,6 +399,7 @@ void cq_handler(connection_t *conn) {
                                 ERROR("Failed to post RDMA send :{}", strerror(ret));
                                 return;
                             }
+                            info->callback();
                             delete info;
 
                             // FIXME:
@@ -859,6 +860,17 @@ int allocate_rdma_async(connection_t *conn, std::vector<std::string> &keys, int 
 
 int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int block_size,
            remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr) {
+    std::promise<void> promise;
+    auto future = promise.get_future();
+    w_rdma_async(conn, p_offsets, offsets_len, block_size, p_remote_blocks, remote_blocks_len,
+                 base_ptr, [&promise]() { promise.set_value(); });
+    future.get();
+    return 0;
+}
+
+int w_rdma_async(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int block_size,
+                 remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr,
+                 std::function<void()> callback) {
     assert(conn != NULL);
     assert(base_ptr != NULL);
     assert(p_remote_blocks != NULL);
@@ -886,6 +898,8 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
 
     bool wr_full = false;
 
+    auto *info = new rdma_write_commit_info(callback, remote_blocks_len);
+
     if (conn->outstanding_rdma_writes + max_wr > MAX_RDMA_WRITE_WR) {
         wr_full = true;
         wrs = new struct ibv_send_wr[max_wr];
@@ -907,10 +921,10 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
         wrs[num_wr].opcode = IBV_WR_RDMA_WRITE;
         if (i == remote_blocks_len - 1) {
             // save all the remote addresses for commiting keys
-            auto *info = new std::vector<uintptr_t>();
             for (size_t j = 0; j < remote_blocks_len; j++) {
-                info->push_back(p_remote_blocks[j].remote_addr);
+                info->remote_addrs.push_back(p_remote_blocks[j].remote_addr);
             }
+
             wrs[num_wr].wr_id = reinterpret_cast<uint64_t>(info);
         }
         else {
@@ -981,6 +995,8 @@ int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int
         WARN("Skipped {} duplicated keys", skipped);
         if (skipped == remote_blocks_len) {
             // All keys are duplicated, skip RDMA write
+            info->callback();
+            delete info;
             return 0;
         }
     }
