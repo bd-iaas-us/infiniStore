@@ -114,9 +114,9 @@ int w_rdma_async(connection_t *conn, unsigned long *p_offsets, size_t offsets_le
                  std::function<void()> callback);
 int sync_rdma(connection_t *conn);
 int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_size,
-                  std::vector<remote_block_t> &blocks);
+                  std::vector<remote_block_t> *blocks);
 int allocate_rdma_async(connection_t *conn, std::vector<std::string> &keys, int block_size,
-                        std::vector<remote_block_t> &blocks, std::function<void()> callback);
+                        std::vector<remote_block_t> *blocks, std::function<void()> callback);
 int check_exist(connection_t *conn, std::string key);
 int get_match_last_index(connection_t *conn, std::vector<std::string>);
 int register_mr(connection_t *conn, void *base_ptr, size_t ptr_region_size);

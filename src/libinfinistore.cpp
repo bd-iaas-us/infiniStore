@@ -41,7 +41,7 @@ SendBuffer::~SendBuffer() {
 }
 
 Connection::~Connection() {
-    DEBUG("destroying connection");
+    INFO("destroying connection");
 
     if (cq_future.valid()) {
         stop = true;
@@ -68,7 +68,7 @@ Connection::~Connection() {
             ibv_post_send(qp, &send_wr, &bad_send_wr);
         }
         // wait thread done
-        cq_future.get();
+        // cq_future.get();
     }
 
     if (comp_channel) {
@@ -313,6 +313,7 @@ void cq_handler(connection_t *conn) {
                         // only fake wr will use IBV_WC_SEND
                         // we use it to wake up cq thread and exit
                         if (wc[i].opcode == IBV_WC_SEND) {
+                            INFO("cq thread exit");
                             return;
                         }
                         ERROR("Failed status: {}", ibv_wc_status_str(wc[i].status));
@@ -326,7 +327,7 @@ void cq_handler(connection_t *conn) {
                         release_send_buffer(conn, (SendBuffer *)wc[i].wr_id);
                     }
                     else if (wc[i].opcode == IBV_WC_RECV) {  // allocate msg recved.
-                        DEBUG("rdma allocated recv {}", (uintptr_t)wc[i].wr_id);
+                        INFO("rdma allocated recv {}", (uintptr_t)wc[i].wr_id);
                         auto *f = reinterpret_cast<std::function<void()> *>(wc[i].wr_id);
                         (*f)();
                         delete f;
@@ -763,10 +764,11 @@ int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
 }
 
 int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_size,
-                  std::vector<remote_block_t> &blocks) {
+                  std::vector<remote_block_t> *blocks) {
     // convert allocate_rdma_async to sync version
     std::promise<void> promise;
     auto future = promise.get_future();
+    // auto  = new std::function<void()>([&]() { promise.set_value(); });
     allocate_rdma_async(conn, keys, block_size, blocks, [&promise]() { promise.set_value(); });
     future.get();
     return 0;
@@ -774,7 +776,7 @@ int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_
 
 // send a message to allocate memory and return the address
 int allocate_rdma_async(connection_t *conn, std::vector<std::string> &keys, int block_size,
-                        std::vector<remote_block_t> &blocks, std::function<void()> callback) {
+                        std::vector<remote_block_t> *blocks, std::function<void()> callback) {
     /*
     ENCODING
     remote_meta_request req = {
@@ -796,17 +798,17 @@ int allocate_rdma_async(connection_t *conn, std::vector<std::string> &keys, int 
     recv_sge.lkey = conn->recv_mr->lkey;
 
     // build a new callback function:
-    auto *f_ptr = new std::function<void()>([conn, &blocks, callback]() {
+    auto *f_ptr = new std::function<void()>([&]() {
         const RdmaAllocateResponse *resp = GetRdmaAllocateResponse(conn->recv_buffer);
         INFO("Received allocate response, #keys: {}", resp->blocks()->size());
 
-        blocks.reserve(resp->blocks()->size());
+        blocks->reserve(resp->blocks()->size());
         for (const auto *block : *resp->blocks()) {
             remote_block_t remote_block = {
                 .rkey = block->rkey(),
                 .remote_addr = block->remote_addr(),
             };
-            blocks.push_back(remote_block);
+            blocks->push_back(remote_block);
         }
         callback();
     });
