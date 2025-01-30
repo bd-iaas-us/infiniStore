@@ -491,6 +491,32 @@ an exception.
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="infinistore.get_kvmap_len">
+<span class="sig-prename descclassname"><span class="pre">infinistore.</span></span><span class="sig-name descname"><span class="pre">get_kvmap_len</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.get_kvmap_len" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the length of the key-value map in the infinistore.</p>
+<p>This function calls the underlying _infinistore.get_kvmap_len() method to
+get the length of the key-value map.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>The result of the _infinistore.get_kvmap_len() method call.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="infinistore.purge_kv_map">
+<span class="sig-prename descclassname"><span class="pre">infinistore.</span></span><span class="sig-name descname"><span class="pre">purge_kv_map</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.purge_kv_map" title="Permalink to this definition">¶</a></dt>
+<dd><p>Purges the key-value map in the infinistore.</p>
+<p>This function calls the underlying _infinistore.purge_kv_map() method to
+clear all entries in the key-value map, effectively resetting it.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>The result of the _infinistore.purge_kv_map() method call.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="infinistore.register_server">
 <span class="sig-prename descclassname"><span class="pre">infinistore.</span></span><span class="sig-name descname"><span class="pre">register_server</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">loop</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#infinistore.ServerConfig" title="infinistore.lib.ServerConfig"><span class="pre">ServerConfig</span></a></span></em><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.register_server" title="Permalink to this definition">¶</a></dt>
 <dd><p>Registers a server with the given event loop and configuration.</p>
