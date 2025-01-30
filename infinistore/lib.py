@@ -556,12 +556,13 @@ class InfinityConnection:
         future = loop.create_future()
 
         def _callback(remote_addrs):
-            Logger.info("COOOL!")
+            Logger.info(f"!!!remote addrs is {remote_addrs}")
             future.set_result(remote_addrs)
+            Logger.info("!!!future set result")
 
         _infinistore.allocate_rdma_async(self.conn, keys, page_size_in_bytes, _callback)
 
-        return future
+        return await future
 
     def allocate_rdma(self, keys: List[str], page_size_in_bytes: int):
         """

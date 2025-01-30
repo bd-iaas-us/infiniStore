@@ -73,37 +73,27 @@ inline py::array_t<typename Sequence::value_type> as_pyarray(Sequence &&seq) {
 }
 
 void allocate_rdma_async_wrapper(connection_t *conn, std::vector<std::string> &keys, int block_size,
-                                 std::function<void(std::vector<remote_block_t>)> callback) {
-    auto *blocks = new std::vector<remote_block_t>();
-    // auto *f = [blocks, callback]() {
-    //     INFO("LOCK...");
-    //     // py::gil_scoped_acquire acquire;
+                                 std::function<void(int)> callback) {
+    // INFO("WRAPPER: allocate_rdma_async_wrapper");
+    // callback(10);
+    assert(callback);
+
+    callback(1000);
+    // allocate_rdma_async(conn, keys, block_size, [callback](std::vector<remote_block_t> *blocks) {
     //     for (auto &block : *blocks) {
     //         INFO("block: rkey: {}, remote_addr: {}", block.rkey, block.remote_addr);
     //     }
-    //     callback(*blocks);
-    //     delete blocks;  // Clean up the allocated memory
-    //     INFO("UNLOCK...");
-    // };
-    auto f = std::function<void()>([&]() {
-        INFO("LOCK...");
-        // py::gil_scoped_acquire acquire;
-        for (auto &block : *blocks) {
-            INFO("block: rkey: {}, remote_addr: {}", block.rkey, block.remote_addr);
-        }
-        callback(*blocks);
-        delete blocks;  // Clean up the allocated memory
-        INFO("UNLOCK...");
-    });
-    allocate_rdma_async(conn, keys, block_size, blocks, f);
+    //     py::gil_scoped_acquire acquire;
+    //     callback(10);
+    //     //callback(std::move(*blocks));
+    // });
     return;
 }
 
 py::array allocate_rdma_wrapper(connection_t *conn, std::vector<std::string> &keys,
                                 int block_size) {
-    std::vector<remote_block_t> blocks;
-    allocate_rdma(conn, keys, block_size, &blocks);
-    return as_pyarray(std::move(blocks));
+    std::vector<remote_block_t> *blocks = allocate_rdma(conn, keys, block_size);
+    return as_pyarray(std::move(*blocks));
 }
 
 int register_mr_wrapper(connection_t *conn, uintptr_t ptr, size_t ptr_region_size) {

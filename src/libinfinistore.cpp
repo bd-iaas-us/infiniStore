@@ -763,20 +763,27 @@ int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
     return last_index;
 }
 
-int allocate_rdma(connection_t *conn, std::vector<std::string> &keys, int block_size,
-                  std::vector<remote_block_t> *blocks) {
+std::vector<remote_block_t> *allocate_rdma(connection_t *conn, std::vector<std::string> &keys,
+                                           int block_size) {
     // convert allocate_rdma_async to sync version
     std::promise<void> promise;
     auto future = promise.get_future();
-    // auto  = new std::function<void()>([&]() { promise.set_value(); });
-    allocate_rdma_async(conn, keys, block_size, blocks, [&promise]() { promise.set_value(); });
+    std::vector<remote_block_t> *ret_blocks;
+    allocate_rdma_async(conn, keys, block_size,
+                        [&promise, &ret_blocks](std::vector<remote_block_t> *blocks) {
+                            ret_blocks = blocks;
+                            for (auto &block : *ret_blocks) {
+                                INFO("rkey: {}, remote_addr: {}", block.rkey, block.remote_addr);
+                            }
+                            promise.set_value();
+                        });
     future.get();
-    return 0;
+    return ret_blocks;
 }
 
 // send a message to allocate memory and return the address
 int allocate_rdma_async(connection_t *conn, std::vector<std::string> &keys, int block_size,
-                        std::vector<remote_block_t> *blocks, std::function<void()> callback) {
+                        std::function<void(std::vector<remote_block_t> *)> callback) {
     /*
     ENCODING
     remote_meta_request req = {
@@ -798,10 +805,11 @@ int allocate_rdma_async(connection_t *conn, std::vector<std::string> &keys, int 
     recv_sge.lkey = conn->recv_mr->lkey;
 
     // build a new callback function:
-    auto *f_ptr = new std::function<void()>([&]() {
+    auto *f_ptr = new std::function<void()>([&conn, callback]() {
         const RdmaAllocateResponse *resp = GetRdmaAllocateResponse(conn->recv_buffer);
         INFO("Received allocate response, #keys: {}", resp->blocks()->size());
 
+        std::vector<remote_block_t> *blocks = new std::vector<remote_block_t>();
         blocks->reserve(resp->blocks()->size());
         for (const auto *block : *resp->blocks()) {
             remote_block_t remote_block = {
@@ -810,7 +818,7 @@ int allocate_rdma_async(connection_t *conn, std::vector<std::string> &keys, int 
             };
             blocks->push_back(remote_block);
         }
-        callback();
+        callback(blocks);
     });
 
     recv_wr = {
@@ -862,12 +870,13 @@ int allocate_rdma_async(connection_t *conn, std::vector<std::string> &keys, int 
 
 int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int block_size,
            remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr) {
-    std::promise<void> promise;
-    auto future = promise.get_future();
-    w_rdma_async(conn, p_offsets, offsets_len, block_size, p_remote_blocks, remote_blocks_len,
-                 base_ptr, [&promise]() { promise.set_value(); });
-    future.get();
-    return 0;
+    // std::promise<void> promise;
+    // auto future = promise.get_future();
+    // w_rdma_async(conn, p_offsets, offsets_len, block_size, p_remote_blocks, remote_blocks_len,
+    //              base_ptr, [&promise]() { promise.set_value(); });
+    // future.get();
+    return w_rdma_async(conn, p_offsets, offsets_len, block_size, p_remote_blocks,
+                        remote_blocks_len, base_ptr, []() {});
 }
 
 int w_rdma_async(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int block_size,
