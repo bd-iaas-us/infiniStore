@@ -38,6 +38,41 @@ int r_rdma_wrapper(connection_t *conn,
     return r_rdma(conn, c_blocks, block_size, (void *)ptr);
 }
 
+int r_rdma_async_wrapper(connection_t *conn,
+                         const std::vector<std::tuple<std::string, unsigned long>> &blocks,
+                         int block_size, uintptr_t ptr, std::function<void()> callback) {
+    std::vector<block_t> c_blocks;
+    for (const auto &block : blocks) {
+        c_blocks.push_back(block_t{std::get<0>(block), std::get<1>(block)});
+    }
+    return r_rdma_async(conn, c_blocks, block_size, (void *)ptr, [callback]() {
+        py::gil_scoped_acquire acquire;
+        callback();
+    });
+}
+
+int w_rdma_async_wrapper(
+    connection_t *conn,
+    py::array_t<unsigned long, py::array::c_style | py::array::forcecast> offsets, int block_size,
+    py::array_t<remote_block_t, py::array::c_style | py::array::forcecast> remote_blocks,
+    uintptr_t base_ptr, std::function<void()> callback) {
+    py::buffer_info block_buf = remote_blocks.request();
+    py::buffer_info offset_buf = offsets.request();
+
+    assert(block_buf.ndim == 1);
+    assert(offset_buf.ndim == 1);
+
+    remote_block_t *p_remote_blocks = static_cast<remote_block_t *>(block_buf.ptr);
+    unsigned long *p_offsets = static_cast<unsigned long *>(offset_buf.ptr);
+    size_t remote_blocks_len = block_buf.shape[0];
+    size_t offsets_len = offset_buf.shape[0];
+    return w_rdma_async(conn, p_offsets, offsets_len, block_size, p_remote_blocks,
+                        remote_blocks_len, (void *)base_ptr, [callback]() {
+                            py::gil_scoped_acquire acquire;
+                            callback();
+                        });
+}
+
 int w_rdma_wrapper(
     connection_t *conn,
     py::array_t<unsigned long, py::array::c_style | py::array::forcecast> offsets, int block_size,
@@ -109,6 +144,8 @@ PYBIND11_MODULE(_infinistore, m) {
     m.def("rw_local", &rw_local_wrapper, "Read/Write cpu memory from GPU device");
     m.def("r_rdma", &r_rdma_wrapper, "Read remote memory");
     m.def("w_rdma", &w_rdma_wrapper, "Write remote memory");
+    m.def("r_rdma_async", &r_rdma_async_wrapper, "Read remote memory asynchronously");
+    m.def("w_rdma_async", &w_rdma_async_wrapper, "Write remote memory asynchronously");
 
     PYBIND11_NUMPY_DTYPE(remote_block_t, rkey, remote_addr);
 

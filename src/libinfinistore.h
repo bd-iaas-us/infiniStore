@@ -87,6 +87,12 @@ struct Connection {
 
 typedef struct Connection connection_t;
 
+struct rdma_read_commit_info {
+    // call back function.
+    std::function<void()> callback;
+    rdma_read_commit_info(std::function<void()> callback) : callback(callback) {}
+};
+
 struct rdma_write_commit_info {
     // call back function.
     std::function<void()> callback;
@@ -107,6 +113,8 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, in
 int sync_local(connection_t *conn);
 int setup_rdma(connection_t *conn, client_config_t config);
 int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, void *base_ptr);
+int r_rdma_async(connection_t *conn, std::vector<block_t> &blocks, int block_size, void *base_ptr,
+                 std::function<void()> callback);
 int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int block_size,
            remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr);
 int w_rdma_async(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int block_size,

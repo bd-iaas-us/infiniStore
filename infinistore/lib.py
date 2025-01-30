@@ -363,6 +363,35 @@ class InfinityConnection:
             raise Exception(f"Failed to write to infinistore, ret = {ret}")
         return 0
 
+    async def rdma_write_cache_async(
+        self, cache: torch.Tensor, offsets: List[int], page_size, remote_blocks: List
+    ):
+        if not self.rdma_connected:
+            raise Exception("this function is only valid for connected rdma")
+
+        self._verify(cache)
+        element_size = cache.element_size()
+
+        # each offset should multiply by the element size
+        offsets_in_bytes = [offset * element_size for offset in offsets]
+
+        loop = asyncio.get_running_loop()
+
+        future = loop.create_future()
+
+        def _callback():
+            loop.call_soon_threadsafe(future.set_result, 0)
+
+        _infinistore.w_rdma_async(
+            self.conn,
+            offsets_in_bytes,
+            page_size * element_size,
+            remote_blocks,
+            cache.data_ptr(),
+            _callback,
+        )
+        return await future
+
     def rdma_write_cache(
         self, cache: torch.Tensor, offsets: List[int], page_size, remote_blocks: List
     ):
@@ -400,6 +429,29 @@ class InfinityConnection:
         if ret < 0:
             raise Exception(f"Failed to write to infinistore, ret = {ret}")
         return 0
+
+    async def read_cache_async(
+        self, cache: torch.Tensor, blocks: List[Tuple[str, int]], page_size: int
+    ):
+        if not self.rdma_connected:
+            raise Exception("this function is only valid for connected rdma")
+        self._verify(cache)
+        ptr = cache.data_ptr()
+        element_size = cache.element_size()
+        blocks_in_bytes = [(key, offset * element_size) for key, offset in blocks]
+
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+
+        def _callback():
+            loop.call_soon_threadsafe(future.set_result, 0)
+
+        ret = _infinistore.r_rdma_async(
+            self.conn, blocks_in_bytes, page_size * element_size, ptr, _callback
+        )
+        if ret < 0:
+            raise Exception(f"Failed to read to infinistore, ret = {ret}")
+        return await future
 
     def read_cache(
         self, cache: torch.Tensor, blocks: List[Tuple[str, int]], page_size: int
@@ -562,8 +614,7 @@ class InfinityConnection:
 
         _infinistore.allocate_rdma_async(self.conn, keys, page_size_in_bytes, _callback)
 
-        result = await future
-        return result
+        return await future
 
     def allocate_rdma(self, keys: List[str], page_size_in_bytes: int):
         """

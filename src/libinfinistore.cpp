@@ -334,7 +334,10 @@ void cq_handler(connection_t *conn) {
                     }
                     else if (wc[i].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {  // read cache done
                         uint32_t imm_data = ntohl(wc[i].imm_data);
-                        INFO("Received IMM, imm_data: {}", imm_data);
+                        INFO("read cache done: Received IMM, imm_data: {}", imm_data);
+                        auto *info = reinterpret_cast<rdma_read_commit_info *>(wc[i].wr_id);
+                        info->callback();
+                        delete info;
                         conn->rdma_inflight_count--;
                         conn->cv.notify_all();
                     }
@@ -400,6 +403,10 @@ void cq_handler(connection_t *conn) {
                                 ERROR("Failed to post RDMA send :{}", strerror(ret));
                                 return;
                             }
+
+                            // release lock before callback to prevent deadlock
+                            lock.unlock();
+
                             info->callback();
                             delete info;
 
@@ -870,11 +877,6 @@ int allocate_rdma_async(connection_t *conn, std::vector<std::string> &keys, int 
 
 int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int block_size,
            remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr) {
-    // std::promise<void> promise;
-    // auto future = promise.get_future();
-    // w_rdma_async(conn, p_offsets, offsets_len, block_size, p_remote_blocks, remote_blocks_len,
-    //              base_ptr, [&promise]() { promise.set_value(); });
-    // future.get();
     return w_rdma_async(conn, p_offsets, offsets_len, block_size, p_remote_blocks,
                         remote_blocks_len, base_ptr, []() {});
 }
@@ -1006,6 +1008,7 @@ int w_rdma_async(connection_t *conn, unsigned long *p_offsets, size_t offsets_le
         WARN("Skipped {} duplicated keys", skipped);
         if (skipped == remote_blocks_len) {
             // All keys are duplicated, skip RDMA write
+            lock.unlock();
             info->callback();
             delete info;
             return 0;
@@ -1018,6 +1021,11 @@ int w_rdma_async(connection_t *conn, unsigned long *p_offsets, size_t offsets_le
 }
 
 int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, void *base_ptr) {
+    return r_rdma_async(conn, blocks, block_size, base_ptr, []() {});
+}
+
+int r_rdma_async(connection_t *conn, std::vector<block_t> &blocks, int block_size, void *base_ptr,
+                 std::function<void()> callback) {
     assert(conn != NULL);
     assert(base_ptr != NULL);
 
@@ -1036,8 +1044,11 @@ int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, voi
         .length = 0,
         .lkey = conn->recv_mr->lkey,
     };
+
+    auto *info = new rdma_read_commit_info(callback);
+
     struct ibv_recv_wr recv_wr = {
-        .wr_id = 0,
+        .wr_id = (uintptr_t)info,
         .next = NULL,
         .sg_list = &recv_sge,
         .num_sge = 1,
