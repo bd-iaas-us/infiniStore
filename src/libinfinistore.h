@@ -4,10 +4,10 @@
 #include <arpa/inet.h>
 #include <assert.h>
 #include <infiniband/verbs.h>
-#include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
+#include <boost/asio.hpp>
 #include <boost/lockfree/queue.hpp>
 #include <deque>
 #include <future>
@@ -16,6 +16,8 @@
 #include "config.h"
 #include "log.h"
 #include "protocol.h"
+
+using boost::asio::ip::tcp;
 
 // RDMA send buffer
 // because write_cache will be invoked asynchronously,
@@ -31,7 +33,11 @@ struct SendBuffer {
 
 struct Connection {
     // tcp socket
-    int sock = 0;
+
+    boost::asio::io_context io_context;
+    tcp::socket socket;
+    boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard;
+    std::future<void> io_context_future;
 
     // rdma connections
     struct ibv_context *ib_ctx = NULL;

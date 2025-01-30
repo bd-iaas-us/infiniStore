@@ -511,6 +511,37 @@ int setup_rdma(connection_t *conn, client_config_t config) {
 }
 
 int init_connection(connection_t *conn, client_config_t config) {
+    // invoke init_connection_async
+    std::promise<void> promise;
+    auto future = promise.get_future();
+
+    init_connection_async(conn, config, [&promise](std::string &msg) {
+        if (msg.empty()) {
+            promise.set_value();
+        }
+        else {
+            promise.set_exception(std::make_exception_ptr(std::runtime_error(msg)));
+        }
+    });
+}
+
+void init_connection_async(connection_t *conn, client_config_t config,
+                           std::function<void(std::string &)> callback) {
+    assert(conn != NULL);
+    conn->work_guard = boost::asio::make_work_guard(conn->io_context);
+    conn->socket = tcp::socket(conn->io_context);
+    conn->io_context_future = std::async(std::launch::async, [conn]() { conn->io_context.run(); });
+
+    tcp::resolver resolver(conn->io_context);
+    auto endpoints = resolver.resolve(config.host_addr, std::to_string(config.service_port));
+
+    boost::asio::async_connect(
+        conn->socket, endpoints,
+        [conn, callback](boost::system::error_code ec, tcp::endpoint) { callback(ec.message()); });
+}
+
+/*
+int init_connection(connection_t *conn, client_config_t config) {
     assert(conn != NULL);
     int sock = 0;
 
@@ -538,6 +569,7 @@ int init_connection(connection_t *conn, client_config_t config) {
     conn->sock = sock;
     return 0;
 }
+*/
 
 int modify_qp_to_rtr(connection_t *conn) {
     struct ibv_qp *qp = conn->qp;
