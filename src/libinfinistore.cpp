@@ -68,7 +68,7 @@ Connection::~Connection() {
             ibv_post_send(qp, &send_wr, &bad_send_wr);
         }
         // wait thread done
-        // cq_future.get();
+        cq_future.get();
     }
 
     if (comp_channel) {

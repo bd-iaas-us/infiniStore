@@ -556,13 +556,14 @@ class InfinityConnection:
         future = loop.create_future()
 
         def _callback(remote_addrs):
-            Logger.info(f"!!!remote addrs is {remote_addrs}")
-            future.set_result(remote_addrs)
-            Logger.info("!!!future set result")
+            # _callback is invoked by the C++ code in cq_thread,
+            # so we need to call_soon_threadsafe
+            loop.call_soon_threadsafe(future.set_result, remote_addrs)
 
         _infinistore.allocate_rdma_async(self.conn, keys, page_size_in_bytes, _callback)
 
-        return await future
+        result = await future
+        return result
 
     def allocate_rdma(self, keys: List[str], page_size_in_bytes: int):
         """
