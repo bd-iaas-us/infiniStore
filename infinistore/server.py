@@ -1,3 +1,6 @@
+import infinistore
+import threading
+import uuid
 from infinistore import (
     register_server,
     purge_kv_map,
@@ -30,6 +33,77 @@ async def purge():
     num = get_kvmap_len()
     purge_kv_map()
     return {"status": "ok", "num": num}
+
+
+async def connect_async(config):
+    def blocking_io(config):
+        conn = infinistore.InfinityConnection(config)
+        conn.connect()
+        return conn
+
+    rdma_conn = await asyncio.to_thread(blocking_io, config)
+
+    return rdma_conn
+
+
+def generate_uuid():
+    return str(uuid.uuid4())
+
+
+@app.post("/selftest")
+async def selftest():
+    Logger.info("selftest")
+    # blocking API
+
+    Logger.info("start selftest")
+    # blocking API
+
+    # await asyncio.to_thread(blocking_io, rdma_conn)
+
+    # print current thread id
+    Logger.info(f"current thread id: {threading.get_ident()}")
+
+    config = infinistore.ClientConfig(
+        host_addr="127.0.0.1",
+        service_port=22345,
+        log_level="info",
+        connection_type=infinistore.TYPE_RDMA,
+        ib_port=1,
+        link_type=infinistore.LINK_ETHERNET,
+        dev_name="mlx5_0",
+    )
+    rdma_conn = await connect_async(config)
+
+    Logger.info("connected")
+
+    src_tensor = torch.tensor(
+        [i for i in range(4096)], device="cpu", dtype=torch.float32
+    )
+    dst_tensor = torch.zeros(4096, device="cpu", dtype=torch.float32)
+    # rdma_conn.register_mr(src_tensor)
+    # rdma_conn.register_mr(dst_tensor)
+    await asyncio.to_thread(rdma_conn.register_mr, src_tensor)
+    await asyncio.to_thread(rdma_conn.register_mr, dst_tensor)
+
+    # keys = ["key1", "key2", "key3"]
+    keys = [generate_uuid() for i in range(3)]
+    remote_addr = await rdma_conn.allocate_rdma_async(keys, 1024 * 4)
+    print(f"remote addrs is {remote_addr}")
+
+    await rdma_conn.rdma_write_cache_async(src_tensor, [0, 1024], 1024, remote_addr[:2])
+    await rdma_conn.rdma_write_cache_async(src_tensor, [2048], 1024, remote_addr[2:])
+
+    # # await asyncio.gather(rdma_conn.rdma_write_cache_async(src_tensor, [0, 1024], 1024, remote_addr[:2]),
+    # #                rdma_conn.rdma_write_cache_async(src_tensor, [2048], 1024, remote_addr[2:]))
+
+    await rdma_conn.read_cache_async(
+        dst_tensor, [(keys[0], 0), (keys[1], 1024), (keys[2], 2048)], 1024
+    )
+
+    assert torch.equal(src_tensor[0:3072].cpu(), dst_tensor[0:3072].cpu())
+
+    rdma_conn.close_connection()
+    return {"status": "ok"}
 
 
 @app.get("/kvmap_len")
@@ -195,6 +269,8 @@ def main():
     )
 
     server = uvicorn.Server(http_config)
+
+    Logger.info(f"main thread id: {threading.get_ident()}")
 
     Logger.warn("server started")
     loop.run_until_complete(server.serve())

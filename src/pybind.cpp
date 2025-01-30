@@ -38,6 +38,41 @@ int r_rdma_wrapper(connection_t *conn,
     return r_rdma(conn, c_blocks, block_size, (void *)ptr);
 }
 
+int r_rdma_async_wrapper(connection_t *conn,
+                         const std::vector<std::tuple<std::string, unsigned long>> &blocks,
+                         int block_size, uintptr_t ptr, std::function<void()> callback) {
+    std::vector<block_t> c_blocks;
+    for (const auto &block : blocks) {
+        c_blocks.push_back(block_t{std::get<0>(block), std::get<1>(block)});
+    }
+    return r_rdma_async(conn, c_blocks, block_size, (void *)ptr, [callback]() {
+        py::gil_scoped_acquire acquire;
+        callback();
+    });
+}
+
+int w_rdma_async_wrapper(
+    connection_t *conn,
+    py::array_t<unsigned long, py::array::c_style | py::array::forcecast> offsets, int block_size,
+    py::array_t<remote_block_t, py::array::c_style | py::array::forcecast> remote_blocks,
+    uintptr_t base_ptr, std::function<void()> callback) {
+    py::buffer_info block_buf = remote_blocks.request();
+    py::buffer_info offset_buf = offsets.request();
+
+    assert(block_buf.ndim == 1);
+    assert(offset_buf.ndim == 1);
+
+    remote_block_t *p_remote_blocks = static_cast<remote_block_t *>(block_buf.ptr);
+    unsigned long *p_offsets = static_cast<unsigned long *>(offset_buf.ptr);
+    size_t remote_blocks_len = block_buf.shape[0];
+    size_t offsets_len = offset_buf.shape[0];
+    return w_rdma_async(conn, p_offsets, offsets_len, block_size, p_remote_blocks,
+                        remote_blocks_len, (void *)base_ptr, [callback]() {
+                            py::gil_scoped_acquire acquire;
+                            callback();
+                        });
+}
+
 int w_rdma_wrapper(
     connection_t *conn,
     py::array_t<unsigned long, py::array::c_style | py::array::forcecast> offsets, int block_size,
@@ -73,20 +108,12 @@ inline py::array_t<typename Sequence::value_type> as_pyarray(Sequence &&seq) {
 }
 
 void allocate_rdma_async_wrapper(connection_t *conn, std::vector<std::string> &keys, int block_size,
-                                 std::function<void(int)> callback) {
-    // INFO("WRAPPER: allocate_rdma_async_wrapper");
-    // callback(10);
-    assert(callback);
-
-    callback(1000);
-    // allocate_rdma_async(conn, keys, block_size, [callback](std::vector<remote_block_t> *blocks) {
-    //     for (auto &block : *blocks) {
-    //         INFO("block: rkey: {}, remote_addr: {}", block.rkey, block.remote_addr);
-    //     }
-    //     py::gil_scoped_acquire acquire;
-    //     callback(10);
-    //     //callback(std::move(*blocks));
-    // });
+                                 std::function<void(py::array)> callback) {
+    allocate_rdma_async(conn, keys, block_size, [callback](std::vector<remote_block_t> *blocks) {
+        py::gil_scoped_acquire acquire;
+        callback(as_pyarray(std::move(*blocks)));
+        delete blocks;
+    });
     return;
 }
 
@@ -98,6 +125,37 @@ py::array allocate_rdma_wrapper(connection_t *conn, std::vector<std::string> &ke
 
 int register_mr_wrapper(connection_t *conn, uintptr_t ptr, size_t ptr_region_size) {
     return register_mr(conn, (void *)ptr, ptr_region_size);
+}
+
+void close_connection(connection_t *conn) {
+    py::gil_scoped_release release;
+    if (conn->cq_future.valid()) {
+        conn->stop = true;
+
+        // create fake wr to wake up cq thread
+        ibv_req_notify_cq(conn->cq, 0);
+        struct ibv_sge sge;
+        memset(&sge, 0, sizeof(sge));
+        sge.addr = (uintptr_t)conn;
+        sge.length = sizeof(*conn);
+        sge.lkey = 0;
+
+        struct ibv_send_wr send_wr;
+        memset(&send_wr, 0, sizeof(send_wr));
+        send_wr.wr_id = (uintptr_t)conn;
+        send_wr.sg_list = &sge;
+        send_wr.num_sge = 1;
+        send_wr.opcode = IBV_WR_SEND;
+        send_wr.send_flags = IBV_SEND_SIGNALED;
+
+        struct ibv_send_wr *bad_send_wr;
+        {
+            std::unique_lock<std::mutex> lock(conn->rdma_post_send_mutex);
+            ibv_post_send(conn->qp, &send_wr, &bad_send_wr);
+        }
+        // wait thread done
+        conn->cq_future.get();
+    }
 }
 
 PYBIND11_MODULE(_infinistore, m) {
@@ -114,9 +172,12 @@ PYBIND11_MODULE(_infinistore, m) {
     py::class_<connection_t>(m, "Connection").def(py::init<>());
 
     m.def("init_connection", &init_connection, "Initialize a connection");
+    m.def("close_connection", &close_connection, "Close the connection");
     m.def("rw_local", &rw_local_wrapper, "Read/Write cpu memory from GPU device");
     m.def("r_rdma", &r_rdma_wrapper, "Read remote memory");
     m.def("w_rdma", &w_rdma_wrapper, "Write remote memory");
+    m.def("r_rdma_async", &r_rdma_async_wrapper, "Read remote memory asynchronously");
+    m.def("w_rdma_async", &w_rdma_async_wrapper, "Write remote memory asynchronously");
 
     PYBIND11_NUMPY_DTYPE(remote_block_t, rkey, remote_addr);
 
