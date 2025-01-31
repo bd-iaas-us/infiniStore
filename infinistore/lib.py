@@ -313,6 +313,8 @@ class InfinityConnection:
             raise Exception("Already connected to local instance")
         if self.rdma_connected:
             raise Exception("Already connected to remote instance")
+
+        print(f"connecting to {self.config.host_addr}")
         ret = _infinistore.init_connection(self.conn, self.config)
         if ret < 0:
             raise Exception("Failed to initialize remote connection")

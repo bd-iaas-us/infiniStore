@@ -12,6 +12,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <iostream>
 #include <vector>
 
 #include "config.h"
@@ -462,6 +463,12 @@ int setup_rdma(connection_t *conn, client_config_t config) {
         return -1;
     }
 
+    INFO("BEFORE exchange");
+
+    // print current thread id
+    // INFO("current thread id: {}", std::this_thread::get_id());
+    std::cout << "current thread id: " << std::this_thread::get_id() << std::endl;
+
     // Exchange RDMA connection information with the server
     if (exchange_conn_info(conn)) {
         delete conn;
@@ -534,7 +541,7 @@ int init_connection(connection_t *conn, client_config_t config) {
         ERROR("Failed to connect to server");
         return -1;
     }
-
+    INFO("c++ connectted to server");
     conn->sock = sock;
     return 0;
 }
@@ -633,6 +640,7 @@ int exchange_conn_info(connection_t *conn) {
     }
 
     int return_code = -1;
+    INFO("before recv");
     if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
         ERROR("Failed to receive return code");
         return -1;
@@ -642,6 +650,7 @@ int exchange_conn_info(connection_t *conn) {
         ERROR("Failed to exchange connection information, return code: {}", return_code);
         return -1;
     }
+    INFO("before recv2");
 
     if (recv(conn->sock, &conn->remote_info, sizeof(rdma_conn_info_t), MSG_WAITALL) !=
         sizeof(rdma_conn_info_t)) {
