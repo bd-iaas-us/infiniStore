@@ -298,6 +298,9 @@ class InfinityConnection:
         self.config = config
         Logger.set_log_level(config.log_level)
 
+    def close_connection(self):
+        _infinistore.close_connection(self.conn)
+
     async def connect_async(self):
         if self.config.connection_type == TYPE_LOCAL_GPU:
             raise Exception("Local GPU connection does not support async")

@@ -143,6 +143,11 @@ void setup_rdma_async_wrapper(connection_t *conn, client_config_t config,
     });
 }
 
+void close_connection(connection_t *conn) {
+    py::gil_scoped_release release;
+    conn->_close();
+}
+
 PYBIND11_MODULE(_infinistore, m) {
     // client side
     py::class_<client_config_t>(m, "ClientConfig")
@@ -159,6 +164,7 @@ PYBIND11_MODULE(_infinistore, m) {
     m.def("init_connection", &init_connection, "Initialize a connection");
     m.def("init_connection_async", &init_connection_async_wrapper,
           "Initialize a connection asynchronously");
+    m.def("close_connection", &close_connection, "Close a connection");
     m.def("rw_local", &rw_local_wrapper, "Read/Write cpu memory from GPU device");
     m.def("r_rdma", &r_rdma_wrapper, "Read remote memory");
     m.def("w_rdma", &w_rdma_wrapper, "Write remote memory");

@@ -97,6 +97,7 @@ struct Connection {
     Connection(const Connection &) = delete;
     // destory the connection
     ~Connection();
+    void _close();
 };
 
 typedef struct Connection connection_t;

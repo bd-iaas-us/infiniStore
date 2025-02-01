@@ -75,6 +75,7 @@ async def selftest():
 
     await rdma_conn.rdma_write_cache_async(src_tensor, [0, 1024], 1024, remote_addr[:2])
     await rdma_conn.rdma_write_cache_async(src_tensor, [2048], 1024, remote_addr[2:])
+    rdma_conn.close_connection()
     return {"status": "ok"}
 
 

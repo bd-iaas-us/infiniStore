@@ -44,25 +44,23 @@ SendBuffer::~SendBuffer() {
     }
 }
 
-Connection::~Connection() {
-    INFO("destroying connection");
-
-    INFO("stop asio thread");
-    socket.cancel();
-
-    boost::system::error_code ec;
-    socket.close(ec);
-
-    work_guard.reset();
-
-    io_context.stop();
-
+void Connection::_close() {
     if (asio_thread.joinable()) {
+        INFO("stop asio thread");
+        socket.cancel();
+
+        boost::system::error_code ec;
+        socket.close(ec);
+
+        work_guard.reset();
+
+        io_context.stop();
         asio_thread.join();
     }
 
-    INFO("stop cq thread");
     if (cq_thread.joinable()) {
+        INFO("stop cq thread");
+
         stop = true;
 
         // create fake wr to wake up cq thread
@@ -89,6 +87,11 @@ Connection::~Connection() {
         // wait thread done
         cq_thread.join();
     }
+}
+Connection::~Connection() {
+    INFO("destroying connection");
+
+    _close();
 
     if (comp_channel) {
         ibv_destroy_comp_channel(comp_channel);
