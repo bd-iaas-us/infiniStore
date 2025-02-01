@@ -44,7 +44,7 @@ SendBuffer::~SendBuffer() {
 Connection::~Connection() {
     INFO("destroying connection");
 
-    if (cq_future.valid()) {
+    if (!stop && cq_future.valid()) {
         stop = true;
 
         // create fake wr to wake up cq thread

@@ -432,6 +432,9 @@ class InfinityConnection:
             raise Exception(f"Failed to write to infinistore, ret = {ret}")
         return 0
 
+    def close_connection(self):
+        _infinistore.close_connection(self.conn)
+
     async def read_cache_async(
         self, cache: torch.Tensor, blocks: List[Tuple[str, int]], page_size: int
     ):

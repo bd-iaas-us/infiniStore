@@ -1,5 +1,6 @@
 import infinistore
 import threading
+import uuid
 from infinistore import (
     register_server,
     purge_kv_map,
@@ -45,6 +46,10 @@ async def connect_async(config):
     return rdma_conn
 
 
+def generate_uuid():
+    return str(uuid.uuid4())
+
+
 @app.post("/selftest")
 async def selftest():
     Logger.info("selftest")
@@ -60,7 +65,7 @@ async def selftest():
 
     config = infinistore.ClientConfig(
         host_addr="127.0.0.1",
-        service_port=12345,
+        service_port=22345,
         log_level="info",
         connection_type=infinistore.TYPE_RDMA,
         ib_port=1,
@@ -80,7 +85,8 @@ async def selftest():
     await asyncio.to_thread(rdma_conn.register_mr, src_tensor)
     await asyncio.to_thread(rdma_conn.register_mr, dst_tensor)
 
-    keys = ["key1", "key2", "key3"]
+    # keys = ["key1", "key2", "key3"]
+    keys = [generate_uuid() for i in range(3)]
     remote_addr = await rdma_conn.allocate_rdma_async(keys, 1024 * 4)
     print(f"remote addrs is {remote_addr}")
 
@@ -96,6 +102,7 @@ async def selftest():
 
     assert torch.equal(src_tensor[0:3072].cpu(), dst_tensor[0:3072].cpu())
 
+    rdma_conn.close_connection()
     return {"status": "ok"}
 
 

@@ -127,6 +127,37 @@ int register_mr_wrapper(connection_t *conn, uintptr_t ptr, size_t ptr_region_siz
     return register_mr(conn, (void *)ptr, ptr_region_size);
 }
 
+void close_connection(connection_t *conn) {
+    py::gil_scoped_release release;
+    if (conn->cq_future.valid()) {
+        conn->stop = true;
+
+        // create fake wr to wake up cq thread
+        ibv_req_notify_cq(conn->cq, 0);
+        struct ibv_sge sge;
+        memset(&sge, 0, sizeof(sge));
+        sge.addr = (uintptr_t)conn;
+        sge.length = sizeof(*conn);
+        sge.lkey = 0;
+
+        struct ibv_send_wr send_wr;
+        memset(&send_wr, 0, sizeof(send_wr));
+        send_wr.wr_id = (uintptr_t)conn;
+        send_wr.sg_list = &sge;
+        send_wr.num_sge = 1;
+        send_wr.opcode = IBV_WR_SEND;
+        send_wr.send_flags = IBV_SEND_SIGNALED;
+
+        struct ibv_send_wr *bad_send_wr;
+        {
+            std::unique_lock<std::mutex> lock(conn->rdma_post_send_mutex);
+            ibv_post_send(conn->qp, &send_wr, &bad_send_wr);
+        }
+        // wait thread done
+        conn->cq_future.get();
+    }
+}
+
 PYBIND11_MODULE(_infinistore, m) {
     // client side
     py::class_<client_config_t>(m, "ClientConfig")
@@ -141,6 +172,7 @@ PYBIND11_MODULE(_infinistore, m) {
     py::class_<connection_t>(m, "Connection").def(py::init<>());
 
     m.def("init_connection", &init_connection, "Initialize a connection");
+    m.def("close_connection", &close_connection, "Close the connection");
     m.def("rw_local", &rw_local_wrapper, "Read/Write cpu memory from GPU device");
     m.def("r_rdma", &r_rdma_wrapper, "Read remote memory");
     m.def("w_rdma", &w_rdma_wrapper, "Write remote memory");
