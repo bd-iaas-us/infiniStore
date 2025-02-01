@@ -72,7 +72,7 @@ struct Connection {
     struct ibv_mr *recv_mr = NULL;
 
     struct ibv_comp_channel *comp_channel = NULL;
-    std::future<void> cq_future;  // cq thread
+    std::thread cq_thread;  // cq thread
     std::atomic<int> rdma_inflight_count{0};
 
     std::atomic<bool> stop{false};
@@ -85,13 +85,13 @@ struct Connection {
     std::atomic<int> outstanding_rdma_writes{0};
     std::deque<std::pair<struct ibv_send_wr *, struct ibv_sge *>> outstanding_rdma_writes_queue;
 
-    std::thread thread;
+    std::thread asio_thread;
     Connection()
         : io_context(),
           work_guard(boost::asio::make_work_guard(io_context)),
           socket(io_context),
           resolver(io_context) {
-        thread = std::thread([this]() { io_context.run(); });
+        asio_thread = std::thread([this]() { io_context.run(); });
     }
 
     Connection(const Connection &) = delete;

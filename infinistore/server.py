@@ -17,12 +17,17 @@ import argparse
 import logging
 import subprocess
 import os
+import uuid
 
 
 # disable standard logging, we will use our own logger
 logging.disable(logging.INFO)
 
 app = FastAPI()
+
+
+def generate_uuid():
+    return str(uuid.uuid4())
 
 
 @app.post("/selftest")
@@ -47,8 +52,29 @@ async def selftest():
         dev_name="mlx5_0",
     )
 
-    conn = infinistore.InfinityConnection(config)
-    await conn.connect_async()
+    rdma_conn = infinistore.InfinityConnection(config)
+
+    ret = await rdma_conn.connect_async()
+    print(f"Connection established: {ret}")
+    if ret != 0:
+        raise Exception("Failed to connect to Infinistore server")
+    ret = await rdma_conn.setup_rdma_async()
+    if ret != 0:
+        raise Exception("Failed to setup RDMA connection")
+
+    src_tensor = torch.tensor(
+        [i for i in range(4096)], device="cpu", dtype=torch.float32
+    )
+    dst_tensor = torch.zeros(4096, device="cpu", dtype=torch.float32)
+
+    rdma_conn.register_mr(src_tensor)
+    rdma_conn.register_mr(dst_tensor)
+    keys = [generate_uuid() for _ in range(3)]
+    remote_addr = await rdma_conn.allocate_rdma_async(keys, 1024 * 4)
+    print(f"remote addrs is {remote_addr}")
+
+    await rdma_conn.rdma_write_cache_async(src_tensor, [0, 1024], 1024, remote_addr[:2])
+    await rdma_conn.rdma_write_cache_async(src_tensor, [2048], 1024, remote_addr[2:])
     return {"status": "ok"}
 
 

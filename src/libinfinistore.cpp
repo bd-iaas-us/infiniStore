@@ -47,31 +47,22 @@ SendBuffer::~SendBuffer() {
 Connection::~Connection() {
     INFO("destroying connection");
 
-    INFO("cancel");
+    INFO("stop asio thread");
     socket.cancel();
 
-    INFO("close");
     boost::system::error_code ec;
     socket.close(ec);
 
-    INFO("reset..");
     work_guard.reset();
 
-    INFO("stop io_context");
     io_context.stop();
-    INFO("stop io_context done");
 
-    if (thread.joinable()) {
-        {
-            std::cout << "Pending handlers: " << io_context.poll() << "\n";
-
-            // py::gil_scoped_release release;
-            thread.join();
-        }
+    if (asio_thread.joinable()) {
+        asio_thread.join();
     }
-    INFO("OTHERS");
 
-    if (cq_future.valid()) {
+    INFO("stop cq thread");
+    if (cq_thread.joinable()) {
         stop = true;
 
         // create fake wr to wake up cq thread
@@ -96,7 +87,7 @@ Connection::~Connection() {
             ibv_post_send(qp, &send_wr, &bad_send_wr);
         }
         // wait thread done
-        cq_future.get();
+        cq_thread.join();
     }
 
     if (comp_channel) {
@@ -508,7 +499,6 @@ int setup_rdma_async(connection_t *conn, client_config_t config,
             // receive RETURN_CODE_SIZE
             // allocate recv buffer to get 1 int
             auto head_ptr = std::make_shared<std::vector<char>>(RETURN_CODE_SIZE);
-        asio:
             async_read(
                 conn->socket, asio::buffer(*head_ptr),
                 [conn, callback, head_ptr](const boost::system::error_code &ec, size_t) {
@@ -518,7 +508,7 @@ int setup_rdma_async(connection_t *conn, client_config_t config,
                         return;
                     }
 
-                    int return_code = 0;
+                    int return_code;
                     memcpy(&return_code, head_ptr->data(), RETURN_CODE_SIZE);
                     if (return_code != FINISH) {
                         ERROR("Failed to exchange connection information, return code: {}",
@@ -582,7 +572,7 @@ int setup_rdma_async(connection_t *conn, client_config_t config,
 
                             conn->rdma_inflight_count = 0;
                             conn->stop = false;
-                            conn->cq_future = std::async(std::launch::async, cq_handler, conn);
+                            conn->cq_thread = std::thread([conn]() { cq_handler(conn); });
                             INFO("RDMA setup done");
                             callback(0);
                         });
@@ -643,7 +633,7 @@ int setup_rdma(connection_t *conn, client_config_t config) {
 
     conn->rdma_inflight_count = 0;
     conn->stop = false;
-    conn->cq_future = std::async(std::launch::async, cq_handler, conn);
+    conn->cq_thread = std::thread([conn]() { cq_handler(conn); });
     return 0;
 }
 
