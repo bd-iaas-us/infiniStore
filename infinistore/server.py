@@ -6,6 +6,7 @@ from infinistore import (
     ServerConfig,
     Logger,
 )
+import infinistore
 
 import asyncio
 import uvloop
@@ -22,6 +23,33 @@ import os
 logging.disable(logging.INFO)
 
 app = FastAPI()
+
+
+@app.post("/selftest")
+async def selftest():
+    Logger.info("selftest")
+    # blocking API
+
+    Logger.info("start selftest")
+    # blocking API
+
+    # await asyncio.to_thread(blocking_io, rdma_conn)
+
+    # print current thread id
+
+    config = infinistore.ClientConfig(
+        host_addr="127.0.0.1",
+        service_port=12345,
+        log_level="info",
+        connection_type=infinistore.TYPE_RDMA,
+        ib_port=1,
+        link_type=infinistore.LINK_ETHERNET,
+        dev_name="mlx5_0",
+    )
+
+    conn = infinistore.InfinityConnection(config)
+    await conn.connect_async()
+    return {"status": "ok"}
 
 
 @app.post("/purge")

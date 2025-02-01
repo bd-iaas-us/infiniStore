@@ -298,6 +298,38 @@ class InfinityConnection:
         self.config = config
         Logger.set_log_level(config.log_level)
 
+    async def connect_async(self):
+        if self.config.connection_type == TYPE_LOCAL_GPU:
+            raise Exception("Local GPU connection does not support async")
+        if self.rdma_connected:
+            raise Exception("Already connected to remote instance")
+
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+
+        def _callback(code):
+            loop.call_soon_threadsafe(future.set_result, code)
+
+        _infinistore.init_connection_async(self.conn, self.config, _callback)
+        return await future
+
+    async def setup_rdma_async(self):
+        if self.config.connection_type == TYPE_LOCAL_GPU:
+            raise Exception("Local GPU connection does not support async")
+        if self.rdma_connected:
+            raise Exception("Already connected to remote instance")
+
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+
+        def _callback(code):
+            self.rdma_connected = True
+            loop.call_soon_threadsafe(future.set_result, code)
+
+        _infinistore.setup_rdma_async(self.conn, self.config, _callback)
+
+        return await future
+
     def connect(self):
         """
         Establishes a connection to the Infinistore instance based on the configuration.

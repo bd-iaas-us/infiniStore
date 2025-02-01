@@ -17,7 +17,8 @@
 #include "log.h"
 #include "protocol.h"
 
-using boost::asio::ip::tcp;
+namespace asio = boost::asio;
+using tcp = asio::ip::tcp;
 
 // RDMA send buffer
 // because write_cache will be invoked asynchronously,
@@ -34,10 +35,10 @@ struct SendBuffer {
 struct Connection {
     // tcp socket
 
-    boost::asio::io_context io_context;
+    asio::io_context io_context;
+    asio::executor_work_guard<asio::io_context::executor_type> work_guard;
     tcp::socket socket;
-    boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard;
-    std::future<void> io_context_future;
+    tcp::resolver resolver;
 
     // rdma connections
     struct ibv_context *ib_ctx = NULL;
@@ -84,7 +85,14 @@ struct Connection {
     std::atomic<int> outstanding_rdma_writes{0};
     std::deque<std::pair<struct ibv_send_wr *, struct ibv_sge *>> outstanding_rdma_writes_queue;
 
-    Connection() = default;
+    std::thread thread;
+    Connection()
+        : io_context(),
+          work_guard(boost::asio::make_work_guard(io_context)),
+          socket(io_context),
+          resolver(io_context) {
+        thread = std::thread([this]() { io_context.run(); });
+    }
 
     Connection(const Connection &) = delete;
     // destory the connection
@@ -112,12 +120,15 @@ struct rdma_write_commit_info {
 };
 
 int init_connection(connection_t *conn, client_config_t config);
+void init_connection_async(connection_t *conn, client_config_t config,
+                           std::function<void(int)> callback);
 // async rw local cpu memory, even rw_local returns, it is not guaranteed that
 // the operation is completed until sync_local is recved.
 int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, int block_size,
              void *ptr, int device_id);
 int sync_local(connection_t *conn);
 int setup_rdma(connection_t *conn, client_config_t config);
+int setup_rdma_async(connection_t *conn, client_config_t config, std::function<void(int)> callback);
 int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, void *base_ptr);
 int r_rdma_async(connection_t *conn, std::vector<block_t> &blocks, int block_size, void *base_ptr,
                  std::function<void()> callback);

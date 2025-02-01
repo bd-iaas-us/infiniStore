@@ -127,6 +127,22 @@ int register_mr_wrapper(connection_t *conn, uintptr_t ptr, size_t ptr_region_siz
     return register_mr(conn, (void *)ptr, ptr_region_size);
 }
 
+void init_connection_async_wrapper(connection_t *conn, client_config_t config,
+                                   std::function<void(int)> callback) {
+    init_connection_async(conn, config, [callback](int ret) {
+        py::gil_scoped_acquire acquire;
+        callback(ret);
+    });
+}
+
+void setup_rdma_async_wrapper(connection_t *conn, client_config_t config,
+                              std::function<void(int)> callback) {
+    setup_rdma_async(conn, config, [callback](int ret) {
+        py::gil_scoped_acquire acquire;
+        callback(ret);
+    });
+}
+
 PYBIND11_MODULE(_infinistore, m) {
     // client side
     py::class_<client_config_t>(m, "ClientConfig")
@@ -141,6 +157,8 @@ PYBIND11_MODULE(_infinistore, m) {
     py::class_<connection_t>(m, "Connection").def(py::init<>());
 
     m.def("init_connection", &init_connection, "Initialize a connection");
+    m.def("init_connection_async", &init_connection_async_wrapper,
+          "Initialize a connection asynchronously");
     m.def("rw_local", &rw_local_wrapper, "Read/Write cpu memory from GPU device");
     m.def("r_rdma", &r_rdma_wrapper, "Read remote memory");
     m.def("w_rdma", &w_rdma_wrapper, "Write remote memory");
@@ -154,6 +172,7 @@ PYBIND11_MODULE(_infinistore, m) {
           "Allocate remote memory asynchronously");
     m.def("sync_local", &sync_local, "sync the cuda stream");
     m.def("setup_rdma", &setup_rdma, "setup rdma connection");
+    m.def("setup_rdma_async", &setup_rdma_async, "setup rdma connection asynchronously");
     m.def("sync_rdma", &sync_rdma, "sync the remote server");
     m.def("check_exist", &check_exist, "check if the key exists in the store");
     m.def("get_match_last_index", &get_match_last_index,

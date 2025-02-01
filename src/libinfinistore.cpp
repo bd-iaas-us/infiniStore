@@ -5,6 +5,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <math.h>
+#include <pybind11/pybind11.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +13,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <iostream>
 #include <vector>
 
 #include "config.h"
@@ -19,6 +21,8 @@
 #include "log.h"
 #include "protocol.h"
 #include "utils.h"
+
+namespace py = pybind11;
 
 SendBuffer::SendBuffer(struct ibv_pd *pd, size_t size) {
     if (posix_memalign(&buffer_, 4096, PROTOCOL_BUFFER_SIZE) != 0) {
@@ -42,6 +46,30 @@ SendBuffer::~SendBuffer() {
 
 Connection::~Connection() {
     INFO("destroying connection");
+
+    INFO("cancel");
+    socket.cancel();
+
+    INFO("close");
+    boost::system::error_code ec;
+    socket.close(ec);
+
+    INFO("reset..");
+    work_guard.reset();
+
+    INFO("stop io_context");
+    io_context.stop();
+    INFO("stop io_context done");
+
+    if (thread.joinable()) {
+        {
+            std::cout << "Pending handlers: " << io_context.poll() << "\n";
+
+            // py::gil_scoped_release release;
+            thread.join();
+        }
+    }
+    INFO("OTHERS");
 
     if (cq_future.valid()) {
         stop = true;
@@ -73,10 +101,6 @@ Connection::~Connection() {
 
     if (comp_channel) {
         ibv_destroy_comp_channel(comp_channel);
-    }
-
-    if (sock) {
-        close(sock);
     }
 
     for (auto it = local_mr.begin(); it != local_mr.end(); it++) {
@@ -455,6 +479,119 @@ void release_send_buffer(connection_t *conn, SendBuffer *buffer) {
     conn->send_buffers.push(buffer);
 }
 
+int setup_rdma_async(connection_t *conn, client_config_t config,
+                     std::function<void(int)> callback) {
+    if (init_rdma_resources(conn, config) < 0) {
+        ERROR("Failed to initialize RDMA resources");
+        return -1;
+    }
+
+    header_t header = {
+        .magic = MAGIC,
+        .op = OP_RDMA_EXCHANGE,
+        .body_size = sizeof(rdma_conn_info_t),
+    };
+
+    std::vector<asio::const_buffer> buffers;
+    buffers.push_back(asio::buffer(&header, FIXED_HEADER_SIZE));
+    buffers.push_back(asio::buffer(&conn->local_info, sizeof(rdma_conn_info_t)));
+
+    // write header and local_info to send buffer
+    asio::async_write(
+        conn->socket, buffers, [conn, callback](const boost::system::error_code &ec, size_t) {
+            if (ec) {
+                ERROR("Failed to send local connection information [{}]", ec.message());
+                callback(ec.value());
+                return;
+            }
+
+            // receive RETURN_CODE_SIZE
+            // allocate recv buffer to get 1 int
+            auto head_ptr = std::make_shared<std::vector<char>>(RETURN_CODE_SIZE);
+        asio:
+            async_read(
+                conn->socket, asio::buffer(*head_ptr),
+                [conn, callback, head_ptr](const boost::system::error_code &ec, size_t) {
+                    if (ec) {
+                        ERROR("Failed to receive return code [{}]", ec.message());
+                        callback(ec.value());
+                        return;
+                    }
+
+                    int return_code = 0;
+                    memcpy(&return_code, head_ptr->data(), RETURN_CODE_SIZE);
+                    if (return_code != FINISH) {
+                        ERROR("Failed to exchange connection information, return code: {}",
+                              return_code);
+                        callback(-1);
+                        return;
+                    }
+
+                    // receive remote_info
+                    auto buffer_ptr = std::make_shared<std::vector<char>>(sizeof(rdma_conn_info_t));
+                    asio::async_read(
+                        conn->socket, asio::buffer(*buffer_ptr),
+                        [conn, callback, buffer_ptr](const boost::system::error_code &ec, size_t) {
+                            if (ec) {
+                                ERROR("Failed to receive remote connection information [{}]",
+                                      ec.message());
+                                callback(ec.value());
+                                return;
+                            }
+
+                            memcpy(&conn->remote_info, buffer_ptr->data(),
+                                   sizeof(rdma_conn_info_t));
+                            print_rdma_conn_info(&conn->remote_info, true);
+
+                            // Modify QP to RTR state
+                            if (modify_qp_to_rtr(conn)) {
+                                ERROR("Failed to modify QP to RTR");
+                                callback(-1);
+                                return;
+                            }
+
+                            if (modify_qp_to_rts(conn)) {
+                                ERROR("Failed to modify QP to RTS");
+                                callback(-1);
+                                return;
+                            }
+
+                            if (posix_memalign(&conn->recv_buffer, 4096, PROTOCOL_BUFFER_SIZE) !=
+                                0) {
+                                ERROR("Failed to allocate recv buffer");
+                                callback(-1);
+                                return;
+                            }
+                            conn->recv_mr =
+                                ibv_reg_mr(conn->pd, conn->recv_buffer, PROTOCOL_BUFFER_SIZE,
+                                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+                            if (!conn->recv_mr) {
+                                ERROR("Failed to register recv MR");
+                                callback(-1);
+                                return;
+                            }
+
+                            /*
+                            This is MAX_RECV_WR not MAX_SEND_WR,
+                            because server also has the same number of buffers
+                            */
+                            for (int i = 0; i < MAX_RECV_WR; i++) {
+                                conn->send_buffers.push(
+                                    new SendBuffer(conn->pd, PROTOCOL_BUFFER_SIZE));
+                            }
+
+                            conn->rdma_inflight_count = 0;
+                            conn->stop = false;
+                            conn->cq_future = std::async(std::launch::async, cq_handler, conn);
+                            INFO("RDMA setup done");
+                            callback(0);
+                        });
+                });
+        });
+
+    return 0;
+}
+
 int setup_rdma(connection_t *conn, client_config_t config) {
     if (init_rdma_resources(conn, config) < 0) {
         ERROR("Failed to initialize RDMA resources");
@@ -512,32 +649,38 @@ int setup_rdma(connection_t *conn, client_config_t config) {
 
 int init_connection(connection_t *conn, client_config_t config) {
     // invoke init_connection_async
-    std::promise<void> promise;
-    auto future = promise.get_future();
+    // std::promise<void> promise;
+    // auto future = promise.get_future();
 
-    init_connection_async(conn, config, [&promise](std::string &msg) {
-        if (msg.empty()) {
-            promise.set_value();
-        }
-        else {
-            promise.set_exception(std::make_exception_ptr(std::runtime_error(msg)));
-        }
-    });
+    // init_connection_async(conn, config, [&promise](std::string &msg) {
+    //     if (msg.empty()) {
+    //         promise.set_value();
+    //     }
+    //     else {
+    //         promise.set_exception(std::make_exception_ptr(std::runtime_error(msg)));
+    //     }
+    // });
+    return 0;
 }
 
 void init_connection_async(connection_t *conn, client_config_t config,
-                           std::function<void(std::string &)> callback) {
+                           std::function<void(int)> callback) {
     assert(conn != NULL);
-    conn->work_guard = boost::asio::make_work_guard(conn->io_context);
-    conn->socket = tcp::socket(conn->io_context);
-    conn->io_context_future = std::async(std::launch::async, [conn]() { conn->io_context.run(); });
 
-    tcp::resolver resolver(conn->io_context);
-    auto endpoints = resolver.resolve(config.host_addr, std::to_string(config.service_port));
-
-    boost::asio::async_connect(
-        conn->socket, endpoints,
-        [conn, callback](boost::system::error_code ec, tcp::endpoint) { callback(ec.message()); });
+    conn->resolver.async_resolve(
+        config.host_addr, std::to_string(config.service_port),
+        [conn, callback, config](const boost::system::error_code &ec,
+                                 tcp::resolver::results_type endpoints) {
+            if (ec) {  // error
+                ERROR("Failed to resolve address: {}:{} [{}]", config.host_addr,
+                      config.service_port, ec.message());
+                callback(ec.value());
+                return;
+            }
+            asio::async_connect(conn->socket, endpoints,
+                                [callback](const boost::system::error_code &ec,
+                                           const tcp::endpoint &) { callback(ec.value()); });
+        });
 }
 
 /*
@@ -641,165 +784,168 @@ int modify_qp_to_rts(connection_t *conn) {
 }
 
 int exchange_conn_info(connection_t *conn) {
-    header_t header = {
-        .magic = MAGIC,
-        .op = OP_RDMA_EXCHANGE,
-        .body_size = sizeof(rdma_conn_info_t),
-    };
+    // header_t header = {
+    //     .magic = MAGIC,
+    //     .op = OP_RDMA_EXCHANGE,
+    //     .body_size = sizeof(rdma_conn_info_t),
+    // };
 
-    struct iovec iov[2];
-    struct msghdr msg;
+    // struct iovec iov[2];
+    // struct msghdr msg;
 
-    iov[0].iov_base = &header;
-    iov[0].iov_len = FIXED_HEADER_SIZE;
-    iov[1].iov_base = &conn->local_info;
-    iov[1].iov_len = sizeof(rdma_conn_info_t);
+    // iov[0].iov_base = &header;
+    // iov[0].iov_len = FIXED_HEADER_SIZE;
+    // iov[1].iov_base = &conn->local_info;
+    // iov[1].iov_len = sizeof(rdma_conn_info_t);
 
-    memset(&msg, 0, sizeof(msg));
-    msg.msg_iov = iov;
-    msg.msg_iovlen = 2;
+    // memset(&msg, 0, sizeof(msg));
+    // msg.msg_iov = iov;
+    // msg.msg_iovlen = 2;
 
-    if (sendmsg(conn->sock, &msg, 0) < 0) {
-        ERROR("Failed to send local connection information");
-        return -1;
-    }
+    // if (sendmsg(conn->sock, &msg, 0) < 0) {
+    //     ERROR("Failed to send local connection information");
+    //     return -1;
+    // }
 
-    int return_code = -1;
-    if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
-        ERROR("Failed to receive return code");
-        return -1;
-    }
+    // int return_code = -1;
+    // if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
+    //     ERROR("Failed to receive return code");
+    //     return -1;
+    // }
 
-    if (return_code != FINISH) {
-        ERROR("Failed to exchange connection information, return code: {}", return_code);
-        return -1;
-    }
+    // if (return_code != FINISH) {
+    //     ERROR("Failed to exchange connection information, return code: {}", return_code);
+    //     return -1;
+    // }
 
-    if (recv(conn->sock, &conn->remote_info, sizeof(rdma_conn_info_t), MSG_WAITALL) !=
-        sizeof(rdma_conn_info_t)) {
-        ERROR("Failed to receive remote connection information");
-        return -1;
-    }
+    // if (recv(conn->sock, &conn->remote_info, sizeof(rdma_conn_info_t), MSG_WAITALL) !=
+    //     sizeof(rdma_conn_info_t)) {
+    //     ERROR("Failed to receive remote connection information");
+    //     return -1;
+    // }
     return 0;
 }
 
 int sync_local(connection_t *conn) {
-    assert(conn != NULL);
-    header_t header;
-    header = {
-        .magic = MAGIC,
-        .op = OP_SYNC,
-    };
-    send_exact(conn->sock, &header, FIXED_HEADER_SIZE);
+    // assert(conn != NULL);
+    // header_t header;
+    // header = {
+    //     .magic = MAGIC,
+    //     .op = OP_SYNC,
+    // };
+    // send_exact(conn->sock, &header, FIXED_HEADER_SIZE);
 
-    int return_code = -1;
-    if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
-        ERROR("Failed to receive return code");
-        return -1;
-    }
-    if (return_code != FINISH) {
-        ERROR("Failed to sync local");
-        return -1;
-    }
+    // int return_code = -1;
+    // if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
+    //     ERROR("Failed to receive return code");
+    //     return -1;
+    // }
+    // if (return_code != FINISH) {
+    //     ERROR("Failed to sync local");
+    //     return -1;
+    // }
 
-    int inflight_syncs = 0;
-    if (recv(conn->sock, &inflight_syncs, sizeof(int), MSG_WAITALL) != sizeof(int)) {
-        ERROR("Failed to receive inflight mr size");
-        return -1;
-    }
+    // int inflight_syncs = 0;
+    // if (recv(conn->sock, &inflight_syncs, sizeof(int), MSG_WAITALL) != sizeof(int)) {
+    //     ERROR("Failed to receive inflight mr size");
+    //     return -1;
+    // }
 
-    return inflight_syncs;
+    // return inflight_syncs;
+    return 0;
 }
 
 int check_exist(connection_t *conn, std::string key) {
-    assert(conn != NULL);
-    header_t header;
-    header = {.magic = MAGIC, .op = OP_CHECK_EXIST, .body_size = key.size()};
+    // assert(conn != NULL);
+    // header_t header;
+    // header = {.magic = MAGIC, .op = OP_CHECK_EXIST, .body_size = key.size()};
 
-    struct iovec iov[2];
-    struct msghdr msg;
-    memset(&msg, 0, sizeof(msg));
+    // struct iovec iov[2];
+    // struct msghdr msg;
+    // memset(&msg, 0, sizeof(msg));
 
-    iov[0].iov_base = &header;
-    iov[0].iov_len = FIXED_HEADER_SIZE;
-    iov[1].iov_base = const_cast<void *>(static_cast<const void *>(key.data()));
-    iov[1].iov_len = key.size();
-    msg.msg_iov = iov;
-    msg.msg_iovlen = 2;
+    // iov[0].iov_base = &header;
+    // iov[0].iov_len = FIXED_HEADER_SIZE;
+    // iov[1].iov_base = const_cast<void *>(static_cast<const void *>(key.data()));
+    // iov[1].iov_len = key.size();
+    // msg.msg_iov = iov;
+    // msg.msg_iovlen = 2;
 
-    if (sendmsg(conn->sock, &msg, 0) < 0) {
-        ERROR("Failed to send header and body");
-        return -1;
-    }
+    // if (sendmsg(conn->sock, &msg, 0) < 0) {
+    //     ERROR("Failed to send header and body");
+    //     return -1;
+    // }
 
-    int return_code = 0;
-    if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
-        ERROR("Failed to receive return code");
-        return -1;
-    }
-    if (return_code != FINISH) {
-        ERROR("Failed to check exist");
-        return -1;
-    }
+    // int return_code = 0;
+    // if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
+    //     ERROR("Failed to receive return code");
+    //     return -1;
+    // }
+    // if (return_code != FINISH) {
+    //     ERROR("Failed to check exist");
+    //     return -1;
+    // }
 
-    int exist = 0;
-    if (recv(conn->sock, &exist, sizeof(int), MSG_WAITALL) != sizeof(int)) {
-        ERROR("Failed to receive exist");
-        return -1;
-    }
-    return exist;
+    // int exist = 0;
+    // if (recv(conn->sock, &exist, sizeof(int), MSG_WAITALL) != sizeof(int)) {
+    //     ERROR("Failed to receive exist");
+    //     return -1;
+    // }
+    // return exist;
+    return 0;
 }
 
 int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
-    INFO("get_match_last_index");
-    assert(conn != NULL);
+    // INFO("get_match_last_index");
+    // assert(conn != NULL);
 
-    FlatBufferBuilder builder(64 << 10);
+    // FlatBufferBuilder builder(64 << 10);
 
-    auto keys_offset = builder.CreateVectorOfStrings(keys);
-    auto req = CreateGetMatchLastIndexRequest(builder, keys_offset);
-    builder.Finish(req);
+    // auto keys_offset = builder.CreateVectorOfStrings(keys);
+    // auto req = CreateGetMatchLastIndexRequest(builder, keys_offset);
+    // builder.Finish(req);
 
-    header_t header = {
-        .magic = MAGIC,
-        .op = OP_GET_MATCH_LAST_IDX,
-        .body_size = builder.GetSize(),
-    };
+    // header_t header = {
+    //     .magic = MAGIC,
+    //     .op = OP_GET_MATCH_LAST_IDX,
+    //     .body_size = builder.GetSize(),
+    // };
 
-    struct iovec iov[2];
-    struct msghdr msg;
-    memset(&msg, 0, sizeof(msg));
+    // struct iovec iov[2];
+    // struct msghdr msg;
+    // memset(&msg, 0, sizeof(msg));
 
-    iov[0].iov_base = &header;
-    iov[0].iov_len = FIXED_HEADER_SIZE;
-    iov[1].iov_base = builder.GetBufferPointer();
-    iov[1].iov_len = builder.GetSize();
+    // iov[0].iov_base = &header;
+    // iov[0].iov_len = FIXED_HEADER_SIZE;
+    // iov[1].iov_base = builder.GetBufferPointer();
+    // iov[1].iov_len = builder.GetSize();
 
-    msg.msg_iov = iov;
-    msg.msg_iovlen = 2;
+    // msg.msg_iov = iov;
+    // msg.msg_iovlen = 2;
 
-    if (sendmsg(conn->sock, &msg, 0) < 0) {
-        ERROR("Failed to send header and body");
-        return -1;
-    }
+    // if (sendmsg(conn->sock, &msg, 0) < 0) {
+    //     ERROR("Failed to send header and body");
+    //     return -1;
+    // }
 
-    int return_code = 0;
-    if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
-        ERROR("Failed to receive return code");
-        return -1;
-    }
-    if (return_code != FINISH) {
-        ERROR("Failed to get match last index");
-        return -1;
-    }
+    // int return_code = 0;
+    // if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
+    //     ERROR("Failed to receive return code");
+    //     return -1;
+    // }
+    // if (return_code != FINISH) {
+    //     ERROR("Failed to get match last index");
+    //     return -1;
+    // }
 
-    int last_index = -1;
-    if (recv(conn->sock, &last_index, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
-        ERROR("Failed to receive return code");
-        return -1;
-    }
+    // int last_index = -1;
+    // if (recv(conn->sock, &last_index, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
+    //     ERROR("Failed to receive return code");
+    //     return -1;
+    // }
 
-    return last_index;
+    // return last_index;
+    return 0;
 }
 
 std::vector<remote_block_t> *allocate_rdma(connection_t *conn, std::vector<std::string> &keys,
@@ -1150,67 +1296,69 @@ int r_rdma_async(connection_t *conn, std::vector<block_t> &blocks, int block_siz
 
 int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, int block_size,
              void *ptr, int device_id) {
-    assert(conn != NULL);
-    assert(ptr != NULL);
+    // assert(conn != NULL);
+    // assert(ptr != NULL);
 
-    std::vector<uint8_t> ipc_handle(sizeof(cudaIpcMemHandle_t));
-    CHECK_CUDA(cudaIpcGetMemHandle((cudaIpcMemHandle_t *)ipc_handle.data(), ptr));
+    // std::vector<uint8_t> ipc_handle(sizeof(cudaIpcMemHandle_t));
+    // CHECK_CUDA(cudaIpcGetMemHandle((cudaIpcMemHandle_t *)ipc_handle.data(), ptr));
 
-    /*
-    local_meta_t meta = {
-        .ipc_handle = ipc_handle,
-        .block_size = block_size,
-        .blocks = blocks,
-    };
-    */
+    // /*
+    // local_meta_t meta = {
+    //     .ipc_handle = ipc_handle,
+    //     .block_size = block_size,
+    //     .blocks = blocks,
+    // };
+    // */
 
-    // dynamic create buffer.
-    FlatBufferBuilder builder(64 << 10);
+    // // dynamic create buffer.
+    // FlatBufferBuilder builder(64 << 10);
 
-    std::vector<Offset<Block>> block_offsets;
-    for (const auto &block : blocks) {
-        block_offsets.push_back(
-            CreateBlock(builder, builder.CreateString(block.key), block.offset));
-    }
+    // std::vector<Offset<Block>> block_offsets;
+    // for (const auto &block : blocks) {
+    //     block_offsets.push_back(
+    //         CreateBlock(builder, builder.CreateString(block.key), block.offset));
+    // }
 
-    auto req =
-        CreateLocalMetaRequestDirect(builder, device_id, &ipc_handle, block_size, &block_offsets);
+    // auto req =
+    //     CreateLocalMetaRequestDirect(builder, device_id, &ipc_handle, block_size,
+    //     &block_offsets);
 
-    builder.Finish(req);
+    // builder.Finish(req);
 
-    header_t header = {
-        .magic = MAGIC,
-        .op = op,
-        .body_size = builder.GetSize(),
-    };
+    // header_t header = {
+    //     .magic = MAGIC,
+    //     .op = op,
+    //     .body_size = builder.GetSize(),
+    // };
 
-    struct iovec iov[2];
-    struct msghdr msg;
+    // struct iovec iov[2];
+    // struct msghdr msg;
 
-    iov[0].iov_base = &header;
-    iov[0].iov_len = FIXED_HEADER_SIZE;
-    iov[1].iov_base = builder.GetBufferPointer();
-    iov[1].iov_len = builder.GetSize();
+    // iov[0].iov_base = &header;
+    // iov[0].iov_len = FIXED_HEADER_SIZE;
+    // iov[1].iov_base = builder.GetBufferPointer();
+    // iov[1].iov_len = builder.GetSize();
 
-    memset(&msg, 0, sizeof(msg));
-    msg.msg_iov = iov;
-    msg.msg_iovlen = 2;
+    // memset(&msg, 0, sizeof(msg));
+    // msg.msg_iov = iov;
+    // msg.msg_iovlen = 2;
 
-    if (sendmsg(conn->sock, &msg, 0) < 0) {
-        ERROR("Failed to send header and body");
-        return -1;
-    }
+    // if (sendmsg(conn->sock, &msg, 0) < 0) {
+    //     ERROR("Failed to send header and body");
+    //     return -1;
+    // }
 
-    int return_code;
-    if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
-        ERROR("Failed to receive return code");
-        return -1;
-    }
+    // int return_code;
+    // if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
+    //     ERROR("Failed to receive return code");
+    //     return -1;
+    // }
 
-    if (return_code != FINISH && return_code != TASK_ACCEPTED) {
-        ERROR("return code: {}", return_code);
-        return -1;
-    }
+    // if (return_code != FINISH && return_code != TASK_ACCEPTED) {
+    //     ERROR("return code: {}", return_code);
+    //     return -1;
+    // }
+
     return 0;
 }
 
