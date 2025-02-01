@@ -298,6 +298,21 @@ class InfinityConnection:
         self.config = config
         Logger.set_log_level(config.log_level)
 
+    async def connect_async(self):
+        if self.config.connection_type == TYPE_LOCAL_GPU:
+            raise Exception("Local GPU connection is not supported in async mode")
+        Logger.warn("async connect may have bug")
+        loop = asyncio.get_running_loop()
+
+        def blocking_connect():
+            if self.conn.init_connection(self.config) < 0:
+                raise Exception("Failed to initialize remote connection")
+            if self.conn.setup_rdma(self.config) < 0:
+                raise Exception("Failed to setup RDMA connection")
+            self.rdma_connected = True
+
+        await loop.run_in_executor(None, blocking_connect)
+
     def connect(self):
         """
         Establishes a connection to the Infinistore instance based on the configuration.
@@ -315,7 +330,7 @@ class InfinityConnection:
             raise Exception("Already connected to remote instance")
 
         print(f"connecting to {self.config.host_addr}")
-        ret = _infinistore.init_connection(self.conn, self.config)
+        ret = self.conn.init_connection(self.config)
         if ret < 0:
             raise Exception("Failed to initialize remote connection")
 
@@ -324,7 +339,7 @@ class InfinityConnection:
                 raise Exception("Local GPU connection must be to localhost")
             self.local_connected = True
         else:
-            ret = _infinistore.setup_rdma(self.conn, self.config)
+            ret = self.conn.setup_rdma(self.config)
             if ret < 0:
                 raise Exception("Failed to setup RDMA connection")
             self.rdma_connected = True
@@ -353,8 +368,8 @@ class InfinityConnection:
         cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
         if len(cuda_visible_devices) > 0:
             device_id = int(cuda_visible_devices.split(",")[cache.device.index])
-        ret = _infinistore.rw_local(
-            self.conn,
+
+        ret = self.conn.rw_local(
             self.OP_W,
             blocks_in_bytes,
             page_size * element_size,
@@ -384,8 +399,7 @@ class InfinityConnection:
         def _callback():
             loop.call_soon_threadsafe(future.set_result, 0)
 
-        _infinistore.w_rdma_async(
-            self.conn,
+        self.conn.w_rdma_async(
             offsets_in_bytes,
             page_size * element_size,
             remote_blocks,
@@ -421,8 +435,15 @@ class InfinityConnection:
 
         # each offset should multiply by the element size
         offsets_in_bytes = [offset * element_size for offset in offsets]
-        ret = _infinistore.w_rdma(
-            self.conn,
+        # ret = _infinistore.w_rdma(
+        #     self.conn,
+        #     offsets_in_bytes,
+        #     page_size * element_size,
+        #     remote_blocks,
+        #     ptr,
+        # )
+
+        ret = self.conn.w_rdma(
             offsets_in_bytes,
             page_size * element_size,
             remote_blocks,
@@ -431,9 +452,6 @@ class InfinityConnection:
         if ret < 0:
             raise Exception(f"Failed to write to infinistore, ret = {ret}")
         return 0
-
-    def close_connection(self):
-        _infinistore.close_connection(self.conn)
 
     async def read_cache_async(
         self, cache: torch.Tensor, blocks: List[Tuple[str, int]], page_size: int
@@ -451,9 +469,17 @@ class InfinityConnection:
         def _callback():
             loop.call_soon_threadsafe(future.set_result, 0)
 
-        ret = _infinistore.r_rdma_async(
-            self.conn, blocks_in_bytes, page_size * element_size, ptr, _callback
+        # ret = _infinistore.r_rdma_async(
+        #     self.conn, blocks_in_bytes, page_size * element_size, ptr, _callback
+        # )
+
+        ret = self.conn.r_rdma_async(
+            blocks_in_bytes,
+            page_size * element_size,
+            ptr,
+            _callback,
         )
+
         if ret < 0:
             raise Exception(f"Failed to read to infinistore, ret = {ret}")
         return await future
@@ -483,8 +509,16 @@ class InfinityConnection:
         if len(cuda_visible_devices) > 0:
             device_id = int(cuda_visible_devices.split(",")[cache.device.index])
         if self.local_connected:
-            ret = _infinistore.rw_local(
-                self.conn,
+            # ret = _infinistore.rw_local(
+            #     self.conn,
+            #     self.OP_R,
+            #     blocks_in_bytes,
+            #     page_size * element_size,
+            #     ptr,
+            #     device_id,
+            # )
+
+            ret = self.conn.rw_local(
                 self.OP_R,
                 blocks_in_bytes,
                 page_size * element_size,
@@ -494,8 +528,14 @@ class InfinityConnection:
             if ret < 0:
                 raise Exception(f"Failed to read to infinistore, ret = {ret}")
         elif self.rdma_connected:
-            ret = _infinistore.r_rdma(
-                self.conn,
+            # ret = _infinistore.r_rdma(
+            #     self.conn,
+            #     blocks_in_bytes,
+            #     page_size * element_size,
+            #     ptr,
+            # )
+
+            ret = self.conn.r_rdma(
                 blocks_in_bytes,
                 page_size * element_size,
                 ptr,
@@ -520,7 +560,9 @@ class InfinityConnection:
             n = 0
             timeout = 1  # 1 second timeout
             while True:
-                ret = _infinistore.sync_local(self.conn)
+                # ret = _infinistore.sync_local(self.conn)
+
+                ret = self.conn.sync_local()
                 if ret < 0:
                     raise Exception(f"Failed to sync to infinistore, ret = {ret}")
                 elif ret > 0:
@@ -532,7 +574,8 @@ class InfinityConnection:
                 else:
                     return
         elif self.rdma_connected:
-            ret = _infinistore.sync_rdma(self.conn)
+            # ret = _infinistore.sync_rdma(self.conn)
+            ret = self.conn.sync_rdma()
         else:
             raise Exception("Not connected to any instance")
 
@@ -559,7 +602,8 @@ class InfinityConnection:
         Raises:
             Exception: If there is an error checking the key's existence.
         """
-        ret = _infinistore.check_exist(self.conn, key)
+        # ret = _infinistore.check_exist(self.conn, key)
+        ret = self.conn.check_exist(key)
         if ret < 0:
             raise Exception("Failed to check if this key exists")
         return True if ret == 0 else False
@@ -577,7 +621,8 @@ class InfinityConnection:
         Raises:
             Exception: If no match is found (i.e., if the return value is negative).
         """
-        ret = _infinistore.get_match_last_index(self.conn, keys)
+        # ret = _infinistore.get_match_last_index(self.conn, keys)
+        ret = self.conn.get_match_last_index(keys)
         if ret < 0:
             raise Exception("can't find a match")
         return ret
@@ -600,7 +645,9 @@ class InfinityConnection:
         element_size = cache.element_size()
         if not self.rdma_connected:
             raise Exception("this function is only valid for connected rdma")
-        ret = _infinistore.register_mr(self.conn, ptr, cache.numel() * element_size)
+        # ret = _infinistore.register_mr(self.conn, ptr, cache.numel() * element_size)
+
+        ret = self.conn.register_mr(ptr, cache.numel() * element_size)
         if ret < 0:
             raise Exception("register memory region failed")
         return ret
@@ -617,7 +664,9 @@ class InfinityConnection:
             # so we need to call_soon_threadsafe
             loop.call_soon_threadsafe(future.set_result, remote_addrs)
 
-        _infinistore.allocate_rdma_async(self.conn, keys, page_size_in_bytes, _callback)
+        # _infinistore.allocate_rdma_async(self.conn, keys, page_size_in_bytes, _callback)
+
+        self.conn.allocate_rdma_async(keys, page_size_in_bytes, _callback)
 
         return await future
 
@@ -639,7 +688,9 @@ class InfinityConnection:
         """
         if not self.rdma_connected:
             raise Exception("this function is only valid for connected rdma")
-        ret = _infinistore.allocate_rdma(self.conn, keys, page_size_in_bytes)
+
+        # ret = _infinistore.allocate_rdma(self.conn, keys, page_size_in_bytes)
+        ret = self.conn.allocate_rdma(keys, page_size_in_bytes)
         if len(ret) == 0:
             raise Exception("allocate memory failed")
         return ret

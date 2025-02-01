@@ -45,7 +45,6 @@ bool extend_in_flight = false;
 // indicate the number of cudaIpcOpenMemHandle
 std::atomic<unsigned int> opened_ipc{0};
 
-
 enum CUDA_TASK_TYPE {
     CUDA_READ,
     CUDA_WRITE,
@@ -162,7 +161,9 @@ Client::~Client() {
     for (int i = 0; i < MAX_RECV_WR; i++) {
         if (recv_buffer_[i]) {
             free(recv_buffer_[i]);
+            recv_buffer_[i] = NULL;
             ibv_dereg_mr(recv_mr_[i]);
+            recv_mr_[i] = NULL;
         }
     }
 
