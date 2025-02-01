@@ -18,80 +18,6 @@ namespace py = pybind11;
 
 extern int register_server(unsigned long loop_ptr, server_config_t config);
 
-int rw_local_wrapper(connection_t *conn, char op,
-                     const std::vector<std::tuple<std::string, unsigned long>> &blocks,
-                     int block_size, uintptr_t ptr, int device_id) {
-    std::vector<block_t> c_blocks;
-    for (const auto &block : blocks) {
-        c_blocks.push_back(block_t{std::get<0>(block), std::get<1>(block)});
-    }
-    return rw_local(conn, op, c_blocks, block_size, (void *)ptr, device_id);
-}
-
-int r_rdma_wrapper(connection_t *conn,
-                   const std::vector<std::tuple<std::string, unsigned long>> &blocks,
-                   int block_size, uintptr_t ptr) {
-    std::vector<block_t> c_blocks;
-    for (const auto &block : blocks) {
-        c_blocks.push_back(block_t{std::get<0>(block), std::get<1>(block)});
-    }
-    return r_rdma(conn, c_blocks, block_size, (void *)ptr);
-}
-
-int r_rdma_async_wrapper(connection_t *conn,
-                         const std::vector<std::tuple<std::string, unsigned long>> &blocks,
-                         int block_size, uintptr_t ptr, std::function<void()> callback) {
-    std::vector<block_t> c_blocks;
-    for (const auto &block : blocks) {
-        c_blocks.push_back(block_t{std::get<0>(block), std::get<1>(block)});
-    }
-    return r_rdma_async(conn, c_blocks, block_size, (void *)ptr, [callback]() {
-        py::gil_scoped_acquire acquire;
-        callback();
-    });
-}
-
-int w_rdma_async_wrapper(
-    connection_t *conn,
-    py::array_t<unsigned long, py::array::c_style | py::array::forcecast> offsets, int block_size,
-    py::array_t<remote_block_t, py::array::c_style | py::array::forcecast> remote_blocks,
-    uintptr_t base_ptr, std::function<void()> callback) {
-    py::buffer_info block_buf = remote_blocks.request();
-    py::buffer_info offset_buf = offsets.request();
-
-    assert(block_buf.ndim == 1);
-    assert(offset_buf.ndim == 1);
-
-    remote_block_t *p_remote_blocks = static_cast<remote_block_t *>(block_buf.ptr);
-    unsigned long *p_offsets = static_cast<unsigned long *>(offset_buf.ptr);
-    size_t remote_blocks_len = block_buf.shape[0];
-    size_t offsets_len = offset_buf.shape[0];
-    return w_rdma_async(conn, p_offsets, offsets_len, block_size, p_remote_blocks,
-                        remote_blocks_len, (void *)base_ptr, [callback]() {
-                            py::gil_scoped_acquire acquire;
-                            callback();
-                        });
-}
-
-int w_rdma_wrapper(
-    connection_t *conn,
-    py::array_t<unsigned long, py::array::c_style | py::array::forcecast> offsets, int block_size,
-    py::array_t<remote_block_t, py::array::c_style | py::array::forcecast> remote_blocks,
-    uintptr_t base_ptr) {
-    py::buffer_info block_buf = remote_blocks.request();
-    py::buffer_info offset_buf = offsets.request();
-
-    assert(block_buf.ndim == 1);
-    assert(offset_buf.ndim == 1);
-
-    remote_block_t *p_remote_blocks = static_cast<remote_block_t *>(block_buf.ptr);
-    unsigned long *p_offsets = static_cast<unsigned long *>(offset_buf.ptr);
-    size_t remote_blocks_len = block_buf.shape[0];
-    size_t offsets_len = offset_buf.shape[0];
-    return w_rdma(conn, p_offsets, offsets_len, block_size, p_remote_blocks, remote_blocks_len,
-                  (void *)base_ptr);
-}
-
 // See https://github.com/pybind/pybind11/issues/1042#issuecomment-642215028
 // as_pyarray is a helper function to convert a C++ sequence to a numpy array and zero-copy
 template <typename Sequence>
@@ -107,57 +33,6 @@ inline py::array_t<typename Sequence::value_type> as_pyarray(Sequence &&seq) {
     );
 }
 
-void allocate_rdma_async_wrapper(connection_t *conn, std::vector<std::string> &keys, int block_size,
-                                 std::function<void(py::array)> callback) {
-    allocate_rdma_async(conn, keys, block_size, [callback](std::vector<remote_block_t> *blocks) {
-        py::gil_scoped_acquire acquire;
-        callback(as_pyarray(std::move(*blocks)));
-        delete blocks;
-    });
-    return;
-}
-
-py::array allocate_rdma_wrapper(connection_t *conn, std::vector<std::string> &keys,
-                                int block_size) {
-    std::vector<remote_block_t> *blocks = allocate_rdma(conn, keys, block_size);
-    return as_pyarray(std::move(*blocks));
-}
-
-int register_mr_wrapper(connection_t *conn, uintptr_t ptr, size_t ptr_region_size) {
-    return register_mr(conn, (void *)ptr, ptr_region_size);
-}
-
-void close_connection(connection_t *conn) {
-    py::gil_scoped_release release;
-    if (conn->cq_future.valid()) {
-        conn->stop = true;
-
-        // create fake wr to wake up cq thread
-        ibv_req_notify_cq(conn->cq, 0);
-        struct ibv_sge sge;
-        memset(&sge, 0, sizeof(sge));
-        sge.addr = (uintptr_t)conn;
-        sge.length = sizeof(*conn);
-        sge.lkey = 0;
-
-        struct ibv_send_wr send_wr;
-        memset(&send_wr, 0, sizeof(send_wr));
-        send_wr.wr_id = (uintptr_t)conn;
-        send_wr.sg_list = &sge;
-        send_wr.num_sge = 1;
-        send_wr.opcode = IBV_WR_SEND;
-        send_wr.send_flags = IBV_SEND_SIGNALED;
-
-        struct ibv_send_wr *bad_send_wr;
-        {
-            std::unique_lock<std::mutex> lock(conn->rdma_post_send_mutex);
-            ibv_post_send(conn->qp, &send_wr, &bad_send_wr);
-        }
-        // wait thread done
-        conn->cq_future.get();
-    }
-}
-
 PYBIND11_MODULE(_infinistore, m) {
     // client side
     py::class_<client_config_t>(m, "ClientConfig")
@@ -169,28 +44,133 @@ PYBIND11_MODULE(_infinistore, m) {
         .def_readwrite("link_type", &client_config_t::link_type)
         .def_readwrite("host_addr", &client_config_t::host_addr);
 
-    py::class_<connection_t>(m, "Connection").def(py::init<>());
-
-    m.def("init_connection", &init_connection, "Initialize a connection");
-    m.def("close_connection", &close_connection, "Close the connection");
-    m.def("rw_local", &rw_local_wrapper, "Read/Write cpu memory from GPU device");
-    m.def("r_rdma", &r_rdma_wrapper, "Read remote memory");
-    m.def("w_rdma", &w_rdma_wrapper, "Write remote memory");
-    m.def("r_rdma_async", &r_rdma_async_wrapper, "Read remote memory asynchronously");
-    m.def("w_rdma_async", &w_rdma_async_wrapper, "Write remote memory asynchronously");
-
     PYBIND11_NUMPY_DTYPE(remote_block_t, rkey, remote_addr);
 
-    m.def("allocate_rdma", &allocate_rdma_wrapper, "Allocate remote memory");
-    m.def("allocate_rdma_async", &allocate_rdma_async_wrapper,
-          "Allocate remote memory asynchronously");
-    m.def("sync_local", &sync_local, "sync the cuda stream");
-    m.def("setup_rdma", &setup_rdma, "setup rdma connection");
-    m.def("sync_rdma", &sync_rdma, "sync the remote server");
-    m.def("check_exist", &check_exist, "check if the key exists in the store");
-    m.def("get_match_last_index", &get_match_last_index,
-          "get the last index of a key list which is in the store");
-    m.def("register_mr", &register_mr_wrapper, "register memory region");
+    py::class_<Connection, std::shared_ptr<Connection>>(m, "Connection")
+        .def(py::init<>())
+        .def("init_connection", &Connection::init_connection, "Initialize a connection")
+        .def(
+            "rw_local",
+            [](Connection &self, char op,
+               const std::vector<std::tuple<std::string, unsigned long>> &blocks, int block_size,
+               uintptr_t ptr, int device_id) {
+                std::vector<block_t> c_blocks;
+                for (const auto &block : blocks) {
+                    c_blocks.push_back(block_t{std::get<0>(block), std::get<1>(block)});
+                }
+                return self.rw_local(op, c_blocks, block_size, (void *)ptr, device_id);
+            },
+            "Read/Write cpu memory from GPU device")
+
+        .def(
+            "r_rdma",
+            [](Connection &self, const std::vector<std::tuple<std::string, unsigned long>> &blocks,
+               int block_size, uintptr_t ptr) {
+                std::vector<block_t> c_blocks;
+                for (const auto &block : blocks) {
+                    c_blocks.push_back(block_t{std::get<0>(block), std::get<1>(block)});
+                }
+                return self.r_rdma(c_blocks, block_size, (void *)ptr);
+            },
+            "Read remote memory")
+
+        .def(
+            "w_rdma",
+            [](Connection &self,
+               py::array_t<unsigned long, py::array::c_style | py::array::forcecast> offsets,
+               int block_size,
+               py::array_t<remote_block_t, py::array::c_style | py::array::forcecast> remote_blocks,
+               uintptr_t base_ptr) {
+                py::buffer_info block_buf = remote_blocks.request();
+                py::buffer_info offset_buf = offsets.request();
+
+                assert(block_buf.ndim == 1);
+                assert(offset_buf.ndim == 1);
+
+                remote_block_t *p_remote_blocks = static_cast<remote_block_t *>(block_buf.ptr);
+                unsigned long *p_offsets = static_cast<unsigned long *>(offset_buf.ptr);
+                size_t remote_blocks_len = block_buf.shape[0];
+                size_t offsets_len = offset_buf.shape[0];
+                return self.w_rdma(p_offsets, offsets_len, block_size, p_remote_blocks,
+                                   remote_blocks_len, (void *)base_ptr);
+            },
+            "Write remote memory")
+
+        .def(
+            "r_rdma_async",
+            [](Connection &self, const std::vector<std::tuple<std::string, unsigned long>> &blocks,
+               int block_size, uintptr_t ptr, std::function<void()> callback) {
+                std::vector<block_t> c_blocks;
+                for (const auto &block : blocks) {
+                    c_blocks.push_back(block_t{std::get<0>(block), std::get<1>(block)});
+                }
+                return self.r_rdma_async(c_blocks, block_size, (void *)ptr, [callback]() {
+                    py::gil_scoped_acquire acquire;
+                    callback();
+                });
+            },
+            "Read remote memory asynchronously")
+
+        .def(
+            "w_rdma_async",
+            [](Connection &self,
+               py::array_t<unsigned long, py::array::c_style | py::array::forcecast> offsets,
+               int block_size,
+               py::array_t<remote_block_t, py::array::c_style | py::array::forcecast> remote_blocks,
+               uintptr_t base_ptr, std::function<void()> callback) {
+                py::buffer_info block_buf = remote_blocks.request();
+                py::buffer_info offset_buf = offsets.request();
+
+                assert(block_buf.ndim == 1);
+                assert(offset_buf.ndim == 1);
+
+                remote_block_t *p_remote_blocks = static_cast<remote_block_t *>(block_buf.ptr);
+                unsigned long *p_offsets = static_cast<unsigned long *>(offset_buf.ptr);
+                size_t remote_blocks_len = block_buf.shape[0];
+                size_t offsets_len = offset_buf.shape[0];
+                return self.w_rdma_async(p_offsets, offsets_len, block_size, p_remote_blocks,
+                                         remote_blocks_len, (void *)base_ptr, [callback]() {
+                                             py::gil_scoped_acquire acquire;
+                                             callback();
+                                         });
+            },
+            "Write remote memory asynchronously")
+
+        .def(
+            "allocate_rdma",
+            [](Connection &self, std::vector<std::string> &keys, int block_size) {
+                std::vector<remote_block_t> *blocks = self.allocate_rdma(keys, block_size);
+                return as_pyarray(std::move(*blocks));
+            },
+            "Allocate remote memory")
+
+        .def(
+            "allocate_rdma_async",
+            [](Connection &self, std::vector<std::string> &keys, int block_size,
+               std::function<void(py::array)> callback) {
+                self.allocate_rdma_async(keys, block_size,
+                                         [callback](std::vector<remote_block_t> *blocks) {
+                                             py::gil_scoped_acquire acquire;
+                                             callback(as_pyarray(std::move(*blocks)));
+                                             delete blocks;
+                                         });
+                return;
+            },
+            "Allocate remote memory asynchronously")
+
+        .def("sync_local", &Connection::sync_local, "sync the cuda stream")
+        .def("setup_rdma", &Connection::setup_rdma, "setup rdma connection")
+        .def("sync_rdma", &Connection::sync_rdma, "sync the remote server")
+        .def("check_exist", &Connection::check_exist, "check if the key exists in the store")
+        .def("get_match_last_index", &Connection::get_match_last_index,
+             "get the last index of a key list which is in the store")
+
+        .def(
+            "register_mr",
+            [](Connection &self, uintptr_t ptr, size_t ptr_region_size) {
+                return self.register_mr((void *)ptr, ptr_region_size);
+            },
+            "register memory region");
 
     // server side
     py::class_<server_config_t>(m, "ServerConfig")
