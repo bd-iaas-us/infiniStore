@@ -1,5 +1,4 @@
 import infinistore
-import threading
 import uuid
 from infinistore import (
     register_server,
@@ -35,17 +34,6 @@ async def purge():
     return {"status": "ok", "num": num}
 
 
-async def connect_async(config):
-    def blocking_io(config):
-        conn = infinistore.InfinityConnection(config)
-        conn.connect()
-        return conn
-
-    rdma_conn = await asyncio.to_thread(blocking_io, config)
-
-    return rdma_conn
-
-
 def generate_uuid():
     return str(uuid.uuid4())
 
@@ -60,9 +48,6 @@ async def selftest():
 
     # await asyncio.to_thread(blocking_io, rdma_conn)
 
-    # print current thread id
-    Logger.info(f"current thread id: {threading.get_ident()}")
-
     config = infinistore.ClientConfig(
         host_addr="127.0.0.1",
         service_port=22345,
@@ -72,16 +57,17 @@ async def selftest():
         link_type=infinistore.LINK_ETHERNET,
         dev_name="mlx5_0",
     )
-    rdma_conn = await connect_async(config)
 
+    rdma_conn = infinistore.InfinityConnection(config)
+
+    await rdma_conn.connect_async()
     Logger.info("connected")
 
     src_tensor = torch.tensor(
         [i for i in range(4096)], device="cpu", dtype=torch.float32
     )
     dst_tensor = torch.zeros(4096, device="cpu", dtype=torch.float32)
-    # rdma_conn.register_mr(src_tensor)
-    # rdma_conn.register_mr(dst_tensor)
+
     await asyncio.to_thread(rdma_conn.register_mr, src_tensor)
     await asyncio.to_thread(rdma_conn.register_mr, dst_tensor)
 
@@ -102,7 +88,6 @@ async def selftest():
 
     assert torch.equal(src_tensor[0:3072].cpu(), dst_tensor[0:3072].cpu())
 
-    rdma_conn.close_connection()
     return {"status": "ok"}
 
 
@@ -269,8 +254,6 @@ def main():
     )
 
     server = uvicorn.Server(http_config)
-
-    Logger.info(f"main thread id: {threading.get_ident()}")
 
     Logger.warn("server started")
     loop.run_until_complete(server.serve())
