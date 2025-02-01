@@ -44,7 +44,7 @@ async def selftest():
 
     config = infinistore.ClientConfig(
         host_addr="127.0.0.1",
-        service_port=12345,
+        service_port=22345,
         log_level="info",
         connection_type=infinistore.TYPE_RDMA,
         ib_port=1,

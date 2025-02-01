@@ -32,7 +32,25 @@ struct SendBuffer {
     ~SendBuffer();
 };
 
-struct Connection {
+struct rdma_read_commit_info {
+    // call back function.
+    std::function<void()> callback;
+    rdma_read_commit_info(std::function<void()> callback) : callback(callback) {}
+};
+
+struct rdma_write_commit_info {
+    // call back function.
+    std::function<void()> callback;
+    // the number of blocks that have been written.
+    std::vector<uintptr_t> remote_addrs;
+
+    rdma_write_commit_info(std::function<void()> callback, int n)
+        : callback(callback), remote_addrs() {
+        remote_addrs.reserve(n);
+    }
+};
+
+struct Connection : public std::enable_shared_from_this<Connection> {
     // tcp socket
 
     asio::io_context io_context;
@@ -98,54 +116,38 @@ struct Connection {
     // destory the connection
     ~Connection();
     void _close();
+
+    int init_connection(client_config_t config);
+    void init_connection_async(client_config_t config, std::function<void(int)> callback);
+    // async rw local cpu memory, even rw_local returns, it is not guaranteed that
+    // the operation is completed until sync_local is recved.
+    int rw_local(char op, const std::vector<block_t> &blocks, int block_size, void *ptr,
+                 int device_id);
+    int sync_local();
+    int setup_rdma(client_config_t config);
+    int setup_rdma_async(client_config_t config, std::function<void(int)> callback);
+    int r_rdma(std::vector<block_t> &blocks, int block_size, void *base_ptr);
+    int r_rdma_async(std::vector<block_t> &blocks, int block_size, void *base_ptr,
+                     std::function<void()> callback);
+    int w_rdma(unsigned long *p_offsets, size_t offsets_len, int block_size,
+               remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr);
+    int w_rdma_async(unsigned long *p_offsets, size_t offsets_len, int block_size,
+                     remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr,
+                     std::function<void()> callback);
+    int sync_rdma();
+    std::vector<remote_block_t> *allocate_rdma(, std::vector<std::string> &keys, int block_size);
+    int allocate_rdma_async(std::vector<std::string> &keys, int block_size,
+                            std::function<void(std::vector<remote_block_t> *)> callback);
+    int check_exist(std::string key);
+    int get_match_last_index(std::vector<std::string>);
+    int register_mr(void *base_ptr, size_t ptr_region_size);
+
+    int modify_qp_to_init();
+    int modify_qp_to_rts();
+    int modify_qp_to_rtr();
+    int exchange_conn_info();
+    void cq_handler();
 };
-
-typedef struct Connection connection_t;
-
-struct rdma_read_commit_info {
-    // call back function.
-    std::function<void()> callback;
-    rdma_read_commit_info(std::function<void()> callback) : callback(callback) {}
-};
-
-struct rdma_write_commit_info {
-    // call back function.
-    std::function<void()> callback;
-    // the number of blocks that have been written.
-    std::vector<uintptr_t> remote_addrs;
-
-    rdma_write_commit_info(std::function<void()> callback, int n)
-        : callback(callback), remote_addrs() {
-        remote_addrs.reserve(n);
-    }
-};
-
-int init_connection(connection_t *conn, client_config_t config);
-void init_connection_async(connection_t *conn, client_config_t config,
-                           std::function<void(int)> callback);
-// async rw local cpu memory, even rw_local returns, it is not guaranteed that
-// the operation is completed until sync_local is recved.
-int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, int block_size,
-             void *ptr, int device_id);
-int sync_local(connection_t *conn);
-int setup_rdma(connection_t *conn, client_config_t config);
-int setup_rdma_async(connection_t *conn, client_config_t config, std::function<void(int)> callback);
-int r_rdma(connection_t *conn, std::vector<block_t> &blocks, int block_size, void *base_ptr);
-int r_rdma_async(connection_t *conn, std::vector<block_t> &blocks, int block_size, void *base_ptr,
-                 std::function<void()> callback);
-int w_rdma(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int block_size,
-           remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr);
-int w_rdma_async(connection_t *conn, unsigned long *p_offsets, size_t offsets_len, int block_size,
-                 remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr,
-                 std::function<void()> callback);
-int sync_rdma(connection_t *conn);
-std::vector<remote_block_t> *allocate_rdma(connection_t *conn, std::vector<std::string> &keys,
-                                           int block_size);
-int allocate_rdma_async(connection_t *conn, std::vector<std::string> &keys, int block_size,
-                        std::function<void(std::vector<remote_block_t> *)> callback);
-int check_exist(connection_t *conn, std::string key);
-int get_match_last_index(connection_t *conn, std::vector<std::string>);
-int register_mr(connection_t *conn, void *base_ptr, size_t ptr_region_size);
 
 // TODO: refactor to c++ style
 SendBuffer *get_send_buffer(connection_t *conn);

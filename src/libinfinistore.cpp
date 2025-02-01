@@ -146,7 +146,7 @@ int exchange_conn_info(connection_t *conn);
 #include <iostream>
 #include <stdexcept>
 
-int init_rdma_resources(connection_t *conn, client_config_t config) {
+int Connection::init_rdma_resources(client_config_t config) {
     // Get list of RDMA devices
     struct ibv_device **dev_list;
     struct ibv_device *ib_dev;
@@ -163,18 +163,18 @@ int init_rdma_resources(connection_t *conn, client_config_t config) {
         if (strcmp(dev_name_from_list, config.dev_name.c_str()) == 0) {
             INFO("found device {}", dev_name_from_list);
             ib_dev = dev_list[i];
-            conn->ib_ctx = ibv_open_device(ib_dev);
+            ib_ctx = ibv_open_device(ib_dev);
             break;
         }
     }
 
-    if (!conn->ib_ctx) {
+    if (!ib_ctx) {
         INFO(
             "Can't find or failed to open the specified device, try to open "
             "the default device {}",
             (char *)ibv_get_device_name(dev_list[0]));
-        conn->ib_ctx = ibv_open_device(dev_list[0]);
-        if (!conn->ib_ctx) {
+        ib_ctx = ibv_open_device(dev_list[0]);
+        if (!ib_ctx) {
             ERROR("Failed to open the default device");
             return -1;
         }
@@ -182,9 +182,9 @@ int init_rdma_resources(connection_t *conn, client_config_t config) {
     ibv_free_device_list(dev_list);
 
     struct ibv_port_attr port_attr;
-    conn->ib_port = config.ib_port;
-    if (ibv_query_port(conn->ib_ctx, conn->ib_port, &port_attr)) {
-        ERROR("Unable to query port {} attributes\n", conn->ib_port);
+    ib_port = config.ib_port;
+    if (ibv_query_port(ib_ctx, ib_port, &port_attr)) {
+        ERROR("Unable to query port {} attributes\n", ib_port);
         return -1;
     }
 
@@ -198,47 +198,47 @@ int init_rdma_resources(connection_t *conn, client_config_t config) {
         gidx = -1;
     }
     else {
-        gidx = ibv_find_sgid_type(conn->ib_ctx, conn->ib_port, IBV_GID_TYPE_ROCE_V2, AF_INET);
+        gidx = ibv_find_sgid_type(ib_ctx, ib_port, IBV_GID_TYPE_ROCE_V2, AF_INET);
         if (gidx < 0) {
             ERROR("Failed to find GID");
             return -1;
         }
     }
-    conn->lid = port_attr.lid;
+    lid = port_attr.lid;
 
-    conn->gidx = gidx;
+    gidx = gidx;
 
-    conn->active_mtu = port_attr.active_mtu;
+    active_mtu = port_attr.active_mtu;
 
     union ibv_gid gid;
     // get gid
-    if (conn->gidx != -1 && ibv_query_gid(conn->ib_ctx, 1, gidx, &gid)) {
+    if (gidx != -1 && ibv_query_gid(ib_ctx, 1, gidx, &gid)) {
         ERROR("Failed to get GID");
         return -1;
     }
 
     // Allocate Protection Domain
-    conn->pd = ibv_alloc_pd(conn->ib_ctx);
-    if (!conn->pd) {
+    pd = ibv_alloc_pd(ib_ctx);
+    if (!pd) {
         ERROR("Failed to allocate PD");
         return -1;
     }
 
-    conn->comp_channel = ibv_create_comp_channel(conn->ib_ctx);
-    if (!conn->comp_channel) {
+    comp_channel = ibv_create_comp_channel(ib_ctx);
+    if (!comp_channel) {
         ERROR("Failed to create completion channel");
         delete conn;
         return -1;
     }
 
     // Create Completion Queue
-    conn->cq = ibv_create_cq(conn->ib_ctx, MAX_SEND_WR + MAX_RECV_WR, NULL, conn->comp_channel, 0);
-    if (!conn->cq) {
+    cq = ibv_create_cq(ib_ctx, MAX_SEND_WR + MAX_RECV_WR, NULL, comp_channel, 0);
+    if (!cq) {
         ERROR("Failed to create CQ");
         return -1;
     }
 
-    if (ibv_req_notify_cq(conn->cq, 0)) {
+    if (ibv_req_notify_cq(cq, 0)) {
         ERROR("Failed to request CQ notification");
         delete conn;
         return -1;
@@ -246,44 +246,44 @@ int init_rdma_resources(connection_t *conn, client_config_t config) {
 
     // Create Queue Pair
     struct ibv_qp_init_attr qp_init_attr = {};
-    qp_init_attr.send_cq = conn->cq;
-    qp_init_attr.recv_cq = conn->cq;
+    qp_init_attr.send_cq = cq;
+    qp_init_attr.recv_cq = cq;
     qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
     qp_init_attr.cap.max_send_wr = MAX_SEND_WR;
     qp_init_attr.cap.max_recv_wr = MAX_RECV_WR;
     qp_init_attr.cap.max_send_sge = 1;
     qp_init_attr.cap.max_recv_sge = 1;
 
-    conn->qp = ibv_create_qp(conn->pd, &qp_init_attr);
-    if (!conn->qp) {
+    qp = ibv_create_qp(pd, &qp_init_attr);
+    if (!qp) {
         ERROR("Failed to create QP, {}", strerror(errno));
         return -1;
     }
 
     // Modify QP to INIT state
-    if (modify_qp_to_init(conn)) {
+    if (modify_qp_to_init(this)) {
         ERROR("Failed to modify QP to INIT, {}", strerror(errno));
         return -1;
     }
 
-    conn->local_info.qpn = conn->qp->qp_num;
-    conn->local_info.psn = lrand48() & 0xffffff;
-    if (conn->gidx != -1) {
-        conn->local_info.gid = gid;
+    local_info.qpn = qp->qp_num;
+    local_info.psn = lrand48() & 0xffffff;
+    if (gidx != -1) {
+        local_info.gid = gid;
         DEBUG("gid index: {}", gidx);
     }
-    conn->local_info.lid = conn->lid;
+    local_info.lid = lid;
 
-    conn->local_info.mtu = (uint32_t)conn->active_mtu;
+    local_info.mtu = (uint32_t)active_mtu;
 
-    print_rdma_conn_info(&conn->local_info, false);
+    print_rdma_conn_info(&local_info, false);
     return 0;
 }
 
 int modify_qp_to_init(connection_t *conn) {
     struct ibv_qp_attr attr = {};
     attr.qp_state = IBV_QPS_INIT;
-    attr.port_num = conn->ib_port;
+    attr.port_num = ib_port;
     attr.pkey_index = 0;
     attr.qp_access_flags =
         IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE;
@@ -298,10 +298,10 @@ int modify_qp_to_init(connection_t *conn) {
     return 0;
 }
 
-int sync_rdma(connection_t *conn) {
-    std::unique_lock<std::mutex> lock(conn->mutex);
-    bool ret = conn->cv.wait_for(lock, std::chrono::seconds(5),
-                                 [&conn] { return conn->rdma_inflight_count == 0; });
+int Connection::sync_rdma() {
+    std::unique_lock<std::mutex> lock(mutex);
+    bool ret =
+        cv.wait_for(lock, std::chrono::seconds(5), [&conn] { return rdma_inflight_count == 0; });
 
     if (!ret) {
         ERROR("timeout to sync RDMA");
@@ -310,12 +310,12 @@ int sync_rdma(connection_t *conn) {
     return 0;
 }
 
-void cq_handler(connection_t *conn) {
-    assert(conn->comp_channel != NULL);
-    while (!conn->stop) {
+void Connection::cq_handler() {
+    assert(comp_channel != NULL);
+    while (!stop) {
         struct ibv_cq *ev_cq;
         void *ev_ctx;
-        int ret = ibv_get_cq_event(conn->comp_channel, &ev_cq, &ev_ctx);
+        int ret = ibv_get_cq_event(comp_channel, &ev_cq, &ev_ctx);
         if (ret == 0) {
             ibv_ack_cq_events(ev_cq, 1);
             if (ibv_req_notify_cq(ev_cq, 0)) {
@@ -325,7 +325,7 @@ void cq_handler(connection_t *conn) {
 
             struct ibv_wc wc[10] = {};
             int num_completions;
-            while ((num_completions = ibv_poll_cq(conn->cq, 10, wc)) && num_completions > 0) {
+            while ((num_completions = ibv_poll_cq(cq, 10, wc)) && num_completions > 0) {
                 for (int i = 0; i < num_completions; i++) {
                     if (wc[i].status != IBV_WC_SUCCESS) {
                         // only fake wr will use IBV_WC_SEND
@@ -356,35 +356,35 @@ void cq_handler(connection_t *conn) {
                         auto *info = reinterpret_cast<rdma_read_commit_info *>(wc[i].wr_id);
                         info->callback();
                         delete info;
-                        conn->rdma_inflight_count--;
-                        conn->cv.notify_all();
+                        rdma_inflight_count--;
+                        cv.notify_all();
                     }
                     else if (wc[i].opcode == IBV_WC_RDMA_WRITE) {  // write cache done
 
-                        assert(conn->outstanding_rdma_writes >= 0);
+                        assert(outstanding_rdma_writes >= 0);
 
-                        std::unique_lock<std::mutex> lock(conn->rdma_post_send_mutex);
+                        std::unique_lock<std::mutex> lock(rdma_post_send_mutex);
 
-                        conn->outstanding_rdma_writes -= MAX_WR_BATCH;
+                        outstanding_rdma_writes -= MAX_WR_BATCH;
                         DEBUG("RDMA_WRITE completed, wr_id: {}, outstanding_rdma_writes: {}",
-                              wc[i].wr_id, conn->outstanding_rdma_writes);
+                              wc[i].wr_id, outstanding_rdma_writes);
 
                         // drain the queue
-                        if (!conn->outstanding_rdma_writes_queue.empty()) {
-                            auto item = conn->outstanding_rdma_writes_queue.front();
+                        if (!outstanding_rdma_writes_queue.empty()) {
+                            auto item = outstanding_rdma_writes_queue.front();
                             struct ibv_send_wr *wrs = item.first;
                             struct ibv_sge *sges = item.second;
                             ibv_send_wr *bad_wr = nullptr;
                             DEBUG("IBV POST SEND, wr_id: {}", wrs[0].wr_id);
-                            int ret = ibv_post_send(conn->qp, &wrs[0], &bad_wr);
+                            int ret = ibv_post_send(qp, &wrs[0], &bad_wr);
                             if (ret) {
                                 ERROR("Failed to post RDMA write {}", strerror(ret));
                                 throw std::runtime_error("Failed to post RDMA write");
                             }
-                            conn->outstanding_rdma_writes += MAX_WR_BATCH;
+                            outstanding_rdma_writes += MAX_WR_BATCH;
                             delete[] wrs;
                             delete[] sges;
-                            conn->outstanding_rdma_writes_queue.pop_front();
+                            outstanding_rdma_writes_queue.pop_front();
                         }
 
                         // If this is the last WR of w_rdma, send RDMA COMMIT msg to server
@@ -416,7 +416,7 @@ void cq_handler(connection_t *conn) {
                             wr.num_sge = 1;
                             wr.send_flags = IBV_SEND_SIGNALED;
 
-                            int ret = ibv_post_send(conn->qp, &wr, &bad_wr);
+                            int ret = ibv_post_send(qp, &wr, &bad_wr);
                             if (ret) {
                                 ERROR("Failed to post RDMA send :{}", strerror(ret));
                                 return;
@@ -436,8 +436,8 @@ void cq_handler(connection_t *conn) {
                             // node will try to get key when conn.sync() is done, I just cross
                             // fingers to hope that server will commit the keys before DECODE node
                             // starts.
-                            conn->rdma_inflight_count--;
-                            conn->cv.notify_all();
+                            rdma_inflight_count--;
+                            cv.notify_all();
                         }
                     }
                     else {
@@ -462,16 +462,14 @@ SendBuffer *get_send_buffer(connection_t *conn) {
     if send buffer list is empty,we just report error, and return NULL
     normal user should not have too many inflight requests, so we just report error
     */
-    assert(!conn->send_buffers.empty());
+    assert(!send_buffers.empty());
 
     SendBuffer *buffer;
-    assert(conn->send_buffers.pop(buffer));
+    assert(send_buffers.pop(buffer));
     return buffer;
 }
 
-void release_send_buffer(connection_t *conn, SendBuffer *buffer) {
-    conn->send_buffers.push(buffer);
-}
+void release_send_buffer(connection_t *conn, SendBuffer *buffer) { send_buffers.push(buffer); }
 
 int setup_rdma_async(connection_t *conn, client_config_t config,
                      std::function<void(int)> callback) {
@@ -488,11 +486,11 @@ int setup_rdma_async(connection_t *conn, client_config_t config,
 
     std::vector<asio::const_buffer> buffers;
     buffers.push_back(asio::buffer(&header, FIXED_HEADER_SIZE));
-    buffers.push_back(asio::buffer(&conn->local_info, sizeof(rdma_conn_info_t)));
+    buffers.push_back(asio::buffer(&local_info, sizeof(rdma_conn_info_t)));
 
     // write header and local_info to send buffer
     asio::async_write(
-        conn->socket, buffers, [conn, callback](const boost::system::error_code &ec, size_t) {
+        socket, buffers, [conn, callback](const boost::system::error_code &ec, size_t) {
             if (ec) {
                 ERROR("Failed to send local connection information [{}]", ec.message());
                 callback(ec.value());
@@ -503,7 +501,7 @@ int setup_rdma_async(connection_t *conn, client_config_t config,
             // allocate recv buffer to get 1 int
             auto head_ptr = std::make_shared<std::vector<char>>(RETURN_CODE_SIZE);
             async_read(
-                conn->socket, asio::buffer(*head_ptr),
+                socket, asio::buffer(*head_ptr),
                 [conn, callback, head_ptr](const boost::system::error_code &ec, size_t) {
                     if (ec) {
                         ERROR("Failed to receive return code [{}]", ec.message());
@@ -523,7 +521,7 @@ int setup_rdma_async(connection_t *conn, client_config_t config,
                     // receive remote_info
                     auto buffer_ptr = std::make_shared<std::vector<char>>(sizeof(rdma_conn_info_t));
                     asio::async_read(
-                        conn->socket, asio::buffer(*buffer_ptr),
+                        socket, asio::buffer(*buffer_ptr),
                         [conn, callback, buffer_ptr](const boost::system::error_code &ec, size_t) {
                             if (ec) {
                                 ERROR("Failed to receive remote connection information [{}]",
@@ -532,9 +530,8 @@ int setup_rdma_async(connection_t *conn, client_config_t config,
                                 return;
                             }
 
-                            memcpy(&conn->remote_info, buffer_ptr->data(),
-                                   sizeof(rdma_conn_info_t));
-                            print_rdma_conn_info(&conn->remote_info, true);
+                            memcpy(&remote_info, buffer_ptr->data(), sizeof(rdma_conn_info_t));
+                            print_rdma_conn_info(&remote_info, true);
 
                             // Modify QP to RTR state
                             if (modify_qp_to_rtr(conn)) {
@@ -549,16 +546,14 @@ int setup_rdma_async(connection_t *conn, client_config_t config,
                                 return;
                             }
 
-                            if (posix_memalign(&conn->recv_buffer, 4096, PROTOCOL_BUFFER_SIZE) !=
-                                0) {
+                            if (posix_memalign(&recv_buffer, 4096, PROTOCOL_BUFFER_SIZE) != 0) {
                                 ERROR("Failed to allocate recv buffer");
                                 callback(-1);
                                 return;
                             }
-                            conn->recv_mr =
-                                ibv_reg_mr(conn->pd, conn->recv_buffer, PROTOCOL_BUFFER_SIZE,
-                                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-                            if (!conn->recv_mr) {
+                            recv_mr = ibv_reg_mr(pd, recv_buffer, PROTOCOL_BUFFER_SIZE,
+                                                 IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+                            if (!recv_mr) {
                                 ERROR("Failed to register recv MR");
                                 callback(-1);
                                 return;
@@ -569,13 +564,12 @@ int setup_rdma_async(connection_t *conn, client_config_t config,
                             because server also has the same number of buffers
                             */
                             for (int i = 0; i < MAX_RECV_WR; i++) {
-                                conn->send_buffers.push(
-                                    new SendBuffer(conn->pd, PROTOCOL_BUFFER_SIZE));
+                                send_buffers.push(new SendBuffer(pd, PROTOCOL_BUFFER_SIZE));
                             }
 
-                            conn->rdma_inflight_count = 0;
-                            conn->stop = false;
-                            conn->cq_thread = std::thread([conn]() { cq_handler(conn); });
+                            rdma_inflight_count = 0;
+                            stop = false;
+                            cq_thread = std::thread([conn]() { cq_handler(conn); });
                             INFO("RDMA setup done");
                             callback(0);
                         });
@@ -598,7 +592,7 @@ int setup_rdma(connection_t *conn, client_config_t config) {
         return -1;
     }
 
-    print_rdma_conn_info(&conn->remote_info, true);
+    print_rdma_conn_info(&remote_info, true);
 
     // Modify QP to RTR state
     if (modify_qp_to_rtr(conn)) {
@@ -613,14 +607,14 @@ int setup_rdma(connection_t *conn, client_config_t config) {
         return -1;
     }
 
-    if (posix_memalign(&conn->recv_buffer, 4096, PROTOCOL_BUFFER_SIZE) != 0) {
+    if (posix_memalign(&recv_buffer, 4096, PROTOCOL_BUFFER_SIZE) != 0) {
         ERROR("Failed to allocate recv buffer");
         delete conn;
         return -1;
     }
-    conn->recv_mr = ibv_reg_mr(conn->pd, conn->recv_buffer, PROTOCOL_BUFFER_SIZE,
-                               IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-    if (!conn->recv_mr) {
+    recv_mr = ibv_reg_mr(pd, recv_buffer, PROTOCOL_BUFFER_SIZE,
+                         IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+    if (!recv_mr) {
         ERROR("Failed to register recv MR");
         delete conn;
         return -1;
@@ -631,12 +625,12 @@ int setup_rdma(connection_t *conn, client_config_t config) {
     because server also has the same number of buffers
     */
     for (int i = 0; i < MAX_RECV_WR; i++) {
-        conn->send_buffers.push(new SendBuffer(conn->pd, PROTOCOL_BUFFER_SIZE));
+        send_buffers.push(new SendBuffer(pd, PROTOCOL_BUFFER_SIZE));
     }
 
-    conn->rdma_inflight_count = 0;
-    conn->stop = false;
-    conn->cq_thread = std::thread([conn]() { cq_handler(conn); });
+    rdma_inflight_count = 0;
+    stop = false;
+    cq_thread = std::thread([conn]() { cq_handler(conn); });
     return 0;
 }
 
@@ -660,20 +654,20 @@ void init_connection_async(connection_t *conn, client_config_t config,
                            std::function<void(int)> callback) {
     assert(conn != NULL);
 
-    conn->resolver.async_resolve(
-        config.host_addr, std::to_string(config.service_port),
-        [conn, callback, config](const boost::system::error_code &ec,
-                                 tcp::resolver::results_type endpoints) {
-            if (ec) {  // error
-                ERROR("Failed to resolve address: {}:{} [{}]", config.host_addr,
-                      config.service_port, ec.message());
-                callback(ec.value());
-                return;
-            }
-            asio::async_connect(conn->socket, endpoints,
-                                [callback](const boost::system::error_code &ec,
-                                           const tcp::endpoint &) { callback(ec.value()); });
-        });
+    resolver.async_resolve(config.host_addr, std::to_string(config.service_port),
+                           [conn, callback, config](const boost::system::error_code &ec,
+                                                    tcp::resolver::results_type endpoints) {
+                               if (ec) {  // error
+                                   ERROR("Failed to resolve address: {}:{} [{}]", config.host_addr,
+                                         config.service_port, ec.message());
+                                   callback(ec.value());
+                                   return;
+                               }
+                               asio::async_connect(
+                                   socket, endpoints,
+                                   [callback](const boost::system::error_code &ec,
+                                              const tcp::endpoint &) { callback(ec.value()); });
+                           });
 }
 
 /*
@@ -702,25 +696,24 @@ int init_connection(connection_t *conn, client_config_t config) {
         return -1;
     }
 
-    conn->sock = sock;
+    sock = sock;
     return 0;
 }
 */
 
 int modify_qp_to_rtr(connection_t *conn) {
-    struct ibv_qp *qp = conn->qp;
-    rdma_conn_info_t *remote_info = &conn->remote_info;
+    struct ibv_qp *qp = qp;
+    rdma_conn_info_t *remote_info = &remote_info;
 
     struct ibv_qp_attr attr = {};
     attr.qp_state = IBV_QPS_RTR;
 
     // update MTU
-    if (conn->remote_info.mtu != conn->active_mtu) {
+    if (remote_info.mtu != active_mtu) {
         WARN("remote MTU: {}, local MTU: {} is not the same, update to minimal MTU",
-             1 << ((uint32_t)conn->remote_info.mtu + 7), 1 << ((uint32_t)conn->active_mtu + 7));
+             1 << ((uint32_t)remote_info.mtu + 7), 1 << ((uint32_t)active_mtu + 7));
     }
-    attr.path_mtu =
-        (enum ibv_mtu)std::min((uint32_t)conn->active_mtu, (uint32_t)conn->remote_info.mtu);
+    attr.path_mtu = (enum ibv_mtu)std::min((uint32_t)active_mtu, (uint32_t)remote_info.mtu);
 
     attr.dest_qp_num = remote_info->qpn;
     attr.rq_psn = remote_info->psn;
@@ -729,9 +722,9 @@ int modify_qp_to_rtr(connection_t *conn) {
     attr.ah_attr.dlid = 0;
     attr.ah_attr.sl = 0;
     attr.ah_attr.src_path_bits = 0;
-    attr.ah_attr.port_num = conn->ib_port;
+    attr.ah_attr.port_num = ib_port;
 
-    if (conn->gidx == -1) {
+    if (gidx == -1) {
         // IB
         attr.ah_attr.dlid = remote_info->lid;
         attr.ah_attr.is_global = 0;
@@ -740,7 +733,7 @@ int modify_qp_to_rtr(connection_t *conn) {
         // RoCE v2
         attr.ah_attr.is_global = 1;
         attr.ah_attr.grh.dgid = remote_info->gid;
-        attr.ah_attr.grh.sgid_index = conn->gidx;  // local gid
+        attr.ah_attr.grh.sgid_index = gidx;  // local gid
         attr.ah_attr.grh.hop_limit = 1;
     }
 
@@ -756,13 +749,13 @@ int modify_qp_to_rtr(connection_t *conn) {
 }
 
 int modify_qp_to_rts(connection_t *conn) {
-    struct ibv_qp *qp = conn->qp;
+    struct ibv_qp *qp = qp;
     struct ibv_qp_attr attr = {};
     attr.qp_state = IBV_QPS_RTS;
     attr.timeout = 14;
     attr.retry_cnt = 7;
     attr.rnr_retry = 7;
-    attr.sq_psn = conn->local_info.psn;  // Use 0 or match with local PSN
+    attr.sq_psn = local_info.psn;  // Use 0 or match with local PSN
     attr.max_rd_atomic = 1;
 
     int flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY |
@@ -788,20 +781,20 @@ int exchange_conn_info(connection_t *conn) {
 
     // iov[0].iov_base = &header;
     // iov[0].iov_len = FIXED_HEADER_SIZE;
-    // iov[1].iov_base = &conn->local_info;
+    // iov[1].iov_base = &local_info;
     // iov[1].iov_len = sizeof(rdma_conn_info_t);
 
     // memset(&msg, 0, sizeof(msg));
     // msg.msg_iov = iov;
     // msg.msg_iovlen = 2;
 
-    // if (sendmsg(conn->sock, &msg, 0) < 0) {
+    // if (sendmsg(sock, &msg, 0) < 0) {
     //     ERROR("Failed to send local connection information");
     //     return -1;
     // }
 
     // int return_code = -1;
-    // if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
+    // if (recv(sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) < 0) {
     //     ERROR("Failed to receive return code");
     //     return -1;
     // }
@@ -811,7 +804,7 @@ int exchange_conn_info(connection_t *conn) {
     //     return -1;
     // }
 
-    // if (recv(conn->sock, &conn->remote_info, sizeof(rdma_conn_info_t), MSG_WAITALL) !=
+    // if (recv(sock, &remote_info, sizeof(rdma_conn_info_t), MSG_WAITALL) !=
     //     sizeof(rdma_conn_info_t)) {
     //     ERROR("Failed to receive remote connection information");
     //     return -1;
@@ -826,10 +819,10 @@ int sync_local(connection_t *conn) {
     //     .magic = MAGIC,
     //     .op = OP_SYNC,
     // };
-    // send_exact(conn->sock, &header, FIXED_HEADER_SIZE);
+    // send_exact(sock, &header, FIXED_HEADER_SIZE);
 
     // int return_code = -1;
-    // if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
+    // if (recv(sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
     //     ERROR("Failed to receive return code");
     //     return -1;
     // }
@@ -839,7 +832,7 @@ int sync_local(connection_t *conn) {
     // }
 
     // int inflight_syncs = 0;
-    // if (recv(conn->sock, &inflight_syncs, sizeof(int), MSG_WAITALL) != sizeof(int)) {
+    // if (recv(sock, &inflight_syncs, sizeof(int), MSG_WAITALL) != sizeof(int)) {
     //     ERROR("Failed to receive inflight mr size");
     //     return -1;
     // }
@@ -864,13 +857,13 @@ int check_exist(connection_t *conn, std::string key) {
     // msg.msg_iov = iov;
     // msg.msg_iovlen = 2;
 
-    // if (sendmsg(conn->sock, &msg, 0) < 0) {
+    // if (sendmsg(sock, &msg, 0) < 0) {
     //     ERROR("Failed to send header and body");
     //     return -1;
     // }
 
     // int return_code = 0;
-    // if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
+    // if (recv(sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
     //     ERROR("Failed to receive return code");
     //     return -1;
     // }
@@ -880,7 +873,7 @@ int check_exist(connection_t *conn, std::string key) {
     // }
 
     // int exist = 0;
-    // if (recv(conn->sock, &exist, sizeof(int), MSG_WAITALL) != sizeof(int)) {
+    // if (recv(sock, &exist, sizeof(int), MSG_WAITALL) != sizeof(int)) {
     //     ERROR("Failed to receive exist");
     //     return -1;
     // }
@@ -916,13 +909,13 @@ int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
     // msg.msg_iov = iov;
     // msg.msg_iovlen = 2;
 
-    // if (sendmsg(conn->sock, &msg, 0) < 0) {
+    // if (sendmsg(sock, &msg, 0) < 0) {
     //     ERROR("Failed to send header and body");
     //     return -1;
     // }
 
     // int return_code = 0;
-    // if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
+    // if (recv(sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
     //     ERROR("Failed to receive return code");
     //     return -1;
     // }
@@ -932,7 +925,7 @@ int get_match_last_index(connection_t *conn, std::vector<std::string> keys) {
     // }
 
     // int last_index = -1;
-    // if (recv(conn->sock, &last_index, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
+    // if (recv(sock, &last_index, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
     //     ERROR("Failed to receive return code");
     //     return -1;
     // }
@@ -978,13 +971,13 @@ int allocate_rdma_async(connection_t *conn, std::vector<std::string> &keys, int 
     struct ibv_recv_wr recv_wr = {0};
 
     // recv all remote addresses
-    recv_sge.addr = (uintptr_t)conn->recv_buffer;
+    recv_sge.addr = (uintptr_t)recv_buffer;
     recv_sge.length = PROTOCOL_BUFFER_SIZE;
-    recv_sge.lkey = conn->recv_mr->lkey;
+    recv_sge.lkey = recv_mr->lkey;
 
     // build a new callback function:
     auto *f_ptr = new std::function<void()>([&conn, callback]() {
-        const RdmaAllocateResponse *resp = GetRdmaAllocateResponse(conn->recv_buffer);
+        const RdmaAllocateResponse *resp = GetRdmaAllocateResponse(recv_buffer);
         INFO("Received allocate response, #keys: {}", resp->blocks()->size());
 
         std::vector<remote_block_t> *blocks = new std::vector<remote_block_t>();
@@ -1005,7 +998,7 @@ int allocate_rdma_async(connection_t *conn, std::vector<std::string> &keys, int 
         .sg_list = &recv_sge,
         .num_sge = 1,
     };
-    ret = ibv_post_recv(conn->qp, &recv_wr, &bad_recv_wr);
+    ret = ibv_post_recv(qp, &recv_wr, &bad_recv_wr);
     if (ret) {
         ERROR("Failed to post RDMA recv :{}", strerror(ret));
         return -1;
@@ -1036,8 +1029,8 @@ int allocate_rdma_async(connection_t *conn, std::vector<std::string> &keys, int 
     wr.num_sge = 1;
     wr.send_flags = IBV_SEND_SIGNALED;
     {
-        std::unique_lock<std::mutex> lock(conn->rdma_post_send_mutex);
-        ret = ibv_post_send(conn->qp, &wr, &bad_wr);
+        std::unique_lock<std::mutex> lock(rdma_post_send_mutex);
+        ret = ibv_post_send(qp, &wr, &bad_wr);
     }
     if (ret) {
         ERROR("Failed to post RDMA send :{}", strerror(ret));
@@ -1060,15 +1053,15 @@ int w_rdma_async(connection_t *conn, unsigned long *p_offsets, size_t offsets_le
     assert(p_remote_blocks != NULL);
     assert(offsets_len == remote_blocks_len);
 
-    if (!conn->local_mr.count((uintptr_t)base_ptr)) {
+    if (!local_mr.count((uintptr_t)base_ptr)) {
         ERROR("Please register memory first");
         return -1;
     }
 
     INFO("w_rdma, block_size: {}, base_ptr: {}", block_size, base_ptr);
-    struct ibv_mr *mr = conn->local_mr[(uintptr_t)base_ptr];
+    struct ibv_mr *mr = local_mr[(uintptr_t)base_ptr];
 
-    std::unique_lock<std::mutex> lock(conn->rdma_post_send_mutex);
+    std::unique_lock<std::mutex> lock(rdma_post_send_mutex);
 
     const size_t max_wr = MAX_WR_BATCH;
 
@@ -1084,7 +1077,7 @@ int w_rdma_async(connection_t *conn, unsigned long *p_offsets, size_t offsets_le
 
     auto *info = new rdma_write_commit_info(callback, remote_blocks_len);
 
-    if (conn->outstanding_rdma_writes + max_wr > MAX_RDMA_WRITE_WR) {
+    if (outstanding_rdma_writes + max_wr > MAX_RDMA_WRITE_WR) {
         wr_full = true;
         wrs = new struct ibv_send_wr[max_wr];
         sges = new struct ibv_sge[max_wr];
@@ -1129,15 +1122,15 @@ int w_rdma_async(connection_t *conn, unsigned long *p_offsets, size_t offsets_le
         if (num_wr == max_wr || i == remote_blocks_len - 1) {
             if (!wr_full) {
                 struct ibv_send_wr *bad_wr = nullptr;
-                int ret = ibv_post_send(conn->qp, &wrs[0], &bad_wr);
+                int ret = ibv_post_send(qp, &wrs[0], &bad_wr);
                 if (ret) {
                     ERROR("Failed to post RDMA write {}", strerror(ret));
                     return -1;
                 }
-                conn->outstanding_rdma_writes += max_wr;
+                outstanding_rdma_writes += max_wr;
 
                 // check if next iteration will exceed the limit
-                if (conn->outstanding_rdma_writes + max_wr > MAX_RDMA_WRITE_WR) {
+                if (outstanding_rdma_writes + max_wr > MAX_RDMA_WRITE_WR) {
                     wr_full = true;
                 }
             }
@@ -1147,7 +1140,7 @@ int w_rdma_async(connection_t *conn, unsigned long *p_offsets, size_t offsets_le
                     "WR queue full: push into temp queue, len: {}, first wr_id: {}, last wr_id: "
                     "{}",
                     num_wr, wrs[0].wr_id, wrs[num_wr - 1].wr_id);
-                conn->outstanding_rdma_writes_queue.push_back({&wrs[0], &sges[0]});
+                outstanding_rdma_writes_queue.push_back({&wrs[0], &sges[0]});
             }
 
             if (wr_full) {
@@ -1163,11 +1156,11 @@ int w_rdma_async(connection_t *conn, unsigned long *p_offsets, size_t offsets_le
         if (wr_full) {
             DEBUG("WR queue full: push into temp queue, len: {}, first wr_id: {}, last wr_id: {}",
                   num_wr, wrs[0].wr_id, wrs[num_wr - 1].wr_id);
-            conn->outstanding_rdma_writes_queue.push_back({&wrs[0], &sges[0]});
+            outstanding_rdma_writes_queue.push_back({&wrs[0], &sges[0]});
         }
         else {
             struct ibv_send_wr *bad_wr = nullptr;
-            int ret = ibv_post_send(conn->qp, &wrs[0], &bad_wr);
+            int ret = ibv_post_send(qp, &wrs[0], &bad_wr);
             if (ret) {
                 ERROR("Failed to post RDMA write {}", strerror(ret));
                 return -1;
@@ -1185,8 +1178,8 @@ int w_rdma_async(connection_t *conn, unsigned long *p_offsets, size_t offsets_le
             return 0;
         }
     }
-    conn->rdma_inflight_count++;
-    DEBUG("rdma_inflight_count: {}", conn->rdma_inflight_count.load());
+    rdma_inflight_count++;
+    DEBUG("rdma_inflight_count: {}", rdma_inflight_count.load());
 
     return 0;
 }
@@ -1200,20 +1193,20 @@ int r_rdma_async(connection_t *conn, std::vector<block_t> &blocks, int block_siz
     assert(conn != NULL);
     assert(base_ptr != NULL);
 
-    if (!conn->local_mr.count((uintptr_t)base_ptr)) {
+    if (!local_mr.count((uintptr_t)base_ptr)) {
         ERROR("Please register memory first");
         return -1;
     }
 
     INFO("r_rdma,, block_size: {}, base_ptr: {}", block_size, base_ptr);
-    struct ibv_mr *mr = conn->local_mr[(uintptr_t)base_ptr];
+    struct ibv_mr *mr = local_mr[(uintptr_t)base_ptr];
     assert(mr != NULL);
 
     // recv ACK for whole batch.
     struct ibv_sge recv_sge = {
-        .addr = (uintptr_t)conn->recv_buffer,
+        .addr = (uintptr_t)recv_buffer,
         .length = 0,
-        .lkey = conn->recv_mr->lkey,
+        .lkey = recv_mr->lkey,
     };
 
     auto *info = new rdma_read_commit_info(callback);
@@ -1227,7 +1220,7 @@ int r_rdma_async(connection_t *conn, std::vector<block_t> &blocks, int block_siz
 
     struct ibv_recv_wr *bad_wr_recv = NULL;
 
-    int ret = ibv_post_recv(conn->qp, &recv_wr, &bad_wr_recv);
+    int ret = ibv_post_recv(qp, &recv_wr, &bad_wr_recv);
     if (ret) {
         ERROR("Failed to post RDMA recv :{}", strerror(ret));
     }
@@ -1274,15 +1267,15 @@ int r_rdma_async(connection_t *conn, std::vector<block_t> &blocks, int block_siz
     wr.send_flags = IBV_SEND_SIGNALED;
 
     {
-        std::unique_lock<std::mutex> lock(conn->rdma_post_send_mutex);
-        ret = ibv_post_send(conn->qp, &wr, &bad_wr);
+        std::unique_lock<std::mutex> lock(rdma_post_send_mutex);
+        ret = ibv_post_send(qp, &wr, &bad_wr);
     }
 
     if (ret) {
         ERROR("Failed to post RDMA send :{}", strerror(ret));
         return -1;
     }
-    conn->rdma_inflight_count++;
+    rdma_inflight_count++;
 
     return 0;
 }
@@ -1336,13 +1329,13 @@ int rw_local(connection_t *conn, char op, const std::vector<block_t> &blocks, in
     // msg.msg_iov = iov;
     // msg.msg_iovlen = 2;
 
-    // if (sendmsg(conn->sock, &msg, 0) < 0) {
+    // if (sendmsg(sock, &msg, 0) < 0) {
     //     ERROR("Failed to send header and body");
     //     return -1;
     // }
 
     // int return_code;
-    // if (recv(conn->sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
+    // if (recv(sock, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
     //     ERROR("Failed to receive return code");
     //     return -1;
     // }
@@ -1376,18 +1369,18 @@ int register_mr(connection_t *conn, void *base_ptr, size_t ptr_region_size) {
         return -1;
     }
 
-    if (conn->local_mr.count((uintptr_t)base_ptr)) {
+    if (local_mr.count((uintptr_t)base_ptr)) {
         WARN("this memory address is already registered!");
-        ibv_dereg_mr(conn->local_mr[(uintptr_t)base_ptr]);
+        ibv_dereg_mr(local_mr[(uintptr_t)base_ptr]);
     }
     struct ibv_mr *mr;
-    mr = ibv_reg_mr(conn->pd, base_ptr, ptr_region_size,
+    mr = ibv_reg_mr(pd, base_ptr, ptr_region_size,
                     IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
     if (!mr) {
         ERROR("Failed to register memory regions, size: {}", ptr_region_size);
         return -1;
     }
     INFO("register mr done for base_ptr: {}, size: {}", (uintptr_t)base_ptr, ptr_region_size);
-    conn->local_mr[(uintptr_t)base_ptr] = mr;
+    local_mr[(uintptr_t)base_ptr] = mr;
     return 0;
 }
