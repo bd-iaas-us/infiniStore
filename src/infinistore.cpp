@@ -515,7 +515,8 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
                 WARN(
                     "WR queue full: push into queue, len: {}, first wr_id: {}, last wr_id: {}, "
                     "last op code: {} ",
-                    num_wr, wrs[0].wr_id, wrs[num_wr - 1].wr_id, wrs[num_wr - 1].opcode);
+                    num_wr, wrs[0].wr_id, wrs[num_wr - 1].wr_id,
+                    static_cast<int>(wrs[num_wr - 1].opcode));
                 outstanding_rdma_writes_queue_.push_back({&wrs[0], &sges[0]});
             }
 
@@ -1256,42 +1257,15 @@ void on_new_connection(uv_stream_t *server, int status) {
     }
 }
 
-void signal_handler(int signum) {
-    void *array[32];
-    size_t size;
-    if (signum == SIGSEGV) {
-        ERROR("Caught SIGSEGV: segmentation fault");
-        size = backtrace(array, 32);
-        // print signum's name
-        ERROR("Error: signal {}", signum);
-        // backtrace_symbols_fd(array, size, STDERR_FILENO);
-        // write backtrace_symbols_fd to log
-        char **strings = backtrace_symbols(array, size);
-        if (strings == NULL) {
-            ERROR("Failed to get backtrace");
-            exit(1);
-        }
-        for (size_t i = 0; i < size; i++) {
-            ERROR("{}", strings[i]);
-        }
-        exit(1);
-    }
-    else {
-        INFO("Caught signal {}", signum);
-        // TODO: gracefully shutdown
-        if (loop) {
-            uv_stop(loop);
-        }
-        exit(0);
-    }
-}
-
 int register_server(unsigned long loop_ptr, server_config_t config) {
-    signal(SIGSEGV, signal_handler);
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
+    signal(SIGPIPE, SIG_IGN);
+    signal(SIGCHLD, SIG_IGN);
 
-    setenv("UV_THREADPOOL_SIZE", "64", 1);
+    signal(SIGSEGV, signal_handler);
+    signal(SIGABRT, signal_handler);
+    signal(SIGBUS, signal_handler);
+    signal(SIGFPE, signal_handler);
+    signal(SIGILL, signal_handler);
 
     // verfication
     assert(config.num_stream > 0 &&

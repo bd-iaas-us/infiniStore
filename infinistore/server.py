@@ -82,8 +82,11 @@ async def selftest(number: int):
         dst_tensor, [(keys[0], 0), (keys[1], 1024), (keys[2], 2048)], 1024
     )
 
-    assert torch.equal(src_tensor[0:3072].cpu(), dst_tensor[0:3072].cpu())
+    # put assert into asyncio.to_thread
 
+    assert await asyncio.to_thread(torch.equal, src_tensor[0:3072], dst_tensor[0:3072])
+
+    # assert torch.equal(,
     rdma_conn = None
     return {"status": "ok"}
 

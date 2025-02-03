@@ -9,6 +9,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <boost/stacktrace.hpp>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -109,6 +110,15 @@ void compare_ipc_handle(cudaIpcMemHandle_t ipc_handle1, cudaIpcMemHandle_t ipc_h
             return;
         }
     }
+}
+
+void signal_handler(int signum) {
+    INFO("Interrupt signal ({}) received.", signum);
+    boost::stacktrace::stacktrace st;
+    std::ostringstream oss;
+    oss << st;
+    ERROR("Stacktrace:\n{}", oss.str());
+    exit(1);
 }
 
 template <typename T>
