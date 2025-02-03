@@ -273,7 +273,7 @@ int Connection::modify_qp_to_init() {
 int Connection::sync_rdma() {
     std::unique_lock<std::mutex> lock(mutex_);
     bool ret =
-        cv_.wait_for(lock, std::chrono::seconds(5), [this] { return rdma_inflight_count_ == 0; });
+        cv_.wait_for(lock, std::chrono::seconds(10), [this] { return rdma_inflight_count_ == 0; });
 
     if (!ret) {
         ERROR("timeout to sync RDMA");
@@ -339,7 +339,7 @@ void Connection::cq_handler() {
 
                         outstanding_rdma_writes_ -= MAX_WR_BATCH;
                         DEBUG("RDMA_WRITE completed, wr_id: {}, outstanding_rdma_writes: {}",
-                              wc[i].wr_id, outstanding_rdma_writes_);
+                              wc[i].wr_id, outstanding_rdma_writes_.load());
 
                         // drain the queue
                         if (!outstanding_rdma_writes_queue_.empty()) {
@@ -493,6 +493,12 @@ int Connection::setup_rdma(client_config_t config) {
 }
 
 int Connection::init_connection(client_config_t config) {
+    signal(SIGSEGV, signal_handler);
+    signal(SIGABRT, signal_handler);
+    signal(SIGBUS, signal_handler);
+    signal(SIGFPE, signal_handler);
+    signal(SIGILL, signal_handler);
+
     struct sockaddr_in serv_addr;
     // create socket
     if ((sock_ = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
@@ -750,7 +756,16 @@ std::vector<remote_block_t> *Connection::allocate_rdma(std::vector<std::string> 
                             ret_blocks = blocks;
                             promise.set_value();
                         });
-    future.get();
+
+    auto status = future.wait_for(std::chrono::seconds(5));  // timeout 5s
+    if (status == std::future_status::timeout) {
+        ERROR("allocate_rdma timeout");
+        return nullptr;
+    }
+    else {
+        future.get();
+    }
+
     return ret_blocks;
 }
 

@@ -59,7 +59,7 @@ PYBIND11_MODULE(_infinistore, m) {
                 }
                 return self.rw_local(op, c_blocks, block_size, (void *)ptr, device_id);
             },
-            "Read/Write cpu memory from GPU device")
+            py::call_guard<py::gil_scoped_release>(), "Read/Write cpu memory from GPU device")
 
         .def(
             "r_rdma",
@@ -71,7 +71,7 @@ PYBIND11_MODULE(_infinistore, m) {
                 }
                 return self.r_rdma(c_blocks, block_size, (void *)ptr);
             },
-            "Read remote memory")
+            py::call_guard<py::gil_scoped_release>(), "Read remote memory")
 
         .def(
             "w_rdma",
@@ -104,11 +104,11 @@ PYBIND11_MODULE(_infinistore, m) {
                     c_blocks.push_back(block_t{std::get<0>(block), std::get<1>(block)});
                 }
                 return self.r_rdma_async(c_blocks, block_size, (void *)ptr, [callback]() {
-                    py::gil_scoped_acquire acquire;
+                    // python code will take_gil by itself
                     callback();
                 });
             },
-            "Read remote memory asynchronously")
+            py::call_guard<py::gil_scoped_release>(), "Read remote memory asynchronously")
 
         .def(
             "w_rdma_async",
@@ -129,7 +129,7 @@ PYBIND11_MODULE(_infinistore, m) {
                 size_t offsets_len = offset_buf.shape[0];
                 return self.w_rdma_async(p_offsets, offsets_len, block_size, p_remote_blocks,
                                          remote_blocks_len, (void *)base_ptr, [callback]() {
-                                             py::gil_scoped_acquire acquire;
+                                             // python code will take_gil by itself
                                              callback();
                                          });
             },
@@ -139,9 +139,14 @@ PYBIND11_MODULE(_infinistore, m) {
             "allocate_rdma",
             [](Connection &self, std::vector<std::string> &keys, int block_size) {
                 std::vector<remote_block_t> *blocks = self.allocate_rdma(keys, block_size);
+                // throw python exception if blocks is nullptr
+                if (blocks == nullptr) {
+                    throw std::runtime_error("Failed to allocate remote memory");
+                }
+                py::gil_scoped_acquire acquire;
                 return as_pyarray(std::move(*blocks));
             },
-            "Allocate remote memory")
+            py::call_guard<py::gil_scoped_release>(), "Allocate remote memory")
 
         .def(
             "allocate_rdma_async",
@@ -155,16 +160,20 @@ PYBIND11_MODULE(_infinistore, m) {
                                          });
                 return;
             },
-            "Allocate remote memory asynchronously")
+            py::call_guard<py::gil_scoped_release>(), "Allocate remote memory asynchronously")
 
-        .def("sync_local", &Connection::sync_local, "sync the cuda stream")
+        .def("sync_local", &Connection::sync_local, py::call_guard<py::gil_scoped_release>(),
+             "sync the cuda stream")
         .def("init_connection", &Connection::init_connection,
              py::call_guard<py::gil_scoped_release>(), "init connection")
         .def("setup_rdma", &Connection::setup_rdma, py::call_guard<py::gil_scoped_release>(),
              "setup rdma connection")
-        .def("sync_rdma", &Connection::sync_rdma, "sync the remote server")
-        .def("check_exist", &Connection::check_exist, "check if the key exists in the store")
+        .def("sync_rdma", &Connection::sync_rdma, py::call_guard<py::gil_scoped_release>(),
+             "sync the remote server")
+        .def("check_exist", &Connection::check_exist, py::call_guard<py::gil_scoped_release>(),
+             "check if the key exists in the store")
         .def("get_match_last_index", &Connection::get_match_last_index,
+             py::call_guard<py::gil_scoped_release>(),
              "get the last index of a key list which is in the store")
 
         .def(
