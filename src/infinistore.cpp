@@ -77,8 +77,8 @@ struct Client {
     header_t header_;
 
     // RDMA recv buffer
-    char *recv_buffer_[MAX_RECV_WR];
-    struct ibv_mr *recv_mr_[MAX_RECV_WR];
+    char *recv_buffer_[MAX_RECV_WR] = {};
+    struct ibv_mr *recv_mr_[MAX_RECV_WR] = {};
 
     // RDMA send buffer
     char *send_buffer_ = NULL;
@@ -158,18 +158,22 @@ Client::~Client() {
         send_mr_ = NULL;
     }
 
-    for (int i = 0; i < MAX_RECV_WR; i++) {
-        if (recv_buffer_[i]) {
-            free(recv_buffer_[i]);
-            recv_buffer_[i] = NULL;
-            ibv_dereg_mr(recv_mr_[i]);
-            recv_mr_[i] = NULL;
-        }
-    }
-
     if (send_buffer_) {
         free(send_buffer_);
         send_buffer_ = NULL;
+    }
+
+    for (int i = 0; i < MAX_RECV_WR; i++) {
+        if (recv_mr_[i]) {
+            assert(recv_buffer_[i] != NULL);
+            ibv_dereg_mr(recv_mr_[i]);
+            recv_mr_[i] = NULL;
+        }
+
+        if (recv_buffer_[i]) {
+            free(recv_buffer_[i]);
+            recv_buffer_[i] = NULL;
+        }
     }
 
     if (tcp_send_buffer_) {
@@ -182,15 +186,10 @@ Client::~Client() {
         tcp_recv_buffer_ = NULL;
     }
 
-    if (comp_channel_) {
-        ibv_destroy_comp_channel(comp_channel_);
-        comp_channel_ = NULL;
-    }
-
     if (qp_) {
         struct ibv_qp_attr attr;
         memset(&attr, 0, sizeof(attr));
-        attr.qp_state = IBV_QPS_ERR;
+        attr.qp_state = IBV_QPS_RESET;
         if (ibv_modify_qp(qp_, &attr, IBV_QP_STATE)) {
             ERROR("Failed to modify QP to ERR state");
         }
@@ -198,7 +197,15 @@ Client::~Client() {
     if (qp_) {
         ibv_destroy_qp(qp_);
         qp_ = NULL;
-        INFO("QP destroyed");
+    }
+    if (cq_) {
+        ibv_destroy_cq(cq_);
+        cq_ = NULL;
+    }
+
+    if (comp_channel_) {
+        ibv_destroy_comp_channel(comp_channel_);
+        comp_channel_ = NULL;
     }
 }
 

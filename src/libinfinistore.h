@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 #include <atomic>
-#include <boost/lockfree/queue.hpp>
+#include <boost/lockfree/spsc_queue.hpp>
 #include <deque>
 #include <future>
 #include <map>
@@ -57,7 +57,7 @@ class Connection : public std::enable_shared_from_this<Connection> {
     This is MAX_RECV_WR not MAX_SEND_WR,
     because server also has the same number of buffers
     */
-    boost::lockfree::queue<SendBuffer *> send_buffers_{MAX_RECV_WR};
+    boost::lockfree::spsc_queue<SendBuffer *> send_buffers_{MAX_RECV_WR};
 
     // this recv buffer is used in
     // 1. allocate rdma
