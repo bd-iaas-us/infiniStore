@@ -29,7 +29,7 @@ extern std::atomic<unsigned int> opened_ipc;
 // PTR is shared by kv_map and inflight_rdma_kv_map
 class PTR : public IntrusivePtrTarget {
    public:
-    void *ptr;
+    void *ptr = nullptr;
     size_t size;
     int pool_idx;
     bool committed;

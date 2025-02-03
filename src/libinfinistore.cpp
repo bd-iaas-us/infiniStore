@@ -12,7 +12,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#include <iostream>
 #include <vector>
 
 #include "config.h"
@@ -31,6 +30,8 @@ SendBuffer::SendBuffer(struct ibv_pd *pd, size_t size) {
 
 SendBuffer::~SendBuffer() {
     DEBUG("destroying send buffer");
+    assert(buffer_ != NULL);
+    assert(mr_ != NULL);
     if (mr_) {
         ibv_dereg_mr(mr_);
         mr_ = nullptr;
@@ -72,8 +73,10 @@ Connection::~Connection() {
         cq_future_.get();
     }
 
-    if (comp_channel_) {
-        ibv_destroy_comp_channel(comp_channel_);
+    SendBuffer *buffer;
+    while (send_buffers_.pop(buffer)) {
+        if (buffer)
+            delete buffer;
     }
 
     if (sock_) {
@@ -93,15 +96,10 @@ Connection::~Connection() {
         free(recv_buffer_);
     }
 
-    SendBuffer *buffer;
-    while (send_buffers_.pop(buffer)) {
-        delete buffer;
-    }
-
     if (qp_) {
         struct ibv_qp_attr attr;
         memset(&attr, 0, sizeof(attr));
-        attr.qp_state = IBV_QPS_ERR;
+        attr.qp_state = IBV_QPS_RESET;
         ibv_modify_qp(qp_, &attr, IBV_QP_STATE);
     }
     if (qp_) {
@@ -109,6 +107,10 @@ Connection::~Connection() {
     }
     if (cq_) {
         ibv_destroy_cq(cq_);
+    }
+
+    if (comp_channel_) {
+        ibv_destroy_comp_channel(comp_channel_);
     }
     if (pd_) {
         ibv_dealloc_pd(pd_);
@@ -746,9 +748,6 @@ std::vector<remote_block_t> *Connection::allocate_rdma(std::vector<std::string> 
     allocate_rdma_async(keys, block_size,
                         [&promise, &ret_blocks](std::vector<remote_block_t> *blocks) {
                             ret_blocks = blocks;
-                            for (auto &block : *ret_blocks) {
-                                INFO("rkey: {}, remote_addr: {}", block.rkey, block.remote_addr);
-                            }
                             promise.set_value();
                         });
     future.get();

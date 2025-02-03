@@ -48,7 +48,6 @@ PYBIND11_MODULE(_infinistore, m) {
 
     py::class_<Connection, std::shared_ptr<Connection>>(m, "Connection")
         .def(py::init<>())
-        .def("init_connection", &Connection::init_connection, "Initialize a connection")
         .def(
             "rw_local",
             [](Connection &self, char op,
@@ -159,7 +158,10 @@ PYBIND11_MODULE(_infinistore, m) {
             "Allocate remote memory asynchronously")
 
         .def("sync_local", &Connection::sync_local, "sync the cuda stream")
-        .def("setup_rdma", &Connection::setup_rdma, "setup rdma connection")
+        .def("init_connection", &Connection::init_connection,
+             py::call_guard<py::gil_scoped_release>(), "init connection")
+        .def("setup_rdma", &Connection::setup_rdma, py::call_guard<py::gil_scoped_release>(),
+             "setup rdma connection")
         .def("sync_rdma", &Connection::sync_rdma, "sync the remote server")
         .def("check_exist", &Connection::check_exist, "check if the key exists in the store")
         .def("get_match_last_index", &Connection::get_match_last_index,
@@ -170,7 +172,7 @@ PYBIND11_MODULE(_infinistore, m) {
             [](Connection &self, uintptr_t ptr, size_t ptr_region_size) {
                 return self.register_mr((void *)ptr, ptr_region_size);
             },
-            "register memory region");
+            py::call_guard<py::gil_scoped_release>(), "register memory region");
 
     // server side
     py::class_<server_config_t>(m, "ServerConfig")

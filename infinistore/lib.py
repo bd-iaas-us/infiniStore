@@ -435,13 +435,6 @@ class InfinityConnection:
 
         # each offset should multiply by the element size
         offsets_in_bytes = [offset * element_size for offset in offsets]
-        # ret = _infinistore.w_rdma(
-        #     self.conn,
-        #     offsets_in_bytes,
-        #     page_size * element_size,
-        #     remote_blocks,
-        #     ptr,
-        # )
 
         ret = self.conn.w_rdma(
             offsets_in_bytes,
@@ -509,15 +502,6 @@ class InfinityConnection:
         if len(cuda_visible_devices) > 0:
             device_id = int(cuda_visible_devices.split(",")[cache.device.index])
         if self.local_connected:
-            # ret = _infinistore.rw_local(
-            #     self.conn,
-            #     self.OP_R,
-            #     blocks_in_bytes,
-            #     page_size * element_size,
-            #     ptr,
-            #     device_id,
-            # )
-
             ret = self.conn.rw_local(
                 self.OP_R,
                 blocks_in_bytes,
@@ -528,13 +512,6 @@ class InfinityConnection:
             if ret < 0:
                 raise Exception(f"Failed to read to infinistore, ret = {ret}")
         elif self.rdma_connected:
-            # ret = _infinistore.r_rdma(
-            #     self.conn,
-            #     blocks_in_bytes,
-            #     page_size * element_size,
-            #     ptr,
-            # )
-
             ret = self.conn.r_rdma(
                 blocks_in_bytes,
                 page_size * element_size,
@@ -560,8 +537,6 @@ class InfinityConnection:
             n = 0
             timeout = 1  # 1 second timeout
             while True:
-                # ret = _infinistore.sync_local(self.conn)
-
                 ret = self.conn.sync_local()
                 if ret < 0:
                     raise Exception(f"Failed to sync to infinistore, ret = {ret}")
@@ -602,7 +577,6 @@ class InfinityConnection:
         Raises:
             Exception: If there is an error checking the key's existence.
         """
-        # ret = _infinistore.check_exist(self.conn, key)
         ret = self.conn.check_exist(key)
         if ret < 0:
             raise Exception("Failed to check if this key exists")
@@ -621,7 +595,6 @@ class InfinityConnection:
         Raises:
             Exception: If no match is found (i.e., if the return value is negative).
         """
-        # ret = _infinistore.get_match_last_index(self.conn, keys)
         ret = self.conn.get_match_last_index(keys)
         if ret < 0:
             raise Exception("can't find a match")
@@ -645,7 +618,6 @@ class InfinityConnection:
         element_size = cache.element_size()
         if not self.rdma_connected:
             raise Exception("this function is only valid for connected rdma")
-        # ret = _infinistore.register_mr(self.conn, ptr, cache.numel() * element_size)
 
         ret = self.conn.register_mr(ptr, cache.numel() * element_size)
         if ret < 0:
@@ -663,8 +635,6 @@ class InfinityConnection:
             # _callback is invoked by the C++ code in cq_thread,
             # so we need to call_soon_threadsafe
             loop.call_soon_threadsafe(future.set_result, remote_addrs)
-
-        # _infinistore.allocate_rdma_async(self.conn, keys, page_size_in_bytes, _callback)
 
         self.conn.allocate_rdma_async(keys, page_size_in_bytes, _callback)
 
@@ -689,7 +659,6 @@ class InfinityConnection:
         if not self.rdma_connected:
             raise Exception("this function is only valid for connected rdma")
 
-        # ret = _infinistore.allocate_rdma(self.conn, keys, page_size_in_bytes)
         ret = self.conn.allocate_rdma(keys, page_size_in_bytes)
         if len(ret) == 0:
             raise Exception("allocate memory failed")
