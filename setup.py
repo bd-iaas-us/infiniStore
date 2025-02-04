@@ -4,16 +4,27 @@ from setuptools.command.build_ext import build_ext
 import sys
 
 
-def get_git_commit_count():
+def get_version():
     try:
-        commit_count = (
-            subprocess.check_output(["git", "rev-list", "--count", "HEAD"])
-            .decode("utf-8")
+        latest_tag = (
+            subprocess.check_output(["git", "describe", "--tags", "--abbrev=0"])
             .strip()
+            .decode()
         )
-        return commit_count
+
+        commit_count = (
+            subprocess.check_output(
+                ["git", "rev-list", f"{latest_tag}..HEAD", "--count"]
+            )
+            .strip()
+            .decode()
+        )
+
+        return f"{latest_tag}.{commit_count}"
     except subprocess.CalledProcessError:
-        return "0"
+        raise Exception(
+            "Please make sure you have git installed, or you have a tag number"
+        )
 
 
 # invoke the make command to build the shared library
@@ -30,8 +41,6 @@ class CustomBuildExt(build_ext):
             return
 
 
-commit_count = get_git_commit_count()
-
 ext_modules = []
 if "bdist_wheel" in sys.argv:
     # this dummy extension is only for the wheel package
@@ -44,7 +53,7 @@ if "bdist_wheel" in sys.argv:
 
 setup(
     name="infinistore",
-    version=f"0.2.{commit_count}",
+    version=get_version(),
     packages=find_packages(),
     cmdclass={"build_ext": CustomBuildExt},
     package_data={
