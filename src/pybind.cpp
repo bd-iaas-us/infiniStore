@@ -49,6 +49,9 @@ PYBIND11_MODULE(_infinistore, m) {
     py::class_<Connection, std::shared_ptr<Connection>>(m, "Connection")
         .def(py::init<>())
         .def(
+            "__del__", [](Connection &self) { self.~Connection(); },
+            py::call_guard<py::gil_scoped_release>())
+        .def(
             "rw_local",
             [](Connection &self, char op,
                const std::vector<std::tuple<std::string, unsigned long>> &blocks, int block_size,
