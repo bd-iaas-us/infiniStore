@@ -8,6 +8,7 @@ import subprocess
 import random
 import string
 import contextlib
+import asyncio
 from multiprocessing import Process
 
 
@@ -384,3 +385,61 @@ def test_deduplicate(server, local):
 
     assert torch.equal(src_tensor.cpu(), dst_tensor.cpu())
     assert not torch.equal(src2_tensor.cpu(), dst_tensor.cpu())
+
+
+def test_async_api(server):
+    config = infinistore.ClientConfig(
+        host_addr="127.0.0.1",
+        service_port=92345,
+        link_type=infinistore.LINK_ETHERNET,
+        dev_name="mlx5_0",
+        connection_type=infinistore.TYPE_RDMA,
+    )
+    conn = infinistore.InfinityConnection(config)
+
+    # use asyncio
+    async def run():
+        await conn.connect_async()
+        key = generate_random_string(5)
+        src = torch.randn(4096, device="cuda", dtype=torch.float32)
+        dst = torch.zeros(4096, device="cuda", dtype=torch.float32)
+
+        def register_mr():
+            conn.register_mr(src)
+            conn.register_mr(dst)
+
+        await asyncio.to_thread(register_mr)
+        remote_addrs = await conn.allocate_rdma_async([key], 4096 * 4)
+        await conn.rdma_write_cache_async(src, [0], 4096, remote_addrs)
+        await conn.read_cache_async(dst, [(key, 0)], 4096)
+        assert torch.equal(src, dst)
+
+    asyncio.run(run())
+
+
+@pytest.mark.benchmark
+def test_benchmark(server):
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    result = subprocess.run(
+        [
+            "python",
+            f"{current_dir}/benchmark.py",
+            "--service-port",
+            "92345",
+            "--dev-name",
+            "mlx5_0",
+            "--link-type",
+            "Ethernet",
+            "--size",
+            "100",
+            "--block-size",
+            "32",
+            "--iteration",
+            "10",
+            "--rdma",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    print(result.stdout)
+    assert result.returncode == 0
