@@ -299,6 +299,19 @@ class InfinityConnection:
         Logger.set_log_level(config.log_level)
 
     async def connect_async(self):
+        """
+        Asynchronously establishes a connection based on the configuration.
+
+        Raises:
+            Exception: If the connection type is local GPU, as it is not supported in async mode.
+            Exception: If the initialization of the remote connection fails.
+            Exception: If the setup of the RDMA connection fails.
+
+        Logs:
+            A warning indicating that the async connect may have bugs.
+
+        This method runs the blocking connection setup in an executor to avoid blocking the event loop.
+        """
         if self.config.connection_type == TYPE_LOCAL_GPU:
             raise Exception("Local GPU connection is not supported in async mode")
         Logger.warn("async connect may have bug")
@@ -383,6 +396,21 @@ class InfinityConnection:
     async def rdma_write_cache_async(
         self, cache: torch.Tensor, offsets: List[int], page_size, remote_blocks: List
     ):
+        """
+        Asynchronously writes a cache tensor to remote memory using RDMA.
+
+        Args:
+            cache (torch.Tensor): The tensor to be written to remote memory.
+            offsets (List[int]): List of offsets where the tensor data should be written.
+            page_size (int): The size of each page in the remote memory.
+            remote_blocks (List): List of remote memory blocks where the data will be written.
+
+        Raises:
+            Exception: If RDMA is not connected.
+
+        Returns:
+            asyncio.Future: A future that will be set to 0 when the write operation is complete.
+        """
         if not self.rdma_connected:
             raise Exception("this function is only valid for connected rdma")
 
@@ -449,6 +477,20 @@ class InfinityConnection:
     async def read_cache_async(
         self, cache: torch.Tensor, blocks: List[Tuple[str, int]], page_size: int
     ):
+        """
+        Asynchronously reads data from the RDMA cache into the provided tensor.
+
+        Args:
+            cache (torch.Tensor): The tensor to read data into.
+            blocks (List[Tuple[str, int]]): A list of tuples where each tuple contains a key and an offset.
+            page_size (int): The size of each page to read.
+
+        Raises:
+            Exception: If RDMA is not connected or if reading from Infinistore fails.
+
+        Returns:
+            None: This function returns None but completes the future when the read operation is done.
+        """
         if not self.rdma_connected:
             raise Exception("this function is only valid for connected rdma")
         self._verify(cache)
