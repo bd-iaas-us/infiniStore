@@ -247,6 +247,26 @@ and then use the allocated RDMA memory address to write data to the remote memor
 </dd></dl>
 
 <dl class="py method">
+<dt class="sig sig-object py" id="infinistore.InfinityConnection.connect_async">
+<em class="property"><span class="pre">async</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">connect_async</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.InfinityConnection.connect_async" title="Permalink to this definition">¶</a></dt>
+<dd><p>Asynchronously establishes a connection based on the configuration.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Raises<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>Exception</strong> – If the connection type is local GPU, as it is not supported in async mode.</p></li>
+<li><p><strong>Exception</strong> – If the initialization of the remote connection fails.</p></li>
+<li><p><strong>Exception</strong> – If the setup of the RDMA connection fails.</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="simple">
+<dt>Logs:</dt><dd><p>A warning indicating that the async connect may have bugs.</p>
+</dd>
+</dl>
+<p>This method runs the blocking connection setup in an executor to avoid blocking the event loop.</p>
+</dd></dl>
+
+<dl class="py method">
 <dt class="sig sig-object py" id="infinistore.InfinityConnection.get_match_last_index">
 <span class="sig-name descname"><span class="pre">get_match_last_index</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keys</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.InfinityConnection.get_match_last_index" title="Permalink to this definition">¶</a></dt>
 <dd><p>Retrieve the last index of a match for the given keys.</p>
@@ -318,6 +338,31 @@ and then use the allocated RDMA memory address to write data to the remote memor
 </dd></dl>
 
 <dl class="py method">
+<dt class="sig sig-object py" id="infinistore.InfinityConnection.rdma_write_cache_async">
+<em class="property"><span class="pre">async</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">rdma_write_cache_async</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cache</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">torch.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">offsets</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">page_size</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">remote_blocks</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.InfinityConnection.rdma_write_cache_async" title="Permalink to this definition">¶</a></dt>
+<dd><p>Asynchronously writes a cache tensor to remote memory using RDMA.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>cache</strong> (<em>torch.Tensor</em>) – The tensor to be written to remote memory.</p></li>
+<li><p><strong>offsets</strong> (<em>List</em><em>[</em><em>int</em><em>]</em>) – List of offsets where the tensor data should be written.</p></li>
+<li><p><strong>page_size</strong> (<em>int</em>) – The size of each page in the remote memory.</p></li>
+<li><p><strong>remote_blocks</strong> (<em>List</em>) – List of remote memory blocks where the data will be written.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>Exception</strong> – If RDMA is not connected.</p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>A future that will be set to 0 when the write operation is complete.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>asyncio.Future</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
 <dt class="sig sig-object py" id="infinistore.InfinityConnection.read_cache">
 <span class="sig-name descname"><span class="pre">read_cache</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cache</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">torch.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">blocks</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">page_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.InfinityConnection.read_cache" title="Permalink to this definition">¶</a></dt>
 <dd><p>Reads data from the cache using either local or RDMA connection.</p>
@@ -332,6 +377,30 @@ and then use the allocated RDMA memory address to write data to the remote memor
 </dd>
 <dt class="field-even">Raises<span class="colon">:</span></dt>
 <dd class="field-even"><p><strong>Exception</strong> – If the read operation fails or if not connected to any instance.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="infinistore.InfinityConnection.read_cache_async">
+<em class="property"><span class="pre">async</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">read_cache_async</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cache</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">torch.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">blocks</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">page_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#infinistore.InfinityConnection.read_cache_async" title="Permalink to this definition">¶</a></dt>
+<dd><p>Asynchronously reads data from the RDMA cache into the provided tensor.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>cache</strong> (<em>torch.Tensor</em>) – The tensor to read data into.</p></li>
+<li><p><strong>blocks</strong> (<em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>int</em><em>]</em><em>]</em>) – A list of tuples where each tuple contains a key and an offset.</p></li>
+<li><p><strong>page_size</strong> (<em>int</em>) – The size of each page to read.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>Exception</strong> – If RDMA is not connected or if reading from Infinistore fails.</p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>This function returns None but completes the future when the read operation is done.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>None</p>
 </dd>
 </dl>
 </dd></dl>
