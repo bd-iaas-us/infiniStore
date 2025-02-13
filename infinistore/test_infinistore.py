@@ -417,6 +417,39 @@ def test_async_api(server):
     asyncio.run(run())
 
 
+def test_single_async_api(server):
+    config = infinistore.ClientConfig(
+        host_addr="127.0.0.1",
+        service_port=92345,
+        link_type=infinistore.LINK_ETHERNET,
+        dev_name="mlx5_0",
+        connection_type=infinistore.TYPE_RDMA,
+    )
+
+    conn = infinistore.InfinityConnection(config)
+
+    # use asyncio
+    async def run():
+        await conn.connect_async()
+        key = generate_random_string(5)
+        src = torch.randn(4096, device="cuda", dtype=torch.float32)
+        dst = torch.zeros(4096, device="cuda", dtype=torch.float32)
+
+        def register_mr():
+            conn.register_mr(src)
+            conn.register_mr(dst)
+
+        await asyncio.to_thread(register_mr)
+
+        await conn.rdma_write_cache_single_async(key, 4096 * 4, src.data_ptr())
+
+        await conn.read_cache_simple_async(key, dst.data_ptr(), 4096 * 4)
+
+        assert torch.equal(src, dst)
+
+    asyncio.run(run())
+
+
 @pytest.mark.benchmark
 def test_benchmark(server):
     current_dir = os.path.dirname(os.path.abspath(__file__))

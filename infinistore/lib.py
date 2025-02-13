@@ -4,10 +4,11 @@ import infinistore._infinistore as _infinistore
 
 import torch
 import os
-from typing import List, Tuple
 import subprocess
 import time
 import asyncio
+from functools import singledispatchmethod
+from typing import Optional, Union, List, Tuple
 
 
 # connection type: default is RDMA
@@ -314,7 +315,6 @@ class InfinityConnection:
         """
         if self.config.connection_type == TYPE_LOCAL_GPU:
             raise Exception("Local GPU connection is not supported in async mode")
-        Logger.warn("async connect may have bug")
         loop = asyncio.get_running_loop()
 
         def blocking_connect():
@@ -357,6 +357,30 @@ class InfinityConnection:
                 raise Exception("Failed to setup RDMA connection")
             self.rdma_connected = True
 
+    def local_gpu_write_cache_single(self, key: str, size: int, ptr: int, **kwargs):
+        if not self.local_connected:
+            raise Exception("this function is only valid for connected local GPU")
+        if key == "":
+            raise Exception("key is empty")
+        if size == 0:
+            raise Exception("size is 0")
+        if ptr == 0:
+            raise Exception("ptr is 0")
+        if "device_id" not in kwargs:
+            raise Exception("device_id is required for local GPU connection")
+        cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+        if len(cuda_visible_devices) > 0:
+            device_id = int(cuda_visible_devices.split(",")[kwargs["device_id"]])
+        ret = self.conn.rw_local(
+            self.OP_W,
+            [(key, 0)],
+            size,
+            ptr,
+            device_id,
+        )
+        if ret < 0:
+            raise Exception(f"Failed to write to infinistore, ret = {ret}")
+
     def local_gpu_write_cache(
         self, cache: torch.Tensor, blocks: List[Tuple[str, int]], page_size: int
     ):
@@ -391,7 +415,6 @@ class InfinityConnection:
         )
         if ret < 0:
             raise Exception(f"Failed to write to infinistore, ret = {ret}")
-        return 0
 
     async def rdma_write_cache_async(
         self, cache: torch.Tensor, offsets: List[int], page_size, remote_blocks: List
@@ -435,6 +458,53 @@ class InfinityConnection:
             _callback,
         )
         return await future
+
+    async def rdma_write_cache_single_async(
+        self, key: str, size: int, ptr: int, **kwargs
+    ):
+        if not self.rdma_connected:
+            raise Exception("this function is only valid for connected rdma")
+        if key == "":
+            raise Exception("key is empty")
+        if size == 0:
+            raise Exception("size is 0")
+        if ptr == 0:
+            raise Exception("ptr is 0")
+
+        remote_addrs = await self.allocate_rdma_async([key], size)
+
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+
+        def _callback():
+            loop.call_soon_threadsafe(future.set_result, 0)
+
+        ret = self.conn.w_rdma_async([0], size, remote_addrs, ptr, _callback)
+        if ret < 0:
+            raise Exception(f"Failed to write to infinistore, ret = {ret}")
+
+        return await future
+
+    def rdma_write_cache_single(self, key: str, size: int, ptr: int, **kwargs):
+        if key == "":
+            raise Exception("key is empty")
+        if size == 0:
+            raise Exception("size is 0")
+        if ptr == 0:
+            raise Exception("ptr is 0")
+        # allocate remote rdma memory
+        remote_addrs = self.allocate_rdma([key], size)
+
+        assert len(remote_addrs) == 1
+        ret = self.conn.w_rdma(
+            [0],
+            size,
+            remote_addrs,
+            ptr,
+        )
+        if ret < 0:
+            raise Exception(f"Failed to write to infinistore, ret = {ret}")
+        return
 
     def rdma_write_cache(
         self, cache: torch.Tensor, offsets: List[int], page_size, remote_blocks: List
@@ -504,10 +574,6 @@ class InfinityConnection:
         def _callback():
             loop.call_soon_threadsafe(future.set_result, 0)
 
-        # ret = _infinistore.r_rdma_async(
-        #     self.conn, blocks_in_bytes, page_size * element_size, ptr, _callback
-        # )
-
         ret = self.conn.r_rdma_async(
             blocks_in_bytes,
             page_size * element_size,
@@ -518,6 +584,62 @@ class InfinityConnection:
         if ret < 0:
             raise Exception(f"Failed to read to infinistore, ret = {ret}")
         return await future
+
+    async def read_cache_simple_async(self, key: str, ptr: int, size: int, **kwargs):
+        if key == "":
+            raise Exception("key is empty")
+        if size == 0:
+            raise Exception("size is 0")
+        if ptr == 0:
+            raise Exception("ptr is 0")
+        if self.local_connected:
+            raise Exception("async read for local GPU is not supported")
+
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+
+        def _callback():
+            loop.call_soon_threadsafe(future.set_result, 0)
+
+        ret = self.conn.r_rdma_async([(key, 0)], size, ptr, _callback)
+
+        if ret < 0:
+            raise Exception(f"Failed to read to infinistore, ret = {ret}")
+
+        return await future
+
+    def read_cache_simple(self, key: str, ptr: int, size: int, **kwargs):
+        if key == "":
+            raise Exception("key is empty")
+        if size == 0:
+            raise Exception("size is 0")
+        if ptr == 0:
+            raise Exception("ptr is 0")
+        if self.local_connected and "device_id" not in kwargs:
+            raise Exception("device_id is required for local GPU connection")
+        ret = 0
+        if self.local_connected:
+            cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+            if len(cuda_visible_devices) > 0:
+                device_id = int(cuda_visible_devices.split(",")[kwargs["device_id"]])
+            ret = self.conn.rw_local(
+                self.OP_R,
+                [(key, 0)],
+                size,
+                ptr,
+                device_id,
+            )
+
+        elif self.rdma_connected:
+            ret = self.conn.r_rdma(
+                [(key, 0)],
+                size,
+                ptr,
+            )
+        else:
+            raise Exception("Not connected to any instance")
+        if ret < 0:
+            raise Exception(f"Failed to read to infinistore, ret = {ret}")
 
     def read_cache(
         self, cache: torch.Tensor, blocks: List[Tuple[str, int]], page_size: int
@@ -642,7 +764,35 @@ class InfinityConnection:
             raise Exception("can't find a match")
         return ret
 
-    def register_mr(self, cache: torch.Tensor):
+    @singledispatchmethod
+    def register_mr(self, arg: Union[torch.Tensor, int], size: Optional[int] = None):
+        raise NotImplementedError(f"not supported: {type(arg)}")
+
+    @register_mr.register
+    def _(self, ptr: int, size):
+        """
+        Registers a memory region for RDMA (Remote Direct Memory Access) operations.
+
+        Args:
+            ptr (int): The pointer to the memory region.
+            size (int): The size of the memory region.
+
+        Returns:
+            int: A positive integer indicating the registration was successful.
+
+        Raises:
+            Exception: If RDMA is not connected or if the memory region registration fails.
+        """
+        if not self.rdma_connected:
+            raise Exception("this function is only valid for connected rdma")
+
+        ret = self.conn.register_mr(ptr, size)
+        if ret < 0:
+            raise Exception("register memory region failed")
+        return ret
+
+    @register_mr.register
+    def _(self, cache: torch.Tensor, size: Optional[int] = None):
         """
         Registers a memory region for RDMA (Remote Direct Memory Access) operations.
 
@@ -682,7 +832,7 @@ class InfinityConnection:
 
         return await future
 
-    def allocate_rdma(self, keys: List[str], page_size_in_bytes: int):
+    def allocate_rdma(self, keys: List[str], page_size_in_bytes: int) -> List[Tuple]:
         """
         Allocates RDMA memory for the given keys. For RDMA writes, user must first allocate RDMA memory.
         and then use the allocated RDMA memory address to write data to the remote memory.

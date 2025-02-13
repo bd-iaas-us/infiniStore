@@ -28,7 +28,7 @@ manylinux: $(PYBIND_TARGET)
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -fPIC -c $< -o $@
 
-%__generated.h: %.fbs
+%_generated.h: %.fbs
 	flatc --cpp $<
 
 -include $(OBJECTS:.o=.d)
