@@ -42,9 +42,11 @@ SendBuffer::~SendBuffer() {
     }
 }
 
-Connection::~Connection() {
-    INFO("destroying connection");
-
+/*
+because python will always hold GIL when doing ~Connection(), which could lead to deadlock,
+so we have to explicitly call close() to stop cq_handler.
+*/
+void Connection::close_conn() {
     if (!stop_ && cq_future_.valid()) {
         stop_ = true;
 
@@ -73,14 +75,23 @@ Connection::~Connection() {
         cq_future_.get();
     }
 
+    if (sock_) {
+        close(sock_);
+    }
+}
+
+Connection::~Connection() {
+    INFO("destroying connection");
+
+    if (!stop_ && cq_future_.valid()) {
+        ERROR("user should call close() before destroying connection, segmenation fault may occur");
+        throw std::runtime_error("user should call close() before destroying connection");
+    }
+
     SendBuffer *buffer;
     while (send_buffers_.pop(buffer)) {
         if (buffer)
             delete buffer;
-    }
-
-    if (sock_) {
-        close(sock_);
     }
 
     for (auto it = local_mr_.begin(); it != local_mr_.end(); it++) {
@@ -488,6 +499,7 @@ int Connection::setup_rdma(client_config_t config) {
 
     rdma_inflight_count_ = 0;
     stop_ = false;
+
     cq_future_ = std::async(std::launch::async, [this]() { cq_handler(); });
     return 0;
 }
@@ -793,8 +805,7 @@ int Connection::allocate_rdma_async(std::vector<std::string> &keys, int block_si
     recv_sge.lkey = recv_mr_->lkey;
 
     // build a new callback function:
-    auto self = shared_from_this();
-    auto *f_ptr = new std::function<void()>([this, self, callback]() {
+    auto *f_ptr = new std::function<void()>([this, callback]() {
         const RdmaAllocateResponse *resp = GetRdmaAllocateResponse(recv_buffer_);
         INFO("Received allocate response, #keys: {}", resp->blocks()->size());
 
@@ -892,8 +903,7 @@ int Connection::w_rdma_async(unsigned long *p_offsets, size_t offsets_len, int b
 
     bool wr_full = false;
 
-    auto self = shared_from_this();
-    auto *info = new rdma_write_commit_info([self, callback]() { callback(); }, remote_blocks_len);
+    auto *info = new rdma_write_commit_info([callback]() { callback(); }, remote_blocks_len);
 
     if (outstanding_rdma_writes_ + max_wr > MAX_RDMA_WRITE_WR) {
         wr_full = true;
@@ -1026,8 +1036,7 @@ int Connection::r_rdma_async(std::vector<block_t> &blocks, int block_size, void 
         .lkey = recv_mr_->lkey,
     };
 
-    auto self = shared_from_this();
-    auto *info = new rdma_read_commit_info([self, callback]() { callback(); });
+    auto *info = new rdma_read_commit_info([callback]() { callback(); });
 
     struct ibv_recv_wr recv_wr = {
         .wr_id = (uintptr_t)info,

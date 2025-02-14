@@ -31,7 +31,7 @@ struct SendBuffer {
     ~SendBuffer();
 };
 
-class Connection : public std::enable_shared_from_this<Connection> {
+class Connection {
     // tcp socket
     int sock_ = 0;
 
@@ -86,6 +86,8 @@ class Connection : public std::enable_shared_from_this<Connection> {
     Connection(const Connection &) = delete;
     // destory the connection
     ~Connection();
+    // close cq_handler thread
+    void close_conn();
     int init_connection(client_config_t config);
     // async rw local cpu memory, even rw_local returns, it is not guaranteed that
     // the operation is completed until sync_local is recved.

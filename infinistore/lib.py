@@ -506,6 +506,12 @@ class InfinityConnection:
             raise Exception(f"Failed to write to infinistore, ret = {ret}")
         return
 
+    def close(self):
+        """
+        Closes the connection to the Infinistore instance.
+        """
+        self.conn.close()
+
     def rdma_write_cache(
         self, cache: torch.Tensor, offsets: List[int], page_size, remote_blocks: List
     ):

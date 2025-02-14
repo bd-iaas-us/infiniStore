@@ -208,6 +208,7 @@ def run(args):
     )
 
     assert torch.equal(src_tensor.cpu(), dst_tensor.cpu())
+    conn.close()
 
 
 if __name__ == "__main__":
