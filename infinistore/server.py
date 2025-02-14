@@ -87,7 +87,7 @@ async def selftest(number: int):
     assert await asyncio.to_thread(torch.equal, src_tensor[0:3072], dst_tensor[0:3072])
 
     # assert torch.equal(,
-    rdma_conn = None
+    rdma_conn.close()
     return {"status": "ok"}
 
 

@@ -95,6 +95,7 @@ def test_basic_read_write_cache(server, dtype, new_connection, local):
         conn.local_gpu_write_cache(src_tensor, [(key, 0)], 4096)
 
     conn.sync()
+    conn.close()
 
     conn = infinistore.InfinityConnection(config)
     conn.connect()
@@ -106,10 +107,11 @@ def test_basic_read_write_cache(server, dtype, new_connection, local):
     conn.read_cache(dst, [(key, 0)], 4096)
     conn.sync()
     assert torch.equal(src_tensor, dst)
+    conn.close()
 
 
 @pytest.mark.parametrize("seperated_gpu", [False, True])
-@pytest.mark.parametrize("local", [False])
+@pytest.mark.parametrize("local", [False, True])
 def test_batch_read_write_cache(server, seperated_gpu, local):
     config = infinistore.ClientConfig(
         host_addr="127.0.0.1",
@@ -173,6 +175,7 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
         conn.sync()
         # import pdb; pdb.set_trace()
         assert torch.equal(src_tensor.cpu(), dst.cpu())
+    conn.close()
 
 
 @pytest.mark.parametrize("num_clients", [2])
@@ -212,6 +215,7 @@ def test_multiple_clients(num_clients, local):
             conn.local_gpu_write_cache(src_tensor, [(key, 0)], 4096)
 
         conn.sync()
+        conn.close()
 
         conn = infinistore.InfinityConnection(config)
         conn.connect()
@@ -223,6 +227,7 @@ def test_multiple_clients(num_clients, local):
         conn.read_cache(dst, [(key, 0)], 4096)
         conn.sync()
         assert torch.equal(src_tensor, dst)
+        conn.close()
 
     processes = []
     for _ in range(num_clients):
@@ -253,6 +258,7 @@ def test_key_check(server):
     conn.rdma_write_cache(src, [0], 4096, remote_addrs)
     conn.sync()
     assert conn.check_exist(key)
+    conn.close()
 
 
 def test_get_match_last_index(server):
@@ -273,6 +279,7 @@ def test_get_match_last_index(server):
 
     conn.rdma_write_cache(src, [0, 1024, 2048], 4096, remote_addrs)
     assert conn.get_match_last_index(["A", "B", "C", "key1", "D", "E"]) == 3
+    conn.close()
 
 
 def test_key_not_found(server):
@@ -291,6 +298,7 @@ def test_key_not_found(server):
     # expect raise exception
     with pytest.raises(Exception):
         conn.read_cache(src, [(key, 0)], 4096)
+    conn.close()
 
 
 def test_upload_cpu_download_gpu(server):
@@ -316,6 +324,7 @@ def test_upload_cpu_download_gpu(server):
     remote_addrs = src_conn.allocate_rdma([key], 4096 * 4)
     src_conn.rdma_write_cache(src, [0], 4096, remote_addrs)
     src_conn.sync()
+    src_conn.close()
 
     dst_conn = infinistore.InfinityConnection(dst_config)
     dst_conn.connect()
@@ -324,6 +333,7 @@ def test_upload_cpu_download_gpu(server):
     dst_conn.read_cache(dst, [(key, 0)], 4096)
     dst_conn.sync()
     assert torch.equal(src, dst.cpu())
+    dst_conn.close()
 
 
 @pytest.mark.parametrize("local", [False])
@@ -385,6 +395,7 @@ def test_deduplicate(server, local):
 
     assert torch.equal(src_tensor.cpu(), dst_tensor.cpu())
     assert not torch.equal(src2_tensor.cpu(), dst_tensor.cpu())
+    conn.close()
 
 
 def test_async_api(server):
@@ -413,6 +424,41 @@ def test_async_api(server):
         await conn.rdma_write_cache_async(src, [0], 4096, remote_addrs)
         await conn.read_cache_async(dst, [(key, 0)], 4096)
         assert torch.equal(src, dst)
+        conn.close()
+
+    asyncio.run(run())
+
+
+def test_single_async_api(server):
+    config = infinistore.ClientConfig(
+        host_addr="127.0.0.1",
+        service_port=92345,
+        link_type=infinistore.LINK_ETHERNET,
+        dev_name="mlx5_0",
+        connection_type=infinistore.TYPE_RDMA,
+    )
+
+    conn = infinistore.InfinityConnection(config)
+
+    # use asyncio
+    async def run():
+        await conn.connect_async()
+        key = generate_random_string(5)
+        src = torch.randn(4096, device="cuda", dtype=torch.float32)
+        dst = torch.zeros(4096, device="cuda", dtype=torch.float32)
+
+        def register_mr():
+            conn.register_mr(src)
+            conn.register_mr(dst)
+
+        await asyncio.to_thread(register_mr)
+
+        await conn.rdma_write_cache_single_async(key, 4096 * 4, src.data_ptr())
+
+        await conn.read_cache_simple_async(key, dst.data_ptr(), 4096 * 4)
+
+        assert torch.equal(src, dst)
+        conn.close()
 
     asyncio.run(run())
 

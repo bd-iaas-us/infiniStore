@@ -57,10 +57,9 @@ async def main():
 
         assert torch.equal(src_tensor[0:3072].cpu(), dst_tensor[0:3072].cpu())
 
-        rdma_conn = None
+        rdma_conn.close()
 
 
-uvloop.run(main())
 if sys.version_info >= (3, 11):
     with asyncio.Runner(loop_factory=uvloop.new_event_loop) as runner:
         runner.run(main())

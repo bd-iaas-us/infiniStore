@@ -48,9 +48,8 @@ PYBIND11_MODULE(_infinistore, m) {
 
     py::class_<Connection, std::shared_ptr<Connection>>(m, "Connection")
         .def(py::init<>())
-        .def(
-            "__del__", [](Connection &self) { self.~Connection(); },
-            py::call_guard<py::gil_scoped_release>())
+        .def("close", &Connection::close_conn, py::call_guard<py::gil_scoped_release>(),
+             "close the connection")
         .def(
             "rw_local",
             [](Connection &self, char op,
