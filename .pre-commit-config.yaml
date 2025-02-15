@@ -11,18 +11,21 @@ repos:
       - id: check-ast
       - id: trailing-whitespace
 
-
-  - repo: https://github.com/psf/black
-    rev: 23.1.0
+  - repo: https://github.com/crate-ci/typos
+    rev: typos-dict-v0.12.4
     hooks:
-      - id: black
-        language_version: python3
+      - id: typos
+        files: \.(py|md|rst|yaml|toml|cpp|hpp|cc|c|h)$
+        exclude: pyproject.toml
 
-  - repo: https://github.com/PyCQA/flake8
-    rev: 6.0.0
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.6
     hooks:
-      - id: flake8
-        args: [--max-line-length=999, --ignore=D105, --ignore=E231, --ignore=E203] #ignore line length for now
+      # Run the linter.
+      - id: ruff
+        args: ["--fix"]
+      # Run the formatter.
+      - id: ruff-format
 
   - repo: https://github.com/pre-commit/mirrors-clang-format
     rev: v14.0.0

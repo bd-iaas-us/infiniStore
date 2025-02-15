@@ -39,9 +39,9 @@ def warm_up(args):
         conn.read_cache(dst_tensors[i], [(f"warmup_{i}", 0)], 4096)
         conn.sync()
         # check data
-        assert torch.allclose(
-            src_tensors[i], dst_tensors[i]
-        ), f"device {i} data mismatch"
+        assert torch.allclose(src_tensors[i], dst_tensors[i]), (
+            f"device {i} data mismatch"
+        )
 
     # TODO: delete remote keys
     src_tensors = None

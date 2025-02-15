@@ -46,7 +46,7 @@ class MemoryPool {
     size_t last_search_position_;
     size_t allocated_blocks_;
 
-    // TODO: use judy libray to speed up the bitmap?
+    // TODO: use judy library to speed up the bitmap?
     std::vector<uint64_t> bitmap_;
 
     struct ibv_mr* mr_;

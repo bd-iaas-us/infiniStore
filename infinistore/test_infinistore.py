@@ -41,7 +41,7 @@ def server():
     server_process.wait()
 
 
-# add a flat to wehther the same connection.
+# add a flat to whether the same connection.
 
 
 def generate_random_string(length):
@@ -108,9 +108,9 @@ def test_basic_read_write_cache(server, dtype, new_connection, local):
     assert torch.equal(src_tensor, dst)
 
 
-@pytest.mark.parametrize("seperated_gpu", [False, True])
+@pytest.mark.parametrize("separated_gpu", [False, True])
 @pytest.mark.parametrize("local", [False])
-def test_batch_read_write_cache(server, seperated_gpu, local):
+def test_batch_read_write_cache(server, separated_gpu, local):
     config = infinistore.ClientConfig(
         host_addr="127.0.0.1",
         service_port=92345,
@@ -122,7 +122,7 @@ def test_batch_read_write_cache(server, seperated_gpu, local):
         infinistore.TYPE_LOCAL_GPU if local else infinistore.TYPE_RDMA
     )
     # test if we have multiple GPUs
-    if seperated_gpu:
+    if separated_gpu:
         if get_gpu_count() >= 2:
             src_device = "cuda:0"
             dst_device = "cuda:1"

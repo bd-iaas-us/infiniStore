@@ -61,7 +61,7 @@ class Connection : public std::enable_shared_from_this<Connection> {
 
     // this recv buffer is used in
     // 1. allocate rdma
-    // 2. recv IMM data, althougth IMM DATA is not put into recv_buffer,
+    // 2. recv IMM data, although IMM DATA is not put into recv_buffer,
     // but for compatibility, we still use a zero-length recv_buffer.
     void *recv_buffer_ = NULL;
     struct ibv_mr *recv_mr_ = NULL;
@@ -84,7 +84,7 @@ class Connection : public std::enable_shared_from_this<Connection> {
     Connection() = default;
 
     Connection(const Connection &) = delete;
-    // destory the connection
+    // destroy the connection
     ~Connection();
     int init_connection(client_config_t config);
     // async rw local cpu memory, even rw_local returns, it is not guaranteed that

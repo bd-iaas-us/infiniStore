@@ -284,7 +284,7 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                 DEBUG("allocate response sent");
             }
             else if (wc.opcode ==
-                     IBV_WC_RECV_RDMA_WITH_IMM) {  // write cache: we alreay have all data now.
+                     IBV_WC_RECV_RDMA_WITH_IMM) {  // write cache: we already have all data now.
                 // client should not use WRITE_WITH_IMM to notify.
                 // it should use COMMIT message to notify.
                 WARN("WRITE_WITH_IMM is not supported in server side");
@@ -551,7 +551,7 @@ void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
     buf->len = suggested_size;
 }
 
-int veryfy_header(header_t *header) {
+int verify_header(header_t *header) {
     if (header->magic != MAGIC) {
         return INVALID_REQ;
     }
@@ -738,7 +738,7 @@ int Client::write_cache(const LocalMetaRequest *meta_req) {
             // deduplicate the key
             const auto &key = block->key()->str();
             if (kv_map.count(key) != 0) {
-                // this key could be commited or uncommitted, no mather what it is, we should skip
+                // this key could be committed or uncommitted, no mather what it is, we should skip
                 // it
                 DEBUG("local gpu write: Key already exists: {}, skip this key", key);
                 key_idx++;
@@ -1192,7 +1192,7 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                         client->header_.op == OP_CHECK_EXIST ||
                         client->header_.op == OP_GET_MATCH_LAST_IDX ||
                         client->header_.op == OP_RDMA_EXCHANGE) {
-                        int ret = veryfy_header(&client->header_);
+                        int ret = verify_header(&client->header_);
                         if (ret != 0) {
                             ERROR("Invalid header");
                             uv_close((uv_handle_t *)stream, on_close);
@@ -1267,7 +1267,7 @@ int register_server(unsigned long loop_ptr, server_config_t config) {
     signal(SIGFPE, signal_handler);
     signal(SIGILL, signal_handler);
 
-    // verfication
+    // verification
     assert(config.num_stream > 0 &&
            (config.num_stream == 1 || config.num_stream == 2 || config.num_stream == 4));
 
